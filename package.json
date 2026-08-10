@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "spike:claude": "tsx scripts/spike-claude.ts"
+    "spike:claude": "tsx scripts/spike-claude.ts",
+    "spike:db": "tsx scripts/spike-db.ts"
   },
   "author": {
     "name": "xieziyu",
@@ -16,9 +17,11 @@
   "license": "GPL-3.0-or-later",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.220",
-    "zod": "^4"
+    "zod": "^4",
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.9.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

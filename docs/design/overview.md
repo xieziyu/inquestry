@@ -7,6 +7,7 @@
 > 已拆出：
 > - [architecture](architecture.md) —— 技术栈、后端分层、存储与 IPC、前端状态分层、屏幕划分
 > - [agent-backends](agent-backends.md) —— 多 backend 抽象：能力对照、三段接缝、第一阶段纪律
+> - [data-model](data-model.md) —— 三层结构、关键字段、两条时间线的投影查询、FTS5 中文实测
 
 ---
 
@@ -386,10 +387,7 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
    - **A2（裸 Node）**：子 agent 场景——hook input 的 `agent_id` / `forwardSubagentText` 的 `parent_tool_use_id` / 单条支线转后台（§3.4）。泳道设计依赖这三条
    - **B（Electron main）**：验运行环境——PATH 补齐后能 spawn · 签名后 entitlements · 「已装但未登录」的环境检查
 
-1. **完整数据模型 + SQLite schema**（2 的字段要求全部由它定义）
-   - Case / Session / Step / ToolCall / EvidenceRef 五张表
-   - FTS5 全文索引
-   - 投影出两条时间线的查询
+1. **完整数据模型 + SQLite schema** —— ✅ **已完成**，见 [data-model](data-model.md) 与 `src/backend/db/schema.sql`，由 `npm run spike:db` 实跑验证（重放一致性 / 两条时间线错位 / superseded 链 / FTS 中文 / 报告四栏投影）
 2. **三个工具的定义 + 配套 skill 提示词**
    - `open_step` / `close_step` / `ask_operator`
    - 重点：`close_step` 怎么逼出 `occurredAt` 和 `evidenceRefs`——这块提示词写不好整套就塌了
