@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "spike:claude": "tsx scripts/spike-claude.ts",
     "spike:db": "tsx scripts/spike-db.ts",
-    "spike:tools": "tsx scripts/spike-tools.ts"
+    "spike:tools": "tsx scripts/spike-tools.ts",
+    "spike:wire": "tsx scripts/spike-wire.ts"
   },
   "author": {
     "name": "xieziyu",
