@@ -20,7 +20,14 @@ sdk-mcp-adapter   Claude：createSdkMcpServer          ← 第一阶段只有这
 
 agent 下结论时要指明"第几次调用的哪几行"。**不让它抄 toolUseId**——uuid 抄错的概率太高，且它本来就不该关心内部 id。
 
-改用 **step 内的调用序号**：工具返回的正文开头带 `[call #2]` 标记，agent 照抄。正式实现由 `PostToolUse` hook 给每次调用的结果注入这个标记（spike 里手工模拟）。
+改用 **step 内的调用序号**：工具返回的正文开头带 `[call #2]` 标记，agent 照抄。
+
+**注入机制已实测通过**（`npm run spike:wire`）：`PostToolUse` hook 的 `hookSpecificOutput.updatedToolOutput` **替换发给模型的工具输出**，因此标记可以注入到**任何**工具的结果里——包括用户自己的 skill 与 MCP，不只是我们自建的三个。这是 D5「工具调用自动归属」能覆盖全量工具的前提。
+
+两个接线时踩到的坑：
+
+- **`tool_response` 对 MCP 工具直接就是 content 数组本身**，不是 `{ content: [...] }`。只认后者的话 blob 里存进去的是一段 JSON，行号锚点全部失真
+- 标记要**行内前缀**（`[call #1] 正文`）而不是单独一行，否则模型看到的行号与 blob 物理行号整体错位一行
 
 > **harness 侧解析必须宽容**：实测 agent 会照抄整个标记写成 `call #1` 而不是 `#1`——它照做了提示词说的"照抄"。取第一个整数即可，不要精确匹配格式。这是 harness 的活，不是 agent 的错。
 

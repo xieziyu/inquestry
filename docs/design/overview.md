@@ -394,7 +394,16 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
 
    结论与预期相反：`close_step` 逼出 `occurredAt` **不是靠提示词**，而是靠 harness 判定"这次调用是否真的产出了带时间戳的记录"。一刀切强制会让 agent 拿查询执行时间凑数，把假时间填进报告主体——tools.md §3 记了这三次收敛。
 
-3. **接下来**：Spike A2（子 agent 泳道 / `agent_id` / 转后台）、Spike B（Electron 环境）、事件流 → SQLite 的接线（把 spike 里的内存 store 换成真实现）
+3. **接线：agent 会话 → hook 自动归属 → events → SQLite → 两条时间线** —— ✅ **已完成**（`npm run spike:wire`，7/7）
+
+   主干第一次连通：真 agent 排查 → 每次工具调用经 hook 自动归属并落 blob → 事件流写库 → **事故时间线从 SQL 里长出来，agent 没有重写过任何一行**，且 17/17 条证据能按校正后的锚点回到原始日志的那一行。
+
+   三个实跑打出来的结论：
+   - `PostToolUse` 的 `updatedToolOutput` 能给**任意工具**注入 `[call #N]`，自动归属不限于自建工具（[tools](tools.md) §2）
+   - **行号锚点不可信**，必须内容匹配校正 → 新增 `anchor_resolved`（[data-model](data-model.md) §2）
+   - **「未归类」兜底节点每轮都会触发**：agent 总是先查一次再 `open_step`。§4.4 的兜底不是保险丝，是常态路径
+
+4. **接下来**：Spike A2（子 agent 泳道 / `agent_id` / 转后台）、Spike B（Electron 环境）、Electron 壳与 Timeline 控制面
 
 ---
 
