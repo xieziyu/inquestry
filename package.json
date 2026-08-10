@@ -8,7 +8,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "spike:claude": "tsx scripts/spike-claude.ts",
-    "spike:db": "tsx scripts/spike-db.ts"
+    "spike:db": "tsx scripts/spike-db.ts",
+    "spike:tools": "tsx scripts/spike-tools.ts"
   },
   "author": {
     "name": "xieziyu",
