@@ -100,7 +100,8 @@ CREATE TABLE evidence_refs (
   step_id         TEXT    NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
   tool_call_id    TEXT    NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
   anchor_kind     TEXT    NOT NULL CHECK (anchor_kind IN ('lines','jsonpath','whole')),
-  anchor          TEXT,                  -- "120-138" 或 "$.hits[3].message"
+  anchor          TEXT,                  -- agent 给的原始锚点，仅作提示
+  anchor_resolved TEXT,                  -- 按内容校正后的锚点；UI 高亮一律用它（blobs.ts locateEvidence）
   claim           TEXT    NOT NULL,
   observed_at     INTEGER NOT NULL,
   occurred_at_ms  INTEGER,
