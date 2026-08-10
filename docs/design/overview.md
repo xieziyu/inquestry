@@ -9,6 +9,7 @@
 > - [agent-backends](agent-backends.md) —— 多 backend 抽象：能力对照、三段接缝、第一阶段纪律
 > - [data-model](data-model.md) —— 三层结构、关键字段、两条时间线的投影查询、FTS5 中文实测
 > - [tools](tools.md) —— 三个工具的契约、提示词、真 agent 遵从性实测
+> - [ui](ui.md) —— Electron 壳与 Timeline 控制面，装起来才暴露的问题
 
 ---
 
@@ -403,7 +404,11 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
    - **行号锚点不可信**，必须内容匹配校正 → 新增 `anchor_resolved`（[data-model](data-model.md) §2）
    - **「未归类」兜底节点每轮都会触发**：agent 总是先查一次再 `open_step`。§4.4 的兜底不是保险丝，是常态路径
 
-4. **接下来**：Spike A2（子 agent 泳道 / `agent_id` / 转后台）、Spike B（Electron 环境）、Electron 壳与 Timeline 控制面
+4. **Electron 壳 + Timeline 控制面** —— ✅ **v0.1 可运行**（`npm start`），见 [ui](ui.md)
+
+   D2「Timeline 为主、对话降级成输入带」初步成立：主区看的确实是节点，对话压到底部一条带也不缺信息。Spike B 的运行环境问题一并解决（PATH 补齐 / ESM preload 需 `sandbox:false` / schema 与提示词不能读源码目录）。
+
+5. **接下来**：把 §3.1 的两个控制手势接上 UI（改写参数再放行、deny+message 换方向）—— 这是控制面最值钱、也是目前唯一没接的部分；然后 Spike A2（子 agent 泳道）
 
 ---
 

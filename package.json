@@ -10,7 +10,12 @@
     "spike:claude": "tsx scripts/spike-claude.ts",
     "spike:db": "tsx scripts/spike-db.ts",
     "spike:tools": "tsx scripts/spike-tools.ts",
-    "spike:wire": "tsx scripts/spike-wire.ts"
+    "spike:wire": "tsx scripts/spike-wire.ts",
+    "start": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
+    "rebuild:node": "npm rebuild better-sqlite3"
   },
   "author": {
     "name": "xieziyu",
@@ -19,13 +24,23 @@
   "license": "GPL-3.0-or-later",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.220",
-    "zod": "^4",
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.9.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.2.0",
+    "electron-vite": "^5.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
-  }
+    "typescript": "^5.7.2",
+    "vite": "^7.3.6"
+  },
+  "main": "out/main/index.js"
 }
