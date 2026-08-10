@@ -8,6 +8,7 @@
 > - [architecture](architecture.md) —— 技术栈、后端分层、存储与 IPC、前端状态分层、屏幕划分
 > - [agent-backends](agent-backends.md) —— 多 backend 抽象：能力对照、三段接缝、第一阶段纪律
 > - [data-model](data-model.md) —— 三层结构、关键字段、两条时间线的投影查询、FTS5 中文实测
+> - [tools](tools.md) —— 三个工具的契约、提示词、真 agent 遵从性实测
 
 ---
 
@@ -366,7 +367,8 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
 
 | 风险 | 说明 | 缓解 |
 |---|---|---|
-| agent 填 `direction` 敷衍 | 会写出"我要进一步分析日志"这种空洞内容 | skill 提示词给 direction 定标准：**必须是可证伪的命题** |
+| ~~agent 填 `direction` 敷衍~~ | **已证伪**（2026-08-10 实跑）：direction 全部是可证伪命题，agent 还主动写出证伪条件，并敢把结论填 `refuted`。风险等级下调，见 [tools](tools.md) §4 | — |
+| **`occurredAt` 的强制规则设计错** | 取代上一条成为头号风险：一刀切强制不会让字段变完整，只会让 agent 拿查询执行时间凑数，**假时间直接进报告主体** | 由 harness 按「本次调用是否真的产出带时间戳的记录」判定，不靠提示词自觉（[tools](tools.md) §3） |
 | agent 忘记调 `open_step`/`close_step` | prompt 纪律不可靠 | PreToolUse hook 兜底进"未归类"节点 |
 | 介入窗口过窄 | 并发工具调用来不及拦 | `open_step` 作为减速带；软确认机制 |
 | pending 节点僵尸化 | 重连后 resolve 不了 | 按 SDK 的 re-arm 契约恢复，注意 request_id 去重 |
@@ -388,9 +390,11 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
    - **B（Electron main）**：验运行环境——PATH 补齐后能 spawn · 签名后 entitlements · 「已装但未登录」的环境检查
 
 1. **完整数据模型 + SQLite schema** —— ✅ **已完成**，见 [data-model](data-model.md) 与 `src/backend/db/schema.sql`，由 `npm run spike:db` 实跑验证（重放一致性 / 两条时间线错位 / superseded 链 / FTS 中文 / 报告四栏投影）
-2. **三个工具的定义 + 配套 skill 提示词**
-   - `open_step` / `close_step` / `ask_operator`
-   - 重点：`close_step` 怎么逼出 `occurredAt` 和 `evidenceRefs`——这块提示词写不好整套就塌了
+2. **三个工具的定义 + 配套 skill 提示词** —— ✅ **已完成**，见 [tools](tools.md)。真 agent 端到端跑通（`npm run spike:tools`，7/7）
+
+   结论与预期相反：`close_step` 逼出 `occurredAt` **不是靠提示词**，而是靠 harness 判定"这次调用是否真的产出了带时间戳的记录"。一刀切强制会让 agent 拿查询执行时间凑数，把假时间填进报告主体——tools.md §3 记了这三次收敛。
+
+3. **接下来**：Spike A2（子 agent 泳道 / `agent_id` / 转后台）、Spike B（Electron 环境）、事件流 → SQLite 的接线（把 spike 里的内存 store 换成真实现）
 
 ---
 
