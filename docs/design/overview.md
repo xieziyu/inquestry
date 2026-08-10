@@ -1,0 +1,416 @@
+# Inquestry —— 排查小助手设计纪要
+
+> 首次成文：2026-08-10
+> 状态：设计阶段，尚未开工
+> 定位：本仓库的**总设计纪要**。后续按主题拆分（data-model / claude-integration / ui / open-questions）时，本文保留为总览与决策来源，拆出的文档只做展开，不复制决策。
+
+---
+
+## 0. 命名
+
+**Inquestry** = `inquest`（死因/事故的正式调查程序）+ `-ry`（表「一整套体系 / 积累起来的集合」，同 registry / ancestry / forestry）。字面读作「调查记录的集合体」。
+
+- `inquest` 命中核心语义——**确立事实的正式程序**，终点是宣读 **verdict**，与 Step 的字段名同构；它同时要求重建事件时间线 + 认定死因，正对应事故时间线 + 根因
+- `-ry` 补上 `inquest` 覆盖不到的一维：**沉淀**。单次调查是 inquest，把所有调查积累成的档案体系才是 inquestry——对应 Case 层、跨 case 检索、事故档案库
+- 读音 /ɪnˈkwestri/，与 registry 同韵
+
+占用检查（2026-08-10）：GitHub 仓库搜索零结果；npm 未注册；`inquestry.com` / `.dev` / `.io` 均无 NS 记录。
+
+---
+
+## 1. 定位
+
+### 1.1 要解决的问题
+
+日常已用 Claude Code 排查线上问题——接入云日志服务（腾讯云 CLS / 阿里云 SLS）、Sentry 和代码仓库，再用一个自定义 skill 做编排。定位准确度够用，但排查过程的**中间态不可见、不可回溯**：
+
+- 排查细节只在思考链或简短汇报里露出一点阶段性总结
+- 想看「每一步在验证什么、执行了什么查询、原始输出是什么」非常麻烦
+- 排查完成后无法沉淀成可复用的事故报告
+
+### 1.2 第一性定位
+
+> 真正的问题不是 agent 说得太少，而是**证据在汇报环节被有损压缩了**。
+> agent 读了 500 行日志，只写一句「主从复制延迟导致写入后读不到」，那 500 行没留存，复核只能重跑。
+
+由此：
+
+> **harness 负责把每一次工具调用的原始输入/输出完整落库；
+> agent 的文字只做索引和判断，不承担搬运证据的职责。**
+
+Timeline 因此不是"日志美化"，而是**证据库 + 推理链的双层结构**。
+
+### 1.3 Timeline 是控制面
+
+工具形态是**实时交互**（边排查边看、能及时打断换方向），因此 Timeline 不是展示层，是控制面——**每个节点上要挂载可执行的操作**（放行 / 改写 / 拒绝 / 转后台 / 接管）。
+
+### 1.4 两条时间线
+
+设计分水岭，也是最终报告质量的关键。
+
+| | 排查时间线 | 事故时间线 |
+|---|---|---|
+| 回答 | 我（agent）按什么顺序做了什么 | 系统当时到底发生了什么 |
+| 排序依据 | agent 行动顺序（`observedAt`） | 事件真实发生时间（`occurredAt`） |
+| 性质 | 操作日志 | 因果重建 |
+| 用途 | 过程可溯源、实时介入 | **最终报告主体** |
+
+示例（"为什么产生了两条重复记录"的最终汇报）：
+
+```
+12:03:01.220  用户点击提交             [evidence: 网关日志 req_id=abc]
+12:03:01.480  主库写入成功 id=X        [evidence: 手工 SQL 结果]
+12:03:01.900  客户端 2s 超时未收到响应  [evidence: Sentry event]
+12:03:02.100  客户端自动重试
+12:03:02.240  服务端读从库未命中 id=X   [evidence: 应用日志，主从延迟 340ms]
+12:03:02.390  写入第二条 id=Y          ← 重复产生
+```
+
+**这条线里没有一条是「我查了什么」。** 它由排查过程采集的证据重建而成，顺序与排查顺序基本无关——第 2 行的证据很可能是第 9 步才查到的。
+
+推论：最终报告的主体是一条**独立的、由证据投影出来的线**，不是排查时间线的摘要。
+
+---
+
+## 2. 订阅接入
+
+**结论：能用订阅，机制与 codex app-server 一致。**
+
+CLI 长驻双向流模式：
+
+```bash
+claude -p \
+  --input-format stream-json \
+  --output-format stream-json \
+  --include-partial-messages \
+  --forward-subagent-text \
+  --include-hook-events \
+  --replay-user-messages \
+  --session-id <uuid>
+```
+
+stdin 喂 JSON 消息、stdout 吐事件流，长驻进程，多轮对话。上层可用 `@anthropic-ai/claude-agent-sdk` 封装好的 spawn + 协议。
+
+**授权边界（硬约束）：**
+
+- SDK / headless 模式**spawn 本机 `claude` 二进制，继承 `~/.claude` 的 OAuth 凭据** → 走订阅额度
+- **架构必须是「壳 + spawn CLI」**，不能自己写 HTTP client 打 api.anthropic.com
+- **禁用 `--bare`**——它强制 auth 走 `ANTHROPIC_API_KEY` / apiKeyHelper
+
+**白送的能力：** 这样跑的 session 照常加载用户已有的 skill 和 MCP 配置，现成的日志查询、Sentry、代码检索能力不用重建。
+
+---
+
+## 3. 控制语义
+
+三档粒度差别很大，**UI 上对应三种不同手势，不要混成一个 Stop 键**。
+
+### 3.1 一级：`canUseTool` —— 单次工具调用级（最细，最常用）
+
+每次工具调用前回调到 UI，参数含 `toolName` / `input` / `toolUseID` / `agentID`（子 agent 来源，`undefined` 为主线）/ `title` / `displayName` / `description` / `suggestions` / `signal`。
+
+| 返回 | 效果 |
+|---|---|
+| `{behavior:'allow', updatedInput}` | **可改写参数再放行**——查询语句写窄了，直接改了让它跑 |
+| `{behavior:'deny', message:'...'}` | 拒这一个调用，**把话带给 agent，turn 不中断**，就地换方向 |
+| `{behavior:'deny', message, interrupt:true}` | 拒 + 停掉整个 turn |
+
+> **关键决策：「打断当前方向、换个方向」用中间那行（deny + message）。**
+> turn 的上下文全部保留，agent 收到纠偏就继续走。排查场景里前面几十轮的日志上下文重建成本极高，这个区别非常值钱。
+
+### 3.2 二级：`interrupt()` —— turn 级（Stop 按钮）
+
+杀整个 turn，连同所有子 agent。
+
+- 返回 receipt，含 `still_queued`（会在这之后继续跑的排队消息 uuid）
+- **Stop 按钮应传 `cancel_queued: true`**，一次性连排队消息清掉；否则按了停、队列里的东西照跑，体感是"没停住"
+- 能力探测：`system/init` 的 `capabilities` 含 `interrupt_receipt_v1` / `interrupt_cancel_queued_v1`，需 feature-detect 而非版本嗅探
+
+### 3.3 三级：异步消息入队 —— 不打断
+
+turn 进行中往 stdin 塞 user message（带 uuid），可事后 `cancel_async_message` 撤回。语义是"我不拦你，但你这轮收尾时看一眼我的补充"。
+
+**取消粒度坑：** 一批消息被 dequeue 并合并成一个 turn 后，取消**非代表** uuid 是 no-op（内容照跑），取消**批次代表** uuid 会丢掉整批。两种情况响应都报 `cancelled:false`。
+
+### 3.4 子 agent 泳道的处置
+
+- **不能**单独 kill 一条泳道
+- **能**单独转后台：background-tasks 控制请求带 `tool_use_id` 只针对那一个任务。该工具调用立刻返回"已转后台"的 tool_result，主线继续；支线跑完发 `task_notification` 回来
+
+> 三条并发支线里有一条在钻牛角尖，不想等它、也不想丢掉它万一有用的结果 → 折叠到后台，主线往下走。
+
+### 3.5 接管模式（分层放行）
+
+全程每个调用都弹给人会累死，全程不管又来不及拦。因此：
+
+- 默认：只读类（日志查询、Read、Grep、Sentry）自动放行，UI 上只流过
+- 拦截点只放在 `open_step` 边界——**方向变了才需要人表态**
+- 一键"接管"：`setPermissionMode('manual')` 运行时切换，之后每步过审，可随时切回
+
+### 3.6 ⚠️ 阻塞兜底（必做）
+
+`canUseTool` 返回 Promise，**不响应就一直挂着，agent 干等**。必须有超时兜底（如 60s 未响应按预设策略走），并在节点上标记"自动放行"。同样适用于 `ask_operator`（§5）。
+
+### 3.7 `open_step` 的第二重价值：减速带
+
+实时模式的硬约束：**agent 一个 turn 里可能并发甩出 5 个工具调用，等人看清在查什么，日志已经查完了。**
+
+`open_step(direction)` 除了提供结构，更重要的是**在 agent 动手之前先把意图渲染出来**——看到的是"我怀疑是从库延迟，准备拉 create 前后 5 秒的主从日志"，而不是五个已经在跑的 query。这个几百毫秒到几秒的窗口，就是能有效介入的**全部窗口**。
+
+配套：`open_step` 支持软确认——默认自动放行，可对某个 step 点"我要审"，之后它下面的工具调用逐个走 `canUseTool`。
+
+---
+
+## 4. 数据模型
+
+### 4.1 层级
+
+```
+Case (事故)  ──┬── Session (一次对话)  ── Step ── ToolCall ── EvidenceRef
+  title        ├── Session
+  status       └── Session
+  report
+```
+
+一次事故经常跨多个会话（今天查一半明天接着查，或换个角度重开一轮），所以 session 之上必须有 Case 层。**检索维度是事故，不是会话。** Case 只需存一组 session id。
+
+Claude Code 侧支撑：`--session-id` 指定、`--resume` 续接、`forkSession` 从某点分叉（"从第 5 步换个假设重来"，前面上下文全留着）。
+
+### 4.2 Step 节点
+
+```
+Step {
+  id, parentStepId, lane          // 子 agent 用 parent + lane
+  direction    : 这一步想验证的假设
+                 （不是"我要查日志"，而是"我怀疑 X 导致 Y"——必须可证伪）
+  actions      : ToolCall[]        // 自动采集，不需要 agent 复述
+  verdict      : { text, confidence }
+  evidenceRefs : EvidenceRef[]                                    ← ①
+  status       : open | confirmed | refuted | inconclusive | superseded  ← ②
+  supersededBy : stepId
+  t_start, t_end, tokens, cost
+}
+```
+
+**① `evidenceRefs` 是「可溯源」的真正落点。**
+结论光挂在节点上不叫溯源。agent 下结论时必须指明依据的具体位置，UI 上点结论就高亮原始输出的对应片段。没有这个字段，Timeline 只是把 agent 的话分了段，仍然无法验证它有没有编。
+
+**② 结论必须可被推翻。**
+真实排查里第 3 步的判断经常被第 7 步否掉。纯 append-only 的 Timeline 会呈现一条"一路顺利推导到真相"的假历史，而排查的价值恰恰在那些走错又折回的地方。UI 上第 3 个节点划掉并画一条回指箭头到第 7 个。
+
+这也是工具能沉淀经验的地方——回看会发现自己/agent 反复在同一类岔路上错。
+
+### 4.3 EvidenceRef（双时间戳）
+
+```
+EvidenceRef {
+  toolCallId
+  lineRange | jsonPath   // 溯源锚点：具体到第几行 / 哪个字段
+  observedAt             // 我什么时候查到的    → 排查时间线
+  occurredAt?            // 它描述的事件何时发生 → 事故时间线
+  actor?                 // 谁 / 哪个组件干的
+  claim                  // 这条证据说明了什么（一句话）
+}
+```
+
+> **`occurredAt` 是本设计里最不能省的字段。**
+> 有了它，事故时间线就是一次 `ORDER BY occurredAt` 的投影，**不需要 agent 再写一遍**；没有它，只能让 agent 在结尾凭记忆重述——那就回到了 §1.2 的有损压缩，而且是在最重要的产物上有损。
+
+降低成本：日志类工具输出本来就带时间戳，harness 从日志服务 / Sentry 的返回结构里**自动抽取** `occurredAt`，只有人工粘贴的结果需要手填。
+
+### 4.4 节点边界的产生方式
+
+**骨架显式声明 + 内容自动填充：**
+
+- agent 只负责标 `open_step` / `close_step` 两个语义边界
+- **中间发生的所有 tool call 由 harness 自动归属到当前 open 的 step 上**，agent 完全不用复述输出
+- `--include-hook-events` + PreToolUse hook 兜底：没有 open step 时的工具调用自动进"未归类"节点，不丢事件
+
+agent 的增量负担 ≈ 两次极短的 tool call，遵从性高；拿到的是完整结构。
+
+可用 hook 事件（节选）：`PreToolUse` / `PostToolUse` / `PostToolUseFailure` / `PostToolBatch` / `SubagentStart` / `SubagentStop` / `TaskCreated` / `TaskCompleted` / `PermissionRequest` / `PermissionDenied` / `Stop` / `PreCompact` / `PostCompact`。
+
+`PreToolUseHookInput` 带 `agent_id`（仅在子 agent 内触发时出现）和 `agent_type`——用它区分主线与子 agent 调用。
+
+### 4.5 子 agent 呈现
+
+- `--forward-subagent-text` 把子 agent 的文本/thinking 带 `parent_tool_use_id` 转发；Task 的 tool_use id 就是天然的 lane key
+- Timeline 做成**泳道**：主干一条线，并发时 fan-out 成平行支线，各自收敛回主干节点
+- SDK 有选项开启**子 agent 周期性进度摘要**（约 30s fork 一次子会话生成一句话摘要，前后台都适用，官方说明成本很低）——泳道上"这条支线正在干嘛"不用自己实现
+- 子 agent transcript 落盘：`~/.claude/projects/<dir>/<sessionId>/subagents/agent-<agentId>.jsonl`；SDK 提供 `getSubagentMessages` / `listSubagents`
+
+### 4.6 持久化
+
+- 事件全部落 **SQLite**，一行一 event，UI 从库**投影**出 Timeline（event sourcing）
+- **不做内存态 + 事后 dump。** 反正要把事件解析一遍，增量成本接近零
+- 白送三样：崩溃/断连恢复现场、多窗口看同一 session、导出排查报告
+- 开 **FTS5** 全文索引 → 跨 case 检索证据（"上次那个从库延迟怎么定位的"、"这个错误码以前出现过吗"）。建表时多一行
+
+---
+
+## 5. 人工回填通道（`ask_operator`）
+
+排查中有些查询需要人工执行（特定数据库、Redis）：agent 给语句，人执行并回填结果。
+
+**实现：** 用 SDK 的 `createSdkMcpServer` 建**进程内 MCP server**，不起子进程，handler 与 app 共享内存。
+
+```
+ask_operator({
+  engine:    'mysql' | 'redis' | 'mongo' | ...
+  statement: string   // agent 给出的查询语句
+  why:       string   // 为什么需要这条 —— 直接成为节点的 direction
+  expect:    string   // 预期看到什么 —— 见下
+})
+```
+
+handler 返回 Promise，UI 上出现一个 **pending 节点**，粘贴结果回来才 resolve。语义与其它工具调用完全同构，自动进 Timeline、自动成为 evidence。
+
+### 5.1 设计要点
+
+**① 语句必须可编辑再执行。**
+agent 写的 SQL 表名字段名多半是猜的。改完之后**把改后的语句一起回传给 agent**——它就学到了真实 schema，后面几条不用再改。别只回传结果。
+
+**② 粘贴框旁边要有 engine / env / 执行时间。**
+这条证据要参与事故时间线重建，没有 `occurredAt` 就是孤儿。手工结果是唯一拿不到自动时间戳的来源。
+
+**③ 批量问，别一条一条阻塞。**
+提示词要求 agent 把需要人工执行的查询**攒成一组再发**（"我需要你跑这 3 条"），否则会在切窗口上耗掉一半时间。
+
+**④ pending 期间 turn 的两种走法（都要支持）：**
+- 还有并行支线 → agent 转去推进别的
+- 没有并行支线 → 让这个 turn 收尾，回填后作为新一轮继续
+
+**⑤ 重连要能 re-arm。**
+SDK 要求客户端重连时 re-arm 尚未响应的 pending 请求（`initialize` 响应带 `pending_permission_requests` 及待响应 dialog 列表，且同一 `request_id` 可能同时以 live/replay 两种帧到达，**必须去重、只渲染一次**）。UI 刷新后要能恢复挂起节点。
+
+### 5.2 定性：这是权限边界，不是妥协
+
+> 生产库、敏感用户数据、任何写操作——**永远不给 agent 直连，全部走这条人肉通道**，是有意的设计。
+> agent 负责想清楚要查什么、为什么查、**预期看到什么**；人负责执行和把关。
+
+`expect` 字段的作用：**逼 agent 先说预期再看结果**，挡住事后合理化（看到数据再倒推一个说法）。这是这套设计里少数几个直接提升结论质量的机制，也是敢把工具用在生产排查上的前提。
+
+---
+
+## 6. 最终报告
+
+### 6.1 报告是投影，不是重写
+
+每一块都有确定的数据来源：
+
+| 报告章节 | 来源 |
+|---|---|
+| 事故时间线 | `evidenceRefs ORDER BY occurredAt` 自动投影 |
+| 根因 | 最终 `status=confirmed` 的 step 的 verdict |
+| 排查路径（含走错的） | step 树，含 `superseded` 分支 |
+| 影响面 | 一个专门的量化 step（见 §6.2） |
+| 修复建议 | **agent 唯一需要真正"生成"的部分** |
+| 遗留疑点 | `status=inconclusive` 的 step 自动汇总 |
+
+agent 只写最后两栏，其余是投影 + 一次润色。报告与过程天然一致，改不了也编不了。
+
+### 6.2 两个固化成流程的约束
+
+**「影响面」是强制 step。** 排查经常找到根因就停了，但事故报告要回答"影响了多少用户、多长时间窗口"，这几乎总需要一次额外的聚合查询。做成结案前的必经节点。
+
+**「遗留疑点」必须出现，哪怕是空的。** 现实里排查很少 100% 收敛，把没查清的部分明写出来，比一篇看起来严丝合缝的报告可信得多。
+
+### 6.3 导出格式
+
+Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGraph` 画排查路径（含被推翻的分支）。主流文档平台和 PR 都能直接渲染。
+
+---
+
+## 7. 决策清单
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D1 | 工具形态 = **实时交互**，边排查边看、能及时打断 | 核心诉求 |
+| D2 | **Timeline 为主**，对话降级成输入带 | 看清每步 + 及时介入全发生在节点上。**待体验验证** |
+| D3 | 架构 = **壳 + spawn `claude` CLI**（或 Agent SDK） | 唯一能合规使用订阅额度的路径 |
+| D4 | 禁用 `--bare` | 它强制走 API key |
+| D5 | 节点边界 = `open_step`/`close_step` 定骨架 + 工具调用自动归属 | agent 负担最小，结构最完整 |
+| D6 | "换方向"用 `canUseTool` **deny + message** | 保留 turn 上下文，避免重建成本 |
+| D7 | Stop 按钮传 `cancel_queued: true` | 否则停不干净 |
+| D8 | 权限**分层放行** + 一键接管（`setPermissionMode`） | 全拦太累，全放来不及 |
+| D9 | `canUseTool` / `ask_operator` 必须有**超时兜底** | 否则 agent 干挂 |
+| D10 | 数据模型分四层：**Case > Session > Step > ToolCall/Evidence** | 一次事故跨多会话；检索维度是事故 |
+| D11 | `EvidenceRef` 带**双时间戳** `observedAt` / `occurredAt` | 事故时间线的唯一来源 |
+| D12 | Step 状态支持 `superseded` + `supersededBy` | 真实排查会推翻结论；append-only 会造假历史 |
+| D13 | 事件落 **SQLite（event sourcing）+ FTS5** | 恢复/多窗口/导出/跨 case 检索，成本近零 |
+| D14 | 人工查询用 `createSdkMcpServer` 自建 `ask_operator` | 进程内、UI 完全可控 |
+| D15 | `ask_operator` 带 `expect` 字段 | 逼 agent 先说预期，挡事后合理化 |
+| D16 | 生产库 / 敏感数据 / 写操作**一律走人肉通道** | 权限边界，是工具可用于生产的前提 |
+| D17 | 报告 = **投影 + 少量生成** | 避免二次有损压缩 |
+| D18 | agent **知道**自己在被记录 | `open_step` 本身是显式的，无法隐藏 |
+
+---
+
+## 8. 待验证与风险
+
+### 8.1 待验证
+
+- **D2（Timeline 为主）需要实际体验验证**
+  - 缓解：**布局可以换，数据模型换不了**。第一版按 Timeline 为主用起来；若别扭，换前端布局成本几天，模型缺字段成本是历史数据全废
+- 子 agent 进度摘要的实际成本与摘要质量
+- `occurredAt` 自动抽取的覆盖率（各日志源的返回结构差异很大）
+
+### 8.2 已知风险
+
+| 风险 | 说明 | 缓解 |
+|---|---|---|
+| agent 填 `direction` 敷衍 | 会写出"我要进一步分析日志"这种空洞内容 | skill 提示词给 direction 定标准：**必须是可证伪的命题** |
+| agent 忘记调 `open_step`/`close_step` | prompt 纪律不可靠 | PreToolUse hook 兜底进"未归类"节点 |
+| 介入窗口过窄 | 并发工具调用来不及拦 | `open_step` 作为减速带；软确认机制 |
+| pending 节点僵尸化 | 重连后 resolve 不了 | 按 SDK 的 re-arm 契约恢复，注意 request_id 去重 |
+| 报告里洗掉走错的分支 | 会产出虚假的"一路顺利"叙事 | superseded 分支强制进报告 |
+
+---
+
+## 9. 下一步
+
+1. **完整数据模型 + SQLite schema**（先做，2 的字段要求全部由它定义）
+   - Case / Session / Step / ToolCall / EvidenceRef 五张表
+   - FTS5 全文索引
+   - 投影出两条时间线的查询
+2. **三个工具的定义 + 配套 skill 提示词**
+   - `open_step` / `close_step` / `ask_operator`
+   - 重点：`close_step` 怎么逼出 `occurredAt` 和 `evidenceRefs`——这块提示词写不好整套就塌了
+
+---
+
+## 附录 A：实测能力速查
+
+2026-08-10 在 Claude Code CLI `2.1.220` / `@anthropic-ai/claude-agent-sdk` `0.3.226` 上验证。
+
+**CLI flags**
+
+| flag | 用途 |
+|---|---|
+| `--input-format stream-json` | 实时流式输入（需配 `-p`） |
+| `--output-format stream-json` | 实时流式输出 |
+| `--include-partial-messages` | 增量 chunk，打字机效果 |
+| `--forward-subagent-text` | 转发子 agent 文本/thinking，带 `parent_tool_use_id`；false 时只发心跳计数 |
+| `--include-hook-events` | hook 生命周期事件进流 |
+| `--replay-user-messages` | 回显 stdin 的 user message 用于 ack |
+| `--session-id <uuid>` | 指定 session id |
+| `--resume` / `--fork-session` | 续接 / 分叉 |
+| `--json-schema` | 结构化输出校验 |
+| `--max-budget-usd` | 花费上限 |
+| `--permission-mode` | `acceptEdits`/`auto`/`bypassPermissions`/`manual`/`dontAsk`/`plan` |
+| `--agents <json>` | 内联定义自定义子 agent |
+| `--bare` | ⛔ 强制 API key，禁用（D4） |
+
+**SDK 关键 API**
+
+| API | 用途 |
+|---|---|
+| `canUseTool` | 单次工具调用闸门，支持 allow / 改写 / deny+message |
+| `interrupt()` | turn 级中断，返回 receipt，支持 `cancel_queued` |
+| `setPermissionMode(mode)` | 运行时切换权限模式 |
+| `createSdkMcpServer()` | 进程内 MCP server（`ask_operator` 的载体） |
+| `forkSession()` | 从某点分叉出新 session |
+| `getSubagentMessages()` / `listSubagents()` | 读子 agent transcript |
+
+**能力探测**
+`system/init` 的 `capabilities` 是开放集合，需 feature-detect 而非版本嗅探。已知：`interrupt_receipt_v1`、`interrupt_cancel_queued_v1`。
