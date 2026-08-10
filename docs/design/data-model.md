@@ -49,9 +49,18 @@ D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接
 
 第一次接线时这条 0/17 全错（还叠加了 blob 存成 JSON 的 bug）；修好后 17/17 全部能回到真实那一行。
 
-### `sessions` 之外还需要 case 级的 `incidentDate` / `tzOffset`
+### `cases` 还缺四个字段
 
-日志时间串大多**既无日期也无时区**（`12:03:01.220`）。没有基准日与时区，`occurred_at_ms` 落不成绝对时刻，事故时间线就排不出来。目前挂在会话上下文里，正式实现应落到 `cases` 表。
+日志时间串大多**既无日期也无时区**（`12:03:01.220`）。没有基准日与时区，`occurred_at_ms` 落不成绝对时刻，事故时间线就排不出来。目前挂在会话上下文里，必须落到 `cases` 表——而且要**在立案时收**，不能等结案（overview D27）。
+
+| 字段 | 为什么 |
+| --- | --- |
+| `incident_date` / `tz_offset` | 上述基准。由立案面板收集 |
+| `project_root` | agent 的运行目录，决定它继承哪套 skill / MCP，也决定会话记录落盘位置 |
+| `verdict_shape ∈ (sequence \| state \| chain \| distribution \| open)` | 决定报告装哪几块（overview §6.1.1）。**趁历史数据还少赶紧加**——事后补的代价是历史案子全部残缺 |
+| `status` 增加 `aborted` | 区分"停下来还能接着查"（`open`）与"放弃了"（`aborted`）。后者仍可导出残报告，形态强制 `open`（overview D29） |
+
+状态型报告还需要一对 `expected` / `actual`，挂在那个 `confirmed` step 上而非 case 上——它是某一步的判定内容，不是案件属性。
 
 ### `tool_calls.origin ∈ (agent | operator)`
 
