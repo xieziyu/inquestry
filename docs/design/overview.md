@@ -2,7 +2,11 @@
 
 > 首次成文：2026-08-10
 > 状态：设计阶段，尚未开工
-> 定位：本仓库的**总设计纪要**。后续按主题拆分（data-model / claude-integration / ui / open-questions）时，本文保留为总览与决策来源，拆出的文档只做展开，不复制决策。
+> 定位：本仓库的**总设计纪要**。后续按主题拆分（data-model / ui / open-questions）时，本文保留为总览与决策来源，拆出的文档只做展开，不复制决策。
+>
+> 已拆出：
+> - [architecture](architecture.md) —— 技术栈、后端分层、存储与 IPC、前端状态分层、屏幕划分
+> - [agent-backends](agent-backends.md) —— 多 backend 抽象：能力对照、三段接缝、第一阶段纪律
 
 ---
 
@@ -343,6 +347,8 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
 | D16 | 生产库 / 敏感数据 / 写操作**一律走人肉通道** | 权限边界，是工具可用于生产的前提 |
 | D17 | 报告 = **投影 + 少量生成** | 避免二次有损压缩 |
 | D18 | agent **知道**自己在被记录 | `open_step` 本身是显式的，无法隐藏 |
+| D19 | agent backend **分三段抽象**：工具契约（MCP，天然跨端）/ 会话与事件流（接口）/ 控制语义（**能力协商，不是接口方法**） | 目标是 Claude + codex 两种 backend；核心结构全经 MCP 产生，抽象面比想象窄，落差全集中在控制语义。详见 [agent-backends](agent-backends.md) |
+| D20 | 第一阶段**只实现 Claude backend，且不写 mock backend** | 空实现验证不了抽象；只守四条"事后补代价极高"的纪律（backend 是 schema 一等字段 / renderer 零 backend 类型 / MCP handler 传输无关 / 事件命名无 backend 词汇） |
 
 ---
 
@@ -364,12 +370,23 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
 | 介入窗口过窄 | 并发工具调用来不及拦 | `open_step` 作为减速带；软确认机制 |
 | pending 节点僵尸化 | 重连后 resolve 不了 | 按 SDK 的 re-arm 契约恢复，注意 request_id 去重 |
 | 报告里洗掉走错的分支 | 会产出虚假的"一路顺利"叙事 | superseded 分支强制进报告 |
+| 打包后 spawn 不到 `claude` | GUI 启动的 app 只有最小 PATH；打包的 Electron 无独立 node 二进制；签名后 entitlements 需允许子进程 | 抄 duetlens 的 `shell-path.ts`；显式指定可执行文件路径。**列为首个 spike，见 §9** |
+| 原始输出撑爆库与 IPC | §1.2 要求完整落库，单次日志查询可达 MB 级 | 大 payload 内容寻址落盘、库存 hash + 可索引文本；IPC 只推摘要与 preview。详见 [architecture](architecture.md) |
+| codex backend 控制面弱一档 | D6 / 改写参数 / 运行时切档 / 泳道在 codex 侧无等价物 | 设计既定结果而非 bug，按能力协商降级。详见 [agent-backends](agent-backends.md) §4 |
 
 ---
 
 ## 9. 下一步
 
-1. **完整数据模型 + SQLite schema**（先做，2 的字段要求全部由它定义）
+0. **spike：Electron main 里跑通 Claude backend**（**排在数据模型之前**）
+
+   理由：数据模型是纯设计工作，随时能做；这个 spike 是**证伪风险**——任何一条不成立，整套设计要改形。分两段：
+
+   - **A（裸 Node / tsx）** —— ✅ **已完成，五条全 PASS，见附录 A.0**
+   - **A2（裸 Node）**：子 agent 场景——hook input 的 `agent_id` / `forwardSubagentText` 的 `parent_tool_use_id` / 单条支线转后台（§3.4）。泳道设计依赖这三条
+   - **B（Electron main）**：验运行环境——PATH 补齐后能 spawn · 签名后 entitlements · 「已装但未登录」的环境检查
+
+1. **完整数据模型 + SQLite schema**（2 的字段要求全部由它定义）
    - Case / Session / Step / ToolCall / EvidenceRef 五张表
    - FTS5 全文索引
    - 投影出两条时间线的查询
@@ -382,6 +399,23 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
 ## 附录 A：实测能力速查
 
 2026-08-10 在 Claude Code CLI `2.1.220` / `@anthropic-ai/claude-agent-sdk` `0.3.226` 上验证。
+
+### A.0 Spike A 结论（`npm run spike:claude`，SDK `0.3.220`）
+
+**五条全部 PASS，D3 / D6 / D14 坐实。**
+
+| # | 断言 | 结果 |
+|---|---|---|
+| 1 | 无 `ANTHROPIC_API_KEY` 跑通（走订阅，D3） | ✅ |
+| 2 | `allow + updatedInput` 真能改写参数 | ✅ handler 实收改写后的值，非原值 |
+| 3 | **`deny + message` 不中断 turn，agent 就地换方向重调（D6）** | ✅ 闸门序列 `deny+message(AAA) → allow+updatedInput(BBB)`，同一 turn 内完成，最终正常收尾 |
+| 4 | 进程内 SDK MCP 工具被调到（`ask_operator` 载体，D14） | ✅ |
+| 5 | `PreToolUse` hook 可观测 | ✅ 主线 3 次 |
+
+**两条须留意的观测：**
+
+- **主线调用的 hook input 里没有 `agent_id`**（与 §4.4 "仅在子 agent 内出现"一致）。但**子 agent 侧尚未验证**——泳道归属（§4.5）依赖它，列为 Spike A2
+- **`settingSources: []` 不隔离用户环境**：仍加载 48 条 slash command 与用户全部 MCP（观测到 4 个 claude.ai connector，含 `needs-auth` / `pending` 状态）。**§2 "白送用户已有 skill 和 MCP"成立**，但反面是排查无关的工具会一起进来，且工具集变大后模型会先走一跳 `ToolSearch`——正式实现需用 `allowedTools` / `disallowedTools` 收窄
 
 **CLI flags**
 
@@ -413,4 +447,4 @@ Markdown + mermaid：`sequenceDiagram` 画事故时间线，`flowchart` / `gitGr
 | `getSubagentMessages()` / `listSubagents()` | 读子 agent transcript |
 
 **能力探测**
-`system/init` 的 `capabilities` 是开放集合，需 feature-detect 而非版本嗅探。已知：`interrupt_receipt_v1`、`interrupt_cancel_queued_v1`。
+`system/init` 的 `capabilities` 是开放集合，需 feature-detect 而非版本嗅探。2026-08-10 spike 实测（CLI 2.1.220 与 2.1.226 一致）：`interrupt_receipt_v1`、`interrupt_cancel_queued_v1`、`msg_lifecycle_v1`。
