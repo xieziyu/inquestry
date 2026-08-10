@@ -9,7 +9,8 @@
 > - [agent-backends](agent-backends.md) —— 多 backend 抽象：能力对照、三段接缝、第一阶段纪律
 > - [data-model](data-model.md) —— 三层结构、关键字段、两条时间线的投影查询、FTS5 中文实测
 > - [tools](tools.md) —— 三个工具的契约、提示词、真 agent 遵从性实测
-> - [ui](ui.md) —— Electron 壳与 Timeline 控制面，装起来才暴露的问题
+> - [ui](ui.md) —— 界面规格：两个阶段、三区调查台、人工介入三级、报告与两种导出、案子的一生
+> - [mockups/](mockups/) —— 定稿时的冻结快照，只作记录，不再维护
 
 ---
 
