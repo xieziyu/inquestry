@@ -19,9 +19,11 @@
 
 ## 2. 五个不显眼但省不掉的字段
 
-### `sessions.backend` + `native_session_ref`
+### `sessions.backend` + `native_session_ref` + `model` / `effort`
 
 D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接第二个 backend 时不必迁移历史数据——而历史数据正是本工具的全部价值。
+
+`model` 与 `effort` 也在这一层，**不在 `cases`**：一个案子跨多个会话，中途换模型是常态（先用便宜的扫一遍，再换强的推）。挂在 case 上会让"这一步是哪个模型跑的"永远答不上来，而报告里要标它。`effort` 允许为空——不是所有 backend 都有这个概念（D19 能力协商）。
 
 ### `evidence_refs.occurred_at_raw`（不只是 `occurred_at_ms`）
 
