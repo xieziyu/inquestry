@@ -57,7 +57,11 @@ export function createInvestigationSession(
     applyEvent(db, ev, deps);
   });
 
-  emit({ type: 'case.opened', payload: { caseId: ctx.caseId, title: opts.title, at: ctx.now() } });
+  // 一次事故跨多个会话（overview §4.1）：case 只开一次，每次启动都是它下面的新 session。
+  const caseExists = db.prepare(`SELECT 1 FROM cases WHERE id=?`).get(ctx.caseId);
+  if (!caseExists) {
+    emit({ type: 'case.opened', payload: { caseId: ctx.caseId, title: opts.title, at: ctx.now() } });
+  }
   emit({
     type: 'session.started',
     payload: { sessionId: ctx.sessionId, caseId: ctx.caseId, backend: ctx.backend, at: ctx.now() },

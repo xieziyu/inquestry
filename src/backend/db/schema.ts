@@ -1,8 +1,16 @@
+/**
+ * Inquestry schema。
+ *
+ * 以 TS 常量而非 .sql 文件承载：打包后 readFileSync 的相对路径必然失效，
+ * 而 schema 是启动必需品，这类失败只会在装机后才暴露。
+ */
+
+export const SCHEMA_SQL = `
 -- Inquestry schema v1
 -- 设计依据见 docs/design/data-model.md；决策来源见 docs/design/overview.md §4。
 --
 -- 两条铁律：
---   1. `events` 是唯一真相，其余表都是它的物化投影，可 truncate 后重放重建
+--   1. \`events\` 是唯一真相，其余表都是它的物化投影，可 truncate 后重放重建
 --   2. 大 payload 不进库，只存 sha256 引用；库里存的是可检索文本
 
 PRAGMA journal_mode = WAL;
@@ -10,7 +18,7 @@ PRAGMA foreign_keys = ON;
 
 -- ─────────────────────────────── 真相层 ───────────────────────────────
 
-CREATE TABLE events (
+CREATE TABLE IF NOT EXISTS events (
   seq         INTEGER PRIMARY KEY AUTOINCREMENT,
   case_id     TEXT    NOT NULL,
   session_id  TEXT,
@@ -18,11 +26,11 @@ CREATE TABLE events (
   payload     TEXT    NOT NULL,          -- JSON
   created_at  INTEGER NOT NULL           -- epoch ms
 );
-CREATE INDEX idx_events_case ON events(case_id, seq);
-CREATE INDEX idx_events_session ON events(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_events_case ON events(case_id, seq);
+CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq);
 
 -- 内容寻址：同一份日志被多个 EvidenceRef 引用时不重复存
-CREATE TABLE blobs (
+CREATE TABLE IF NOT EXISTS blobs (
   sha256      TEXT    PRIMARY KEY,
   size        INTEGER NOT NULL,
   mime        TEXT,
@@ -32,7 +40,7 @@ CREATE TABLE blobs (
 
 -- ─────────────────────────────── 投影层 ───────────────────────────────
 
-CREATE TABLE cases (
+CREATE TABLE IF NOT EXISTS cases (
   id          TEXT    PRIMARY KEY,
   title       TEXT    NOT NULL,
   status      TEXT    NOT NULL CHECK (status IN ('open','resolved','abandoned')),
@@ -42,7 +50,7 @@ CREATE TABLE cases (
 );
 
 -- backend / native_session_ref 是 D20 纪律 1：接第二个 backend 时不必迁移历史数据
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
   id                 TEXT    PRIMARY KEY,
   case_id            TEXT    NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
   backend            TEXT    NOT NULL CHECK (backend IN ('claude','codex')),
@@ -53,9 +61,9 @@ CREATE TABLE sessions (
   started_at         INTEGER NOT NULL,
   ended_at           INTEGER
 );
-CREATE INDEX idx_sessions_case ON sessions(case_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_case ON sessions(case_id, started_at);
 
-CREATE TABLE steps (
+CREATE TABLE IF NOT EXISTS steps (
   id                 TEXT    PRIMARY KEY,
   session_id         TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   parent_step_id     TEXT REFERENCES steps(id),
@@ -72,10 +80,10 @@ CREATE TABLE steps (
   tokens             INTEGER,
   cost_usd           REAL
 );
-CREATE INDEX idx_steps_session ON steps(session_id, ordinal);
-CREATE INDEX idx_steps_lane ON steps(session_id, lane, ordinal);
+CREATE INDEX IF NOT EXISTS idx_steps_session ON steps(session_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_steps_lane ON steps(session_id, lane, ordinal);
 
-CREATE TABLE tool_calls (
+CREATE TABLE IF NOT EXISTS tool_calls (
   id              TEXT    PRIMARY KEY,   -- SDK 的 toolUseID，跨事件关联全靠它
   session_id      TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   step_id         TEXT    NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
@@ -90,12 +98,12 @@ CREATE TABLE tool_calls (
   started_at      INTEGER NOT NULL,
   ended_at        INTEGER
 );
-CREATE INDEX idx_tool_calls_step ON tool_calls(step_id, started_at);
-CREATE INDEX idx_tool_calls_pending ON tool_calls(status) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_tool_calls_step ON tool_calls(step_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_pending ON tool_calls(status) WHERE status = 'pending';
 
 -- occurred_at_ms 是全设计最不能省的字段（D11）：事故时间线 = 对它的一次 ORDER BY
 -- occurred_at_raw 必须同存 —— 时区/精度解析出错时，没有原始串就无法回溯纠正
-CREATE TABLE evidence_refs (
+CREATE TABLE IF NOT EXISTS evidence_refs (
   id              TEXT    PRIMARY KEY,
   step_id         TEXT    NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
   tool_call_id    TEXT    NOT NULL REFERENCES tool_calls(id) ON DELETE CASCADE,
@@ -109,20 +117,20 @@ CREATE TABLE evidence_refs (
   occurred_source TEXT CHECK (occurred_source IN ('auto','operator','agent')),
   actor           TEXT
 );
-CREATE INDEX idx_evidence_step ON evidence_refs(step_id);
-CREATE INDEX idx_evidence_occurred ON evidence_refs(occurred_at_ms) WHERE occurred_at_ms IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_step ON evidence_refs(step_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_occurred ON evidence_refs(occurred_at_ms) WHERE occurred_at_ms IS NOT NULL;
 
 -- ─────────────────────────────── 检索层 ───────────────────────────────
 
 -- 两张 FTS 表用不同 tokenizer，因为两类文本的语言分布不同（实测见 data-model.md §5）：
 --   unicode61 对中文完全不分词；trigram 可检索中文但查询串须 ≥3 字符，且索引显著更大
-CREATE VIRTUAL TABLE narrative_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS narrative_fts USING fts5(
   ref_id UNINDEXED, ref_kind UNINDEXED, case_id UNINDEXED,
   text,
   tokenize = 'trigram'
 );
 
-CREATE VIRTUAL TABLE payload_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS payload_fts USING fts5(
   sha256 UNINDEXED, case_id UNINDEXED,
   text,
   tokenize = 'unicode61'
@@ -131,12 +139,13 @@ CREATE VIRTUAL TABLE payload_fts USING fts5(
 -- ─────────────────────────────── UI 状态 ───────────────────────────────
 -- 一律进后端库，不用 renderer localStorage（architecture.md）
 
-CREATE TABLE ui_settings (
+CREATE TABLE IF NOT EXISTS ui_settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 
-CREATE TABLE case_ui_state (
+CREATE TABLE IF NOT EXISTS case_ui_state (
   case_id TEXT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
   value   TEXT NOT NULL     -- JSON：当前视图、展开的 step、泳道折叠
 );
+`;

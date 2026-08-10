@@ -1,9 +1,9 @@
 import Database from 'better-sqlite3';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { SCHEMA_SQL } from './schema.js';
 
-const SCHEMA_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'schema.sql');
+export const SCHEMA_VERSION = 1;
 
 export type Db = Database.Database;
 
@@ -14,7 +14,10 @@ export type Db = Database.Database;
 export function openDatabase(file: string): Db {
   if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
-  db.exec(readFileSync(SCHEMA_PATH, 'utf8'));
+  // schema 全量幂等（IF NOT EXISTS），每次启动都跑一遍；user_version 留给将来的破坏性迁移。
+  // 投影表随时可从 events 重放重建，所以迁移不必写数据搬运脚本（data-model.md §1）。
+  db.exec(SCHEMA_SQL);
+  db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;
 }
 
