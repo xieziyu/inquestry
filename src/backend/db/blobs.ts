@@ -7,7 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 export type StoredBlob = { sha256: string; size: number; mime: string; lineCount: number };
@@ -24,6 +24,31 @@ export function storeBlob(dir: string, text: string, mime = 'text/plain'): Store
 export function readBlobText(dir: string, sha256: string): string | null {
   const file = path.join(dir, sha256);
   return existsSync(file) ? readFileSync(file, 'utf8') : null;
+}
+
+/**
+ * 只读文件开头的若干字节。
+ *
+ * 快照里的 preview 只要前几行，而单个 blob 可以有几 MB——整份读进内存再切掉 99%
+ * 是快照那条路上最贵的一步（每 60ms 一轮，乘上整个案子的历史调用数）。
+ *
+ * 截断按字节，末尾那行可能被切成半个字符，所以**截断时最后一行整条丢掉**：
+ * preview 只承诺前几行完整，不承诺读满。
+ */
+export function readBlobHead(dir: string, sha256: string, maxBytes: number): string | null {
+  const file = path.join(dir, sha256);
+  if (!existsSync(file)) return null;
+  const fd = openSync(file, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(maxBytes);
+    const read = readSync(fd, buf, 0, maxBytes, 0);
+    const text = buf.subarray(0, read).toString('utf8');
+    if (read < maxBytes) return text;
+    const cut = text.lastIndexOf('\n');
+    return cut < 0 ? text : text.slice(0, cut);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** 按 `lineRange` 锚点取片段——UI 上点结论高亮原文的那一步。 */

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { OperatorReply, PendingAsk } from '../shared/ipc.js';
 
 /**
@@ -10,15 +10,26 @@ import type { OperatorReply, PendingAsk } from '../shared/ipc.js';
 export function PendingCard({
   ask,
   focused,
+  draft,
+  onDraft,
   onSubmit,
 }: {
   ask: PendingAsk;
   focused: boolean;
+  /**
+   * 人已经敲进去的东西**存在 App 那边**，不放这张卡的局部 state。
+   * 卡片是跟着快照渲染的，一切案子它就卸载——粘了半天的查询结果会随之蒸发。
+   */
+  draft: Record<string, string>;
+  onDraft: (patch: Record<string, string | undefined>) => void;
   onSubmit: (r: OperatorReply) => void;
 }) {
-  const [statement, setStatement] = useState(ask.statement);
-  const [answer, setAnswer] = useState(ask.suggestedAnswer ?? '');
-  const [executedAt, setExecutedAt] = useState('');
+  const statement = draft.statement ?? ask.statement;
+  const answer = draft.answer ?? ask.suggestedAnswer ?? '';
+  const executedAt = draft.executedAt ?? '';
+  const setStatement = (v: string) => onDraft({ statement: v });
+  const setAnswer = (v: string) => onDraft({ answer: v });
+  const setExecutedAt = (v: string) => onDraft({ executedAt: v });
   const changed = statement !== ask.statement;
   const box = useRef<HTMLElement>(null);
   const result = useRef<HTMLTextAreaElement>(null);

@@ -16,6 +16,23 @@ export type ProjectorDeps = {
 };
 
 export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
+  project(db, ev, deps);
+  touchCase(db, deps.caseId, (ev.payload as { at?: number }).at);
+}
+
+/**
+ * 案件切换栏靠 `updated_at` 把「进行中的」排在前面（ui.md §8.3），
+ * 而立案那一刻之后没有别的地方会动它——不在这里前移，排序就永远是立案先后。
+ *
+ * 时间取事件自己的 `at` 而不是时钟：投影器读时钟的那一刻，重放就不再一致。
+ * 只前移不后退，重放次序万一有出入也不会把它拽回去。
+ */
+function touchCase(db: Db, caseId: string, at?: number) {
+  if (!at) return;
+  db.prepare(`UPDATE cases SET updated_at=? WHERE id=? AND updated_at<?`).run(at, caseId, at);
+}
+
+function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
   switch (ev.type) {
     case 'case.opened': {
       const p = ev.payload;

@@ -13,6 +13,7 @@ import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
 import { readIntake } from '../backend/store/sqlite-store.js';
 import { localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
+import { CaseRegistry } from './case-registry.js';
 import { CaseRunner } from './case-runner.js';
 import {
   EMPTY_SNAPSHOT,
@@ -22,6 +23,7 @@ import {
   type IntakeOptions,
   type IntakeResult,
   type OperatorReply,
+  type Snapshot,
 } from '../shared/ipc.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -30,7 +32,7 @@ const MODEL_CACHE_KEY = 'agent.models';
 
 let db: Db;
 let blobs: string;
-let runner: CaseRunner | null = null;
+let cases: CaseRegistry<CaseRunner>;
 let win: BrowserWindow | null = null;
 let pushTimer: NodeJS.Timeout | null = null;
 
@@ -39,6 +41,8 @@ function schedulePush() {
   if (pushTimer) return;
   pushTimer = setTimeout(() => {
     pushTimer = null;
+    // 案子是在真的开跑那一刻才 spawn 出进程的，光在切换时查限流会漏掉
+    cases.enforceLimit();
     // broadcast 而非 reply-to-sender：第一阶段只有一个窗口，但多窗口时零成本
     for (const w of BrowserWindow.getAllWindows()) {
       w.webContents.send('snapshot', snapshot());
@@ -46,7 +50,14 @@ function schedulePush() {
   }, 60);
 }
 
-const snapshot = () => runner?.snapshot() ?? EMPTY_SNAPSHOT;
+/** 当前案子的投影 + 全部案子的概览。后者哪个案子在看都得有，否则别处的待办没人看得见。 */
+function snapshot(): Snapshot {
+  const briefs = cases.briefs();
+  return cases.current?.snapshot(briefs) ?? { ...EMPTY_SNAPSHOT, cases: briefs };
+}
+
+/** 当前案子；正在立新案时为空，这时除了立案什么都点不到。 */
+const current = () => cases.current;
 
 function setting(key: string): string | null {
   const row = db.prepare(`SELECT value FROM ui_settings WHERE key=?`).get(key) as
@@ -99,36 +110,57 @@ function rememberRoot(root: string | null) {
   putSetting(RECENT_ROOTS_KEY, JSON.stringify([root, ...recentRoots().filter((r) => r !== root)].slice(0, 8)));
 }
 
-/** 立案：新开一个 case，它下面的第一个 session 要到点「开始排查」才开。 */
+/**
+ * 立案：新开一个 case，它下面的第一个 session 要到点「开始排查」才开。
+ *
+ * **不动别的案子**（D28）：手上那个可能正跑着，或者正卡在待办上等人。
+ */
 function createCase(draft: IntakeDraft): IntakeResult {
   const question = draft.question.trim();
   const root = checkProjectRoot(draft.projectRoot);
   if ('error' in root) return { ok: false, field: 'projectRoot', error: root.error };
 
   rememberRoot(root.path);
-  runner?.close();
   const caseId = `case_${randomUUID().slice(0, 8)}`;
-  runner = new CaseRunner({
+  cases.adopt(
+    caseId,
+    new CaseRunner({
+      db,
+      blobDir: blobs,
+      promptText: investigationPrompt,
+      caseId,
+      intake: {
+        title: titleOf(question),
+        question,
+        projectRoot: root.path,
+        incidentDate: draft.incidentDate,
+        // 时区不由用户填，取立案机器的偏移落库定死；**按事故那天算**，
+        // 不是按此刻——有夏令时的地区冬夏差一小时（见 shared/time.ts）
+        tzOffset: tzOffsetOn(draft.incidentDate),
+        clues: draft.clues?.trim() || null,
+      },
+      agent: draft.agent,
+      onChange: schedulePush,
+    }),
+  );
+  writeCaseUi(caseId, { agent: draft.agent });
+  schedulePush();
+  return { ok: true };
+}
+
+/** 按库里的立案单重建一个案子的运行时。库里没有这个 id 就返回 null（切换栏会拒绝切过去）。 */
+function loadCase(caseId: string): CaseRunner | null {
+  const intake = readIntake(db, caseId);
+  if (!intake) return null;
+  return new CaseRunner({
     db,
     blobDir: blobs,
     promptText: investigationPrompt,
     caseId,
-    intake: {
-      title: titleOf(question),
-      question,
-      projectRoot: root.path,
-      incidentDate: draft.incidentDate,
-      // 时区不由用户填，取立案机器的偏移落库定死；**按事故那天算**，
-      // 不是按此刻——有夏令时的地区冬夏差一小时（见 shared/time.ts）
-      tzOffset: tzOffsetOn(draft.incidentDate),
-      clues: draft.clues?.trim() || null,
-    },
-    agent: draft.agent,
+    intake,
+    agent: lastAgentChoice(caseId),
     onChange: schedulePush,
   });
-  writeCaseUi(caseId, { agent: draft.agent });
-  schedulePush();
-  return { ok: true };
 }
 
 /**
@@ -157,18 +189,7 @@ function restoreLatestCase() {
   const row = db
     .prepare(`SELECT id FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 1`)
     .get() as { id: string } | undefined;
-  if (!row) return;
-  const intake = readIntake(db, row.id);
-  if (!intake) return;
-  runner = new CaseRunner({
-    db,
-    blobDir: blobs,
-    promptText: investigationPrompt,
-    caseId: row.id,
-    intake,
-    agent: lastAgentChoice(row.id),
-    onChange: schedulePush,
-  });
+  if (row) cases.switchTo(row.id);
 }
 
 /** 上次跑用的那套；没跑过就用立案时选的。中途换模型是常态，所以最近一次优先。 */
@@ -239,6 +260,7 @@ app.whenReady().then(async () => {
   const dbFile = path.join(app.getPath('userData'), 'inquestry.db');
   db = openDatabase(dbFile);
   blobs = blobDir(dbFile);
+  cases = new CaseRegistry<CaseRunner>({ db, create: loadCase });
   restoreLatestCase();
 
   ipcMain.handle('env:check', () => ({
@@ -251,19 +273,48 @@ app.whenReady().then(async () => {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle('case:create', (_e, draft: IntakeDraft) => createCase(draft));
-  ipcMain.handle('case:start', (_e, question?: string) => runner!.start(question));
-  ipcMain.handle('case:send', (_e, text: string) => runner!.send(text));
-  ipcMain.handle('case:interrupt', () => runner!.interrupt());
-  ipcMain.handle('case:answerOperator', (_e, reply: OperatorReply) => runner!.answerOperator(reply));
-  ipcMain.handle('case:decideGate', (_e, d: GateDecision) => runner!.decideGate(d));
+  ipcMain.handle('case:switch', (_e, caseId: string) => {
+    cases.switchTo(caseId);
+    schedulePush();
+  });
+  ipcMain.handle('case:new', () => {
+    cases.toIntake();
+    schedulePush();
+  });
+  // 下面这些都依赖「当前案子」，一律判空不用 `!`：点「＋ 新案件」的那一刻 currentId 就是
+  // null 了，而 renderer 要等下一次快照（最多 60ms）才换屏——这中间旧界面照样发得出调用。
+  // 用非空断言的话那一下是个 TypeError，invoke 变成未处理的 rejection，
+  // 用户那侧只看到输入框被清空、内容没了
+  // 这四个还要核对 renderer 说的是哪个案子（`currentIf`）：光判空不够，
+  // 切过去之后 current 是**新**案子，旧界面那一下会正正好落到它头上
+  ipcMain.handle('case:start', (_e, caseId: string, question?: string) =>
+    cases.currentIf(caseId)?.start(question),
+  );
+  ipcMain.handle('case:restart', (_e, caseId: string) => cases.currentIf(caseId)?.restart());
+  // 唯一要回执的一个：送没送出去，renderer 据此决定草稿该不该清
+  ipcMain.handle('case:send', async (_e, caseId: string, text: string) => {
+    const runner = cases.currentIf(caseId);
+    if (!runner) return false;
+    await runner.send(text);
+    return true;
+  });
+  ipcMain.handle('case:interrupt', (_e, caseId: string) => cases.currentIf(caseId)?.interrupt());
+  ipcMain.handle('case:answerOperator', (_e, caseId: string, reply: OperatorReply) =>
+    cases.currentIf(caseId)?.answerOperator(reply) ?? false,
+  );
+  ipcMain.handle('case:decideGate', (_e, caseId: string, d: GateDecision) =>
+    cases.currentIf(caseId)?.decideGate(d) ?? false,
+  );
   ipcMain.handle('case:snapshot', () => snapshot());
-  ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) => runner!.excerpt(callId, anchor));
+  ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
+    current()?.excerpt(callId, anchor) ?? '(没有选中的案子)',
+  );
 
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-  app.on('before-quit', () => runner?.close());
+  app.on('before-quit', () => cases.closeAll());
 
   // 开发期自检：无人值守跑一轮并截图，用于在没有人盯着屏幕时验证 UI
   if (process.env.INQUESTRY_SHOT) {
@@ -278,7 +329,7 @@ app.whenReady().then(async () => {
           clues: null,
           agent: { backend: 'claude', model: null, effort: null },
         });
-        void runner!.start();
+        void current()?.start();
       }
       for (const [i, spec] of shots.entries()) {
         const [file, delay] = spec.split('@');
@@ -302,9 +353,11 @@ app.whenReady().then(async () => {
     // 而它三分钟后才自动放行，截图早就拍完了
     if (process.env.INQUESTRY_AUTO_OPERATOR) {
       setInterval(() => {
-        for (const gate of snapshot().gates) runner!.decideGate({ id: gate.id, action: 'allow' });
+        const runner = current();
+        if (!runner) return;
+        for (const gate of snapshot().gates) runner.decideGate({ id: gate.id, action: 'allow' });
         for (const ask of snapshot().pending) {
-          runner!.answerOperator({
+          runner.answerOperator({
             id: ask.id,
             statement: ask.statement,
             answer: ask.suggestedAnswer || '(操作员：这条没跑，换个写法)',

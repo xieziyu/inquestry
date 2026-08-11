@@ -52,13 +52,22 @@ export type IntakeOptions = {
   demo: { question: string; incidentDate: string };
 };
 
-/** 案件切换栏的一行（D28 的载体，第 3 项才会用满）。 */
+/** 案件切换栏的一行（D28）。 */
 export type CaseBrief = {
   id: string;
   title: string;
   status: 'open' | 'closed' | 'aborted';
   updatedAt: number;
   current: boolean;
+  /**
+   * 等你处理的条数。**跨 case 汇总的价值全在这一个字段上**：
+   * 你在 A 案上工作时 B 案卡在 ask_operator 上等人，只在当前案子显示的话那条支线会静静挂死。
+   */
+  todos: number;
+  /** 有一轮正在跑。 */
+  running: boolean;
+  /** main 里还持有它的运行时；false 表示只剩库里的历史，点开会新起一个 session。 */
+  loaded: boolean;
 };
 
 export type CallNode = {
@@ -85,7 +94,14 @@ export type EvidenceNode = {
 
 export type StepNode = {
   id: string;
+  /**
+   * 会话内序号，**不是案子内的**：一个案子跨多会话，重开一次它就从 1 重来。
+   * 轨道上因此会出现两个 #1，得靠 `sessionIndex` 标出断点。
+   */
   ordinal: number;
+  sessionId: string;
+  /** 这是本案子的第几次会话，从 1 起。 */
+  sessionIndex: number;
   kind: 'normal' | 'unclassified' | 'impact' | 'leftover';
   status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded';
   direction: string | null;
@@ -161,7 +177,14 @@ export type CaseMeta = {
 
 export type Snapshot = {
   case: CaseMeta | null;
+  /** 所有案子，含别处的待办数。为 null 的 `case` 配非空 `cases` = 正在立新案，切换栏照常在。 */
+  cases: CaseBrief[];
   sessionStatus: 'idle' | 'live' | 'ended' | 'crashed';
+  /**
+   * 最近一轮的失败原因。**会话可能仍是 `live` 却已经跑不动了**——凭据过期时消息流
+   * 一直开着，状态永远停在 `live`。有它才知道该显示重开的入口。
+   */
+  lastError: string | null;
   busy: boolean;
   steps: StepNode[];
   incident: IncidentEntry[];
@@ -180,7 +203,9 @@ export type OperatorReply = { id: string; statement: string; answer: string; exe
 
 export const EMPTY_SNAPSHOT: Snapshot = {
   case: null,
+  cases: [],
   sessionStatus: 'idle',
+  lastError: null,
   busy: false,
   steps: [],
   incident: [],
@@ -196,11 +221,28 @@ export type InquestryApi = {
   /** 打开系统目录选择器；用户取消返回 null。 */
   pickProjectRoot(): Promise<string | null>;
   createCase(draft: IntakeDraft): Promise<IntakeResult>;
-  start(question?: string): Promise<void>;
-  send(text: string): Promise<void>;
-  interrupt(): Promise<void>;
-  answerOperator(reply: OperatorReply): Promise<void>;
-  decideGate(decision: GateDecision): Promise<void>;
+  /** 切到另一个案子。**不中断任何一个**：main 持有全部运行时，这里只是换个投影看。 */
+  switchCase(caseId: string): Promise<void>;
+  /** 去立案面板开新案子；当前案子照旧在后台跑。 */
+  newCase(): Promise<void>;
+  /**
+   * 下面这四个都要带上**这一屏看到的 caseId**。
+   *
+   * 切案子那一瞬 main 那边当时就换了当前案子，而这一屏要等下一次快照（最多 60ms）才换——
+   * 不带的话，在 A 案里按下的发送/停止会落到 B 案头上。对不上就不执行。
+   */
+  start(caseId: string, question?: string): Promise<void>;
+  /** 收掉当前会话再起一轮。会话卡在 `live` 却每轮都失败时，这是唯一出路。 */
+  restart(caseId: string): Promise<void>;
+  /** 返回是否真的送出去了；没送出去 renderer 要把草稿留着。 */
+  send(caseId: string, text: string): Promise<boolean>;
+  interrupt(caseId: string): Promise<void>;
+  /**
+   * 待办的两个处置同样要带 caseId，理由同上；回执是**处置成功了没有**。
+   * 丢掉一次闸门判决的后果比丢一条消息重：人按了拒绝却没落地，三分钟后它会自动放行。
+   */
+  answerOperator(caseId: string, reply: OperatorReply): Promise<boolean>;
+  decideGate(caseId: string, decision: GateDecision): Promise<boolean>;
   excerpt(callId: string, anchor: string | null): Promise<string>;
   snapshot(): Promise<Snapshot>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;

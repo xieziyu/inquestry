@@ -23,6 +23,7 @@ import { createDemoDataSource, DEMO_TOOL, suggestOperatorAnswer } from '../backe
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
+  type CaseBrief,
   type ChatLine,
   type GateDecision,
   type OperatorReply,
@@ -85,6 +86,8 @@ export class CaseRunner {
   private preGated = new Map<string, GateOutcome>();
   private busy = false;
   private ended = false;
+  /** 最近一轮的失败原因。会话可能还「活着」但已经跑不动了，这是 UI 唯一的线索。 */
+  private lastError: string | null = null;
   private status: Snapshot['sessionStatus'] = 'idle';
   private q: Query | null = null;
   private inbox = createInbox();
@@ -118,6 +121,36 @@ export class CaseRunner {
     return { caseId: this.caseId, intake: this.intake, agent: this.init.agent };
   }
 
+  /**
+   * 下面三个是给案件切换栏用的**便宜**读数（D28）：全局汇总每次快照都要把所有案子算一遍，
+   * 走 buildSnapshot 的话每 60ms 就是一轮全库查询。
+   */
+  get todoCount() {
+    return this.pending.size + this.gates.size;
+  }
+
+  get isBusy() {
+    return this.busy;
+  }
+
+  get sessionStatus() {
+    return this.status;
+  }
+
+  /**
+   * 开跑前的会话准备。上一轮已经收过尾（跑完 / 崩了 / 被限流降级过）就**换一个新的 session**：
+   * 不换的话新步骤会落进库里那个已标 ended 的会话，读起来是「会话结束之后还在查」，
+   * 排查时间线上的会话断点也就对不上了。
+   */
+  private beginSession(): InvestigationSession {
+    if (this.ended) {
+      this.ended = false;
+      this.session = null;
+      this.sessionId = randomUUID();
+    }
+    return this.openSession();
+  }
+
   private openSession(): InvestigationSession {
     return (this.session ??= createInvestigationSession(
       this.db,
@@ -137,21 +170,24 @@ export class CaseRunner {
     ));
   }
 
-  snapshot(): Snapshot {
+  /** `cases` 由注册处给：一个 runner 只认得自己那个案子。 */
+  snapshot(cases: CaseBrief[] = []): Snapshot {
     try {
       return buildSnapshot(
         this.db,
-        { caseId: this.caseId, sessionId: this.sessionId, blobDir: this.blobs, agent: this.init.agent },
+        { caseId: this.caseId, blobDir: this.blobs, agent: this.init.agent },
         {
           busy: this.busy,
           chat: this.chat,
           pending: [...this.pending.values()].map((p) => p.ask),
           gates: [...this.gates.values()].map((g) => g.ask),
           sessionStatus: this.status,
+          lastError: this.lastError,
+          cases,
         },
       );
     } catch {
-      return EMPTY_SNAPSHOT;
+      return { ...EMPTY_SNAPSHOT, cases };
     }
   }
 
@@ -169,7 +205,8 @@ export class CaseRunner {
   async start(question?: string) {
     const opening = question?.trim() || openingMessage(this.intake);
     if (this.q) return this.send(opening);
-    const session = this.openSession();
+    const session = this.beginSession();
+    this.lastError = null;
     this.pushChat('user', opening);
     this.busy = true;
     this.status = 'live';
@@ -229,28 +266,57 @@ export class CaseRunner {
       },
     });
 
-    void this.consume();
+    void this.consume(this.q);
   }
 
-  private async consume() {
+  /**
+   * 消费某一次查询的消息流。
+   *
+   * **必须认准自己那一次查询。** `restart()` 会在旧的还没停稳时就把新的建起来，
+   * 而旧 consume 要晚一拍才醒——不认的话它会拿新 session 去 `endOnce`（刚开的会话
+   * 当场标成结束，后续步骤还继续往里写）、把新 `q` 置空、再换掉新查询正在消费的
+   * `inbox`。重开于是原地作废，且没有任何报错。
+   */
+  private async consume(q: Query) {
+    const mine = () => this.q === q;
     try {
-      for await (const msg of this.q!) {
+      for await (const msg of q) {
+        if (!mine()) return;
         if (msg.type === 'assistant') {
           const text = extractText((msg as { message?: { content?: unknown } }).message?.content);
           if (text.trim()) this.pushChat('assistant', text);
         }
         if (msg.type === 'result') {
           this.busy = false;
+          // 一轮失败了不等于会话结束：凭据过期时消息流一直开着，`consume` 永远不返回，
+          // 状态就卡在 `live`——界面显示「会话中」，主区空的，还没有任何重开的入口。
+          // ⚠️ 只能信 `is_error`：实测这条消息的 `subtype` 仍是 "success"（ui.md §10）。
+          // 成功那轮要把它清回 null：失败一轮之后再发一条并成功了，横幅还挂着
+          // 「上一轮没跑起来」会把人诱去重开一个其实已经恢复的会话
+          const r = msg as { is_error?: boolean; result?: string };
+          this.lastError = r.is_error
+            ? r.result?.trim() || '这一轮失败了，但 backend 没有给出原因。'
+            : null;
           this.onChange();
         }
       }
-      this.endOnce('ended');
+      if (mine()) this.endOnce('ended');
     } catch (err) {
-      this.endOnce('crashed');
-      this.pushChat('system', `会话出错：${(err as Error).message}`);
+      if (mine()) {
+        this.endOnce('crashed');
+        this.pushChat('system', `会话出错：${(err as Error).message}`);
+      }
     } finally {
-      this.busy = false;
-      this.onChange();
+      // 会话到此为止，**查询和输入流都不能再用了**。留着 `q` 的话下一次 start()
+      // 会因为它还在而退化成 send()，消息塞进一个已经没人消费的 inbox：
+      // 界面永久停在「进行中」，agent 那侧什么都没收到。inbox 也要换新的——
+      // 旧那个的生成器已经随查询一起结束了
+      if (mine()) {
+        this.q = null;
+        this.inbox = createInbox();
+        this.busy = false;
+        this.onChange();
+      }
     }
   }
 
@@ -259,6 +325,18 @@ export class CaseRunner {
     this.busy = true;
     this.inbox.push(text);
     this.onChange();
+  }
+
+  /**
+   * 显式重开一轮。
+   *
+   * 会话还「活着」但已经跑不动了（凭据过期是实测到的那种）时，这是唯一的出路：
+   * 消息流不会自己结束，所以 `start()` 只会看见 `q` 还在而退化成 `send()`，
+   * 往一个每轮都会失败的会话里继续发。先收干净再起新的。
+   */
+  async restart() {
+    this.close();
+    await this.start();
   }
 
   /** 关窗 / 换案子时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
@@ -275,6 +353,11 @@ export class CaseRunner {
     this.endOnce('ended');
     this.q?.close();
     this.q = null;
+    // 输入流是**跟着查询走的**：`createInbox` 是一个 async generator，只能有一个消费者。
+    // 不在这儿换掉的话，`restart()` 随后 push 进去的开场白会被正在收尾的旧查询取走，
+    // 或者旧迭代器一关、新查询上来直接看到 done——库里已经有了新 session、界面显示
+    // 进行中，agent 那侧却什么都没收到，而且不报任何错
+    this.inbox = createInbox();
   }
 
   private endOnce(status: 'ended' | 'crashed') {
@@ -296,24 +379,35 @@ export class CaseRunner {
     this.onChange();
   }
 
-  answerOperator(reply: OperatorReply) {
+  /**
+   * 回执是**处置成功了没有**，不是「有没有这条」。
+   * 找不到就是这条已经不在这个案子手里了（切了案子 / 已经超时作废），
+   * 静默 return 的话人贴进去的查询结果就凭空消失，那条回填继续挂到超时。
+   */
+  answerOperator(reply: OperatorReply): boolean {
     const p = this.pending.get(reply.id);
-    if (!p) return;
+    if (!p) return false;
     clearTimeout(p.timer);
     this.pending.delete(reply.id);
     p.resolve(reply);
     this.onChange();
+    return true;
   }
 
   /** 待办栏上的两个控制手势最终都落到这里（ui.md §8.2）。 */
-  decideGate(d: GateDecision) {
-    this.gates.get(d.id)?.finish(
+  decideGate(d: GateDecision): boolean {
+    const gate = this.gates.get(d.id);
+    // 丢掉这一下的代价比①档还大：人明明按了「拒绝」，这条却继续挂着，
+    // 三分钟后按预设**自动放行**——人说过的不行会静静变成放行
+    if (!gate) return false;
+    gate.finish(
       d.action === 'deny'
         ? { decision: 'deny', message: d.message }
         : d.action === 'rewrite'
           ? { decision: 'rewrite', input: d.input }
           : { decision: 'allow' },
     );
+    return true;
   }
 
   /**

@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
   type CallNode,
+  type CaseBrief,
   type CaseMeta,
   type InquestryApi,
   type PendingAsk,
   type Snapshot,
   type StepNode,
 } from '../shared/ipc.js';
+import { draftKey, pruneDrafts, type CardDrafts } from './drafts.js';
 import { GateCard } from './GateCard.js';
 import { Intake } from './Intake.js';
 import { isPlainKey, isTyping } from './keys.js';
@@ -24,15 +26,41 @@ type View = 'investigation' | 'incident';
 export function App() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   const [view, setView] = useState<View>('investigation');
-  const [input, setInput] = useState('');
+  /**
+   * 输入草稿**按案子分开存**。共用一个的话，在 A 案写到一半切到 B 案，输入框里还是那段字，
+   * 一发送就把 A 的线索写进了 B 的会话——串案而且毫无提示。
+   * 分开存还顺带保住了草稿：切回去它还在。
+   */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [env, setEnv] = useState<{ claude: string | null; hint: string } | null>(null);
   const [excerpt, setExcerpt] = useState<{ title: string; body: string } | null>(null);
-  const started = snap.sessionStatus !== 'idle';
+  /**
+   * 待办处置没落地时的提示。
+   *
+   * 挂在应用级而不是卡片上：处置失败多半正是因为案子切走了，那张卡这会儿根本不在屏幕上。
+   */
+  const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * 待办卡里人已经敲进去的东西（改过的语句 / 粘贴的结果 / 执行时间 / 拒绝理由）。
+   *
+   * **按「案子 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一切案子旧卡片就卸载，
+   * 局部 state 随之蒸发——切回来时它会按 ask/gate 的初值重新挂上，人贴的结果、
+   * 写好的拒绝理由全没了。只有处置真的落地才清掉。
+   */
+  const [cardDrafts, setCardDrafts] = useState<CardDrafts>({});
+  /**
+   * **会话正在进行**，不是「开过会话」。ended / crashed 都得能重开——那正是
+   * 「接着查」新起一轮的入口；把它们算成 started 的话，跑完或崩掉之后按钮不出现，
+   * 输入框却还能发，消息进的是一个已经没人消费的队列。
+   */
+  const live = snap.sessionStatus === 'live';
   // ①档永远置顶：闸门到点会自己放行，回填不处理就永远等下去（ui.md §4）
   const todos = useMemo(
     () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
     [snap.pending, snap.gates],
   );
+  /** 别处等着人的案子。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
+  const elsewhere = useMemo(() => snap.cases.filter((c) => !c.current && c.todos > 0), [snap.cases]);
   const [focus, setFocus] = useState<string | null>(null);
   /** 焦点那条消失后要接上它的**位置**，所以光记 id 不够——id 这时已经不在列表里了。 */
   const focusAt = useRef(0);
@@ -60,6 +88,14 @@ export function App() {
     });
   }, [todos]);
 
+  // 从快照上消失的待办，草稿也跟着清（自动放行 / 超时 / 被停止散掉都走这儿）
+  useEffect(() => {
+    const id = snap.case?.id;
+    if (!id) return;
+    const alive = [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)];
+    setCardDrafts((all) => pruneDrafts(all, id, alive));
+  }, [snap.case?.id, snap.pending, snap.gates]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!isPlainKey(e) || isTyping(e.target)) return;
@@ -75,11 +111,27 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [todos]);
 
+
   const showExcerpt = async (callId: string, anchor: string | null, title: string) => {
     setExcerpt({ title, body: await window.inquestry.excerpt(callId, anchor) });
   };
 
-  // 还没立案时整屏只有立案面板：这一步不做完，后面所有东西都没有基准
+  const caseId = snap.case?.id ?? null;
+  const input = caseId ? (drafts[caseId] ?? '') : '';
+  const setInput = (text: string) => caseId && setDrafts((d) => ({ ...d, [caseId]: text }));
+
+  /**
+   * 送不出去就把草稿留着。切案子 / 点「＋ 新案件」之后 main 那边当时就没有当前案子了，
+   * 而这一屏还要等下一次快照才换——先清空再发的话，那段字直接消失。
+   */
+  const submit = async () => {
+    const text = input.trim();
+    if (!caseId || !text) return;
+    if (await window.inquestry.send(caseId, text)) setDrafts((d) => ({ ...d, [caseId]: '' }));
+  };
+
+  // 没选中案子时整屏只有立案面板：没有基准日与问题，后面所有东西都无从谈起。
+  // 切换栏照常在——立到一半改主意，得能回到原来那个案子
   if (!snap.case) {
     return (
       <div className="app">
@@ -88,6 +140,7 @@ export function App() {
             Inquestry<span className="dot" />
           </div>
         </header>
+        <CaseBar cases={snap.cases} />
         {env && !env.claude && (
           <div className="banner">未找到 claude 可执行文件。请先安装 Claude Code 并在终端登录一次。</div>
         )}
@@ -97,6 +150,34 @@ export function App() {
       </div>
     );
   }
+
+  // 早返回之后 snap.case 一定在，但收窄进不了下面那些回调，取一次留个常量
+  const openCase = snap.case.id;
+
+  const keyFor = (id: string) => draftKey(openCase, id);
+  const cardDraft = (id: string) => cardDrafts[keyFor(id)] ?? {};
+  const patchDraft = (id: string, patch: Record<string, string | undefined>) =>
+    setCardDrafts((all) => {
+      const next: Record<string, string> = { ...all[keyFor(id)], ...patch } as Record<string, string>;
+      for (const [k, v] of Object.entries(next)) if (v === undefined) delete next[k];
+      return { ...all, [keyFor(id)]: next };
+    });
+
+  /**
+   * 待办与闸门的处置回执。落地了卡片自己会随下一次快照消失，草稿跟着清掉；
+   * 没落地才要说话——而且这时那张卡多半已经不在屏幕上了，所以提示挂在应用级。
+   */
+  const disposed = (id: string) => (ok: boolean) => {
+    if (ok) {
+      setCardDrafts((all) => {
+        const next = { ...all };
+        delete next[keyFor(id)];
+        return next;
+      });
+      return;
+    }
+    setNotice('刚才那条没处置成功：可能案子已经切走了，也可能它已经到点自动放行。切回那个案子再看一眼，刚才填的还在。');
+  };
 
   return (
     <div className="app">
@@ -116,15 +197,42 @@ export function App() {
         </div>
         <div className="status">
           {todos.length > 0 && <span className="pill todo">等你 {todos.length}</span>}
+          {elsewhere.length > 0 && (
+            <button
+              className="pill todo other"
+              title={elsewhere.map((c) => `${c.title}（${c.todos}）`).join('\n')}
+              onClick={() => void window.inquestry.switchCase(elsewhere[0]!.id)}
+            >
+              别的案子 {elsewhere.reduce((n, c) => n + c.todos, 0)}
+            </button>
+          )}
           <span className={`pill ${snap.busy ? 'busy' : snap.sessionStatus}`}>
             {snap.busy ? '进行中' : statusLabel(snap.sessionStatus)}
           </span>
-          {snap.busy && <button onClick={() => void window.inquestry.interrupt()}>停止</button>}
+          {snap.busy && <button onClick={() => void window.inquestry.interrupt(openCase)}>停止</button>}
         </div>
       </header>
 
+      <CaseBar cases={snap.cases} />
+
       {env && !env.claude && (
         <div className="banner">未找到 claude 可执行文件。请先安装 Claude Code 并在终端登录一次。</div>
+      )}
+
+      {/* 一轮失败了不等于会话结束：凭据过期时状态一直是 live，没有这条横幅就只剩
+          一个显示「会话中」却什么都不动的界面，连重开的入口都没有 */}
+      {notice && (
+        <div className="banner err">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)}>知道了</button>
+        </div>
+      )}
+
+      {snap.lastError && !snap.busy && (
+        <div className="banner err">
+          <span>上一轮没跑起来：{snap.lastError}</span>
+          <button onClick={() => void window.inquestry.restart(openCase)}>重开一轮会话</button>
+        </div>
       )}
 
       <main className="stage">
@@ -133,7 +241,9 @@ export function App() {
             key={p.id}
             ask={p}
             focused={focus === p.id}
-            onSubmit={(r) => void window.inquestry.answerOperator(r)}
+            draft={cardDraft(p.id)}
+            onDraft={(patch) => patchDraft(p.id, patch)}
+            onSubmit={(r) => void window.inquestry.answerOperator(openCase, r).then(disposed(p.id))}
           />
         ))}
         {snap.gates.map((g) => (
@@ -141,24 +251,27 @@ export function App() {
             key={g.id}
             gate={g}
             focused={focus === g.id}
-            onDecide={(d) => void window.inquestry.decideGate(d)}
+            draft={cardDraft(g.id)}
+            onDraft={(patch) => patchDraft(g.id, patch)}
+            onDecide={(d) => void window.inquestry.decideGate(openCase, d).then(disposed(g.id))}
           />
         ))}
 
-        {!started && (
+        {!live && (
           <div className="empty">
             <p>{snap.case.question}</p>
-            <button className="primary" onClick={() => void window.inquestry.start()}>
-              开始排查
+            {snap.sessionStatus === 'crashed' && <p className="warn">上一轮会话中断了。</p>}
+            <button className="primary" onClick={() => void window.inquestry.start(openCase)}>
+              {startLabel(snap)}
             </button>
           </div>
         )}
 
         {view === 'investigation'
-          ? snap.steps.map((s) => <StepCard key={s.id} step={s} onExcerpt={showExcerpt} />)
+          ? <InvestigationTimeline steps={snap.steps} onExcerpt={showExcerpt} />
           : <IncidentTimeline snap={snap} onExcerpt={showExcerpt} />}
 
-        {started && view === 'investigation' && <ReportStrip snap={snap} />}
+        {view === 'investigation' && <ReportStrip snap={snap} />}
       </main>
 
       <footer className="dock">
@@ -166,23 +279,16 @@ export function App() {
         <div className="composer">
           <textarea
             value={input}
-            placeholder={started ? '补充线索、纠偏方向，或让它换个假设…' : '先点「开始排查」'}
+            placeholder={live ? '补充线索、纠偏方向，或让它换个假设…' : `先点「${startLabel(snap)}」`}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.trim()) {
-                void window.inquestry.send(input.trim());
-                setInput('');
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && live) {
+                e.preventDefault();
+                void submit();
               }
             }}
           />
-          <button
-            className="primary"
-            disabled={!started || !input.trim()}
-            onClick={() => {
-              void window.inquestry.send(input.trim());
-              setInput('');
-            }}
-          >
+          <button className="primary" disabled={!live || !input.trim()} onClick={() => void submit()}>
             发送 <small>⌘↵</small>
           </button>
         </div>
@@ -198,6 +304,79 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 案件切换栏（D28 / ui.md §8.3）。进行中的排在前面，各带一个徽标。
+ *
+ * 切换不中断任何一个：main 持有全部运行时，这里只是换个投影看。
+ * 徽标上的「等你 N」是并发排查里唯一能看见后台支线在等人的地方。
+ */
+function CaseBar({ cases }: { cases: CaseBrief[] }) {
+  if (!cases.length) return null;
+  return (
+    <nav className="casebar">
+      {cases.map((c) => (
+        <button
+          key={c.id}
+          className={`chip ${c.status} ${c.current ? 'on' : ''}`}
+          title={c.title}
+          onClick={() => !c.current && void window.inquestry.switchCase(c.id)}
+        >
+          <span className="t">{c.title}</span>
+          {c.todos > 0 ? (
+            <span className="b todo">等你 {c.todos}</span>
+          ) : c.running ? (
+            <span className="b run">跑动中</span>
+          ) : (
+            <span className="b idle">{caseStateLabel(c)}</span>
+          )}
+        </button>
+      ))}
+      <button className="chip new" onClick={() => void window.inquestry.newCase()}>
+        ＋ 新案件
+      </button>
+    </nav>
+  );
+}
+
+/** 从没跑过 / 跑完了接着查 / 崩了重来，是三句不同的话——按钮和输入框提示要用同一句。 */
+function startLabel(snap: Snapshot) {
+  if (snap.sessionStatus === 'crashed') return '重开一轮会话';
+  return snap.steps.length ? '接着查（新起一轮会话）' : '开始排查';
+}
+
+function caseStateLabel(c: CaseBrief) {
+  if (c.status === 'closed') return '已结案';
+  if (c.status === 'aborted') return '已归档';
+  return c.loaded ? '已停' : '未打开';
+}
+
+/**
+ * 排查时间线**按 case 取而非按 session 取**：一个案子跨多会话，按 session 取的话
+ * 重开旧案主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
+ */
+function InvestigationTimeline({
+  steps,
+  onExcerpt,
+}: {
+  steps: StepNode[];
+  onExcerpt: (callId: string, anchor: string | null, title: string) => void;
+}) {
+  // 只有一次会话时不标：那条分隔线什么都没说明，纯噪声
+  const multi = new Set(steps.map((s) => s.sessionIndex)).size > 1;
+  return (
+    <>
+      {steps.map((s, i) => (
+        <Fragment key={s.id}>
+          {multi && s.sessionIndex !== steps[i - 1]?.sessionIndex && (
+            <div className="sessionmark">第 {s.sessionIndex} 次会话</div>
+          )}
+          <StepCard step={s} onExcerpt={onExcerpt} />
+        </Fragment>
+      ))}
+    </>
   );
 }
 

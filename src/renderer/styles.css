@@ -62,6 +62,38 @@ body {
 }
 
 .banner { background: #2e2415; color: var(--warn); padding: 8px 16px; font-size: 13px; }
+/* 会话跑不动了：这是坏消息不是待办，用绯色，别占掉暖色那一档 */
+.banner.err { background: #2c1a18; color: var(--bad); display: flex; align-items: center; gap: 12px; }
+.banner.err span { flex: 1; }
+.banner.err button {
+  background: none; border: 1px solid var(--bad); color: var(--bad);
+  padding: 3px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
+}
+
+/* ── 案件切换栏 ──
+   切换只换投影不中断任何一个；chip 上的「等你 N」是并发排查里唯一能看见
+   后台支线在等人的地方（D28），所以它用暖色，和待办栏同一档 */
+.casebar {
+  display: flex; gap: 6px; align-items: center; overflow-x: auto;
+  padding: 7px 16px; border-bottom: 1px solid var(--line); background: var(--bg);
+}
+.casebar .chip {
+  display: flex; align-items: center; gap: 7px; flex: 0 0 auto; max-width: 280px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+  padding: 4px 10px; border-radius: 20px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.casebar .chip.on { border-color: var(--fill); color: var(--text); background: var(--panel-2); cursor: default; }
+.casebar .chip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.casebar .chip .b { font-size: 11px; flex: 0 0 auto; }
+.casebar .chip .b.todo { background: var(--warn); color: var(--on-warn); padding: 0 6px; border-radius: 10px; font-weight: 600; }
+.casebar .chip .b.run { color: var(--accent); }
+.casebar .chip .b.idle { opacity: .6; }
+.casebar .chip.closed .t, .casebar .chip.aborted .t { text-decoration: line-through; text-decoration-color: var(--line); }
+.casebar .new { border-style: dashed; }
+
+/* 跨会话的断点：ordinal 每个会话都从 1 重来，不标一下轨道上会出现两个 #1 */
+.sessionmark { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 11px; margin: 8px 0 0; }
+.sessionmark::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 
 /* ── 主区 ── */
 .stage { flex: 1; overflow-y: auto; padding: 16px 20px 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -187,6 +219,11 @@ button.primary small { opacity: .6; font-weight: 400; }
 .gate .ghost small { opacity: .55; margin-left: 4px; }
 
 .pill.todo { background: var(--warn); color: var(--on-warn); font-weight: 600; }
+/* 别处的待办：描边而非实心——它是「那边有人等你」，不是「这里要你处理」 */
+.pill.todo.other {
+  background: none; border: 1px solid var(--warn); color: var(--warn);
+  cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; padding: 3px 9px;
+}
 /* 被拒 / 失败的调用留在轨道上，压暗但不删：走过的死路也是排查过程的一部分 */
 .call.denied, .call.failed, .call.abandoned { opacity: .7; }
 .gated { color: var(--warn); font-size: 11px; }

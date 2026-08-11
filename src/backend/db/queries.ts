@@ -63,6 +63,43 @@ export function incidentTimeline(db: Db, caseId: string): IncidentRow[] {
     .all(caseId) as IncidentRow[];
 }
 
+export type CaseRow = {
+  id: string;
+  title: string;
+  status: 'open' | 'closed' | 'aborted';
+  updated_at: number;
+};
+
+const CASE_ORDER = `ORDER BY (status='open') DESC, updated_at DESC`;
+const byCaseOrder = (a: CaseRow, b: CaseRow) =>
+  Number(b.status === 'open') - Number(a.status === 'open') || b.updated_at - a.updated_at;
+
+/**
+ * 案件切换栏的库侧一半（D28）：进行中的排在前面，同档按最近活动倒序。
+ * 「跑动中 / 等你 N」是运行时状态，库里没有，由 main 合上去。
+ *
+ * `pinned` 里的案子**一定在结果里**，哪怕排在 limit 之外。它装的是 main 还持有运行时的那些，
+ * 而待办只存在于运行时里：被 limit 截掉的话，那个案子会连同它「等你 N」一起从切换栏
+ * 和全局汇总里消失——人看不见，也切不回去处理，正好废掉 D28 要保的东西。
+ */
+export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {}): CaseRow[] {
+  const rows = db
+    .prepare(`SELECT id, title, status, updated_at FROM cases ${CASE_ORDER} LIMIT ?`)
+    .all(opts.limit ?? 20) as CaseRow[];
+
+  const have = new Set(rows.map((r) => r.id));
+  const missing = (opts.pinned ?? []).filter((id) => !have.has(id));
+  if (!missing.length) return rows;
+
+  const extra = db
+    .prepare(
+      `SELECT id, title, status, updated_at FROM cases
+       WHERE id IN (${missing.map(() => '?').join(',')})`,
+    )
+    .all(...missing) as CaseRow[];
+  return [...rows, ...extra].sort(byCaseOrder);
+}
+
 export type ReportSections = {
   rootCause: { step_id: string; verdict_text: string; confidence: number } | undefined;
   impact: { verdict_text: string } | undefined;
@@ -73,23 +110,32 @@ export type ReportSections = {
 export function reportSections(db: Db, caseId: string): ReportSections {
   const q = <T>(sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as T[];
   const base = `FROM steps s JOIN sessions se ON se.id = s.session_id WHERE se.case_id = ?`;
+  /**
+   * **跨会话的顺序不能只看 `ordinal`**：它是会话内序号，一个案子重开一次就从 1 重来。
+   * 只按它排的话，旧会话 ordinal=10 的影响面会压过新会话 ordinal=3 的更新结论，
+   * 报告静静地展示过期信息。凡是要「最新那条」的章节都得先按会话先后排。
+   */
+  const chrono = `se.started_at, se.rowid, s.ordinal`;
+  const chronoDesc = `se.started_at DESC, se.rowid DESC, s.ordinal DESC`;
   return {
     rootCause: q<{ step_id: string; verdict_text: string; confidence: number }>(
       `SELECT s.id AS step_id, s.verdict_text, s.verdict_confidence AS confidence ${base}
-         AND s.status='confirmed' AND s.kind='normal' ORDER BY s.verdict_confidence DESC, s.ordinal DESC LIMIT 1`,
+         AND s.status='confirmed' AND s.kind='normal'
+       ORDER BY s.verdict_confidence DESC, ${chronoDesc} LIMIT 1`,
       caseId,
     )[0],
     impact: q<{ verdict_text: string }>(
-      `SELECT s.verdict_text ${base} AND s.kind='impact' ORDER BY s.ordinal DESC LIMIT 1`,
+      `SELECT s.verdict_text ${base} AND s.kind='impact' ORDER BY ${chronoDesc} LIMIT 1`,
       caseId,
     )[0],
     leftovers: q(
-      `SELECT s.id AS step_id, s.direction, s.verdict_text ${base} AND s.status='inconclusive' ORDER BY s.ordinal`,
+      `SELECT s.id AS step_id, s.direction, s.verdict_text ${base}
+         AND s.status='inconclusive' ORDER BY ${chrono}`,
       caseId,
     ),
     refuted: q(
       `SELECT s.id AS step_id, s.direction, s.verdict_text, s.superseded_by ${base}
-         AND s.status IN ('refuted','superseded') ORDER BY s.ordinal`,
+         AND s.status IN ('refuted','superseded') ORDER BY ${chrono}`,
       caseId,
     ),
   };

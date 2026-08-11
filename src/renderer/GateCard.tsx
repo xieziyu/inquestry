@@ -11,15 +11,25 @@ import { isPlainKey, isTyping } from './keys.js';
 export function GateCard({
   gate,
   focused,
+  draft,
+  onDraft,
   onDecide,
 }: {
   gate: PendingGate;
   focused: boolean;
+  /**
+   * 改过的参数与写好的拒绝理由**存在 App 那边**，不放这张卡的局部 state。
+   * 一切案子这张卡就卸载，写好的理由会跟着没——而它正是拒绝这个动作的全部内容。
+   */
+  draft: Record<string, string>;
+  onDraft: (patch: Record<string, string | undefined>) => void;
   onDecide: (d: GateDecision) => void;
 }) {
-  const [text, setText] = useState(gate.input);
-  /** null = 拒绝那栏还没展开。展开与留话内容是一回事，不必再多一个 boolean。 */
-  const [note, setNote] = useState<string | null>(null);
+  const text = draft.input ?? gate.input;
+  const setText = (v: string) => onDraft({ input: v });
+  /** 键不在 = 拒绝那栏还没展开。展开与留话内容是一回事，不必再多一个 boolean。 */
+  const note = draft.note ?? null;
+  const setNote = (v: string | null) => onDraft({ note: v ?? undefined });
   const [left, setLeft] = useState(() => Math.max(0, gate.deadline - Date.now()));
   const box = useRef<HTMLElement>(null);
   const params = useRef<HTMLTextAreaElement>(null);
@@ -52,7 +62,7 @@ export function GateCard({
       if (k === 'a') allow();
       else if (k === 'e') params.current?.focus();
       else if (k === 'd') {
-        setNote((n) => n ?? '');
+        setNote(note ?? '');
         // 展开与聚焦不在同一帧：输入框这会儿还没挂上
         setTimeout(() => message.current?.focus(), 0);
       } else return;

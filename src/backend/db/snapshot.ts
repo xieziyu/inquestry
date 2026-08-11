@@ -6,7 +6,7 @@
  */
 
 import type { AgentChoice, CaseMeta, IncidentEntry, Snapshot, StepNode } from '../../shared/ipc.js';
-import { readBlobText } from './blobs.js';
+import { readBlobHead } from './blobs.js';
 import type { Db } from './database.js';
 import { reportSections } from './queries.js';
 import { readIntake } from '../store/sqlite-store.js';
@@ -15,18 +15,37 @@ const PREVIEW_LINES = 6;
 
 export function buildSnapshot(
   db: Db,
-  ctx: { caseId: string; sessionId: string; blobDir: string; agent: AgentChoice },
-  extra: Pick<Snapshot, 'busy' | 'chat' | 'pending' | 'gates' | 'sessionStatus'>,
+  ctx: { caseId: string; blobDir: string; agent: AgentChoice },
+  extra: Pick<
+    Snapshot,
+    'busy' | 'chat' | 'pending' | 'gates' | 'sessionStatus' | 'cases' | 'lastError'
+  >,
 ): Snapshot {
   const meta = caseMeta(db, ctx.caseId, ctx.agent);
 
+  /**
+   * **两条时间线都按 case 取，不按 session 取。**
+   * 一个案子跨多会话（overview §4.1），按 session 取的话重开旧案主区就是空的——
+   * 排查了三轮的东西看不见，只有事故时间线还在，读起来像是数据丢了。
+   */
+  const sessionIndex = new Map(
+    (
+      db
+        .prepare(`SELECT id FROM sessions WHERE case_id=? ORDER BY started_at, rowid`)
+        .all(ctx.caseId) as { id: string }[]
+    ).map((s, i) => [s.id, i + 1]),
+  );
+
   const steps = db
     .prepare(
-      `SELECT id, ordinal, kind, status, direction, verdict_text, verdict_confidence, superseded_by
-       FROM steps WHERE session_id=? ORDER BY ordinal`,
+      `SELECT s.id, s.session_id, s.ordinal, s.kind, s.status, s.direction, s.verdict_text,
+              s.verdict_confidence, s.superseded_by
+       FROM steps s JOIN sessions se ON se.id = s.session_id
+       WHERE se.case_id=? ORDER BY se.started_at, se.rowid, s.ordinal`,
     )
-    .all(ctx.sessionId) as {
+    .all(ctx.caseId) as {
     id: string;
+    session_id: string;
     ordinal: number;
     kind: StepNode['kind'];
     status: StepNode['status'];
@@ -40,10 +59,12 @@ export function buildSnapshot(
     .prepare(
       `SELECT tc.id, tc.step_id, tc.tool_name, tc.origin, tc.status, tc.input_json, tc.gate_decision,
               tc.output_sha256, b.line_count
-       FROM tool_calls tc LEFT JOIN blobs b ON b.sha256 = tc.output_sha256
-       WHERE tc.session_id=? ORDER BY tc.started_at, tc.rowid`,
+       FROM tool_calls tc
+       JOIN sessions se ON se.id = tc.session_id
+       LEFT JOIN blobs b ON b.sha256 = tc.output_sha256
+       WHERE se.case_id=? ORDER BY tc.started_at, tc.rowid`,
     )
-    .all(ctx.sessionId) as {
+    .all(ctx.caseId) as {
     id: string;
     step_id: string;
     tool_name: string;
@@ -59,10 +80,12 @@ export function buildSnapshot(
     .prepare(
       `SELECT e.id, e.step_id, e.tool_call_id, e.claim, e.anchor_resolved, e.anchor,
               e.occurred_at_raw, e.actor
-       FROM evidence_refs e JOIN steps s ON s.id = e.step_id
-       WHERE s.session_id=? ORDER BY e.rowid`,
+       FROM evidence_refs e
+       JOIN steps s ON s.id = e.step_id
+       JOIN sessions se ON se.id = s.session_id
+       WHERE se.case_id=? ORDER BY e.rowid`,
     )
-    .all(ctx.sessionId) as {
+    .all(ctx.caseId) as {
     id: string;
     step_id: string;
     tool_call_id: string;
@@ -73,43 +96,42 @@ export function buildSnapshot(
     actor: string | null;
   }[];
 
-  const perStepCount = new Map<string, number>();
+  // 按 step 先分好组再映射。按 case 取之后这两份是整个案子的历史，
+  // 每一步再各扫一遍就是 O(steps × (calls + evidence))——而快照每 60ms 就重建一次，
+  // 跨多轮会话的长案子会把 main 卡住。分组保持原查询的顺序，`callNumber` 因此不变
+  const callsByStep = groupBy(calls, (c) => c.step_id);
+  const evidenceByStep = groupBy(evidence, (e) => e.step_id);
+
   const stepNodes: StepNode[] = steps.map((s) => ({
     id: s.id,
     ordinal: s.ordinal,
+    sessionId: s.session_id,
+    sessionIndex: sessionIndex.get(s.session_id) ?? 1,
     kind: s.kind,
     status: s.status,
     direction: s.direction,
     verdict: s.verdict_text,
     confidence: s.verdict_confidence,
     supersededBy: s.superseded_by,
-    calls: calls
-      .filter((c) => c.step_id === s.id)
-      .map((c) => {
-        const n = (perStepCount.get(s.id) ?? 0) + 1;
-        perStepCount.set(s.id, n);
-        return {
-          id: c.id,
-          callNumber: n,
-          toolName: c.tool_name,
-          origin: c.origin,
-          status: c.status,
-          input: c.input_json,
-          gate: c.gate_decision,
-          outputPreview: preview(ctx.blobDir, c.output_sha256),
-          outputLines: c.line_count ?? 0,
-        };
-      }),
-    evidence: evidence
-      .filter((e) => e.step_id === s.id)
-      .map((e) => ({
-        id: e.id,
-        claim: e.claim,
-        anchor: e.anchor_resolved ?? e.anchor,
-        occurredAtRaw: e.occurred_at_raw,
-        actor: e.actor,
-        callId: e.tool_call_id,
-      })),
+    calls: (callsByStep.get(s.id) ?? []).map((c, i) => ({
+      id: c.id,
+      callNumber: i + 1,
+      toolName: c.tool_name,
+      origin: c.origin,
+      status: c.status,
+      input: c.input_json,
+      gate: c.gate_decision,
+      outputPreview: preview(ctx.blobDir, c.output_sha256),
+      outputLines: c.line_count ?? 0,
+    })),
+    evidence: (evidenceByStep.get(s.id) ?? []).map((e) => ({
+      id: e.id,
+      claim: e.claim,
+      anchor: e.anchor_resolved ?? e.anchor,
+      occurredAtRaw: e.occurred_at_raw,
+      actor: e.actor,
+      callId: e.tool_call_id,
+    })),
   }));
 
   const incident = db
@@ -169,14 +191,51 @@ function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
   return intake && { id: caseId, ...intake, agent };
 }
 
+function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    const bucket = out.get(k);
+    if (bucket) bucket.push(row);
+    else out.set(k, [row]);
+  }
+  return out;
+}
+
+/**
+ * preview 缓存。**blob 是内容寻址的，同一个 sha256 的内容永不改变**，所以缓存不会过期。
+ *
+ * 没有它的话，按 case 取历史之后每次快照都要把整个案子每一次调用的原始输出重读一遍，
+ * 而快照最快 60ms 一轮——长案子会把 main 线程钉在同步 I/O 上。
+ */
+const previewCache = new Map<string, string>();
+const PREVIEW_CACHE_MAX = 2000;
+/** 6 行 preview 够用了；留足余量，超长单行由下面再截。 */
+const PREVIEW_HEAD_BYTES = 64 * 1024;
+
 /** 原始输出不进 IPC（architecture.md）：只给前几行，展开时再按需拉。 */
 function preview(dir: string, sha256: string | null): string {
   if (!sha256) return '';
-  const text = readBlobText(dir, sha256);
-  if (text === null) return '';
-  return text
-    .split('\n')
-    .slice(0, PREVIEW_LINES)
-    .map((l) => (l.length > 200 ? `${l.slice(0, 200)}…` : l))
-    .join('\n');
+  const cached = previewCache.get(sha256);
+  if (cached !== undefined) return cached;
+
+  // 整份读进来再切掉 99% 是这条路上最贵的一步：只读开头够凑出前几行的那点
+  const text = readBlobHead(dir, sha256, PREVIEW_HEAD_BYTES);
+  const out =
+    text === null
+      ? ''
+      : text
+          .split('\n')
+          .slice(0, PREVIEW_LINES)
+          .map((l) => (l.length > 200 ? `${l.slice(0, 200)}…` : l))
+          .join('\n');
+
+  // 读不到就不缓存：blob 可能只是还没落盘，下一轮快照该再试一次
+  if (text !== null) {
+    if (previewCache.size >= PREVIEW_CACHE_MAX) {
+      previewCache.delete(previewCache.keys().next().value!);
+    }
+    previewCache.set(sha256, out);
+  }
+  return out;
 }
