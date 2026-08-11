@@ -107,16 +107,43 @@ export type ReportSections = {
   refuted: { step_id: string; direction: string | null; verdict_text: string; superseded_by: string | null }[];
 };
 
+const STEP_BASE = `FROM steps s JOIN sessions se ON se.id = s.session_id WHERE se.case_id = ?`;
+/**
+ * **跨会话的顺序不能只看 `ordinal`**：它是会话内序号，一个案子重开一次就从 1 重来。
+ * 只按它排的话，旧会话 ordinal=10 的影响面会压过新会话 ordinal=3 的更新结论，
+ * 报告静静地展示过期信息。凡是要「最新那条」的章节都得先按会话先后排。
+ */
+const CHRONO = `se.started_at, se.rowid, s.ordinal`;
+const CHRONO_DESC = `se.started_at DESC, se.rowid DESC, s.ordinal DESC`;
+
+export type EffectiveStep = { step_id: string; status: string; verdict_text: string | null };
+
+/**
+ * 某一 kind **当前生效**的那一步：排除已被推翻的，取时间上最新的一条。
+ *
+ * 结案校验与报告章节必须共用这一条规则，否则两边各算各的：
+ * 「历史上出现过一个收好的影响面」会放行结案，而报告取的是最新那条——
+ * 那可能是 agent 正在重做、还没 close 的空壳，于是影响面栏是空的。
+ * 同一族的错还有一种：最新那条已被推翻，报告照样把它印出来。
+ */
+export function effectiveStep(db: Db, caseId: string, kind: string): EffectiveStep | undefined {
+  return db
+    .prepare(
+      `SELECT s.id AS step_id, s.status, s.verdict_text ${STEP_BASE}
+         AND s.kind=? AND s.status<>'superseded'
+       ORDER BY ${CHRONO_DESC} LIMIT 1`,
+    )
+    .get(caseId, kind) as EffectiveStep | undefined;
+}
+
 export function reportSections(db: Db, caseId: string): ReportSections {
   const q = <T>(sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as T[];
-  const base = `FROM steps s JOIN sessions se ON se.id = s.session_id WHERE se.case_id = ?`;
-  /**
-   * **跨会话的顺序不能只看 `ordinal`**：它是会话内序号，一个案子重开一次就从 1 重来。
-   * 只按它排的话，旧会话 ordinal=10 的影响面会压过新会话 ordinal=3 的更新结论，
-   * 报告静静地展示过期信息。凡是要「最新那条」的章节都得先按会话先后排。
-   */
-  const chrono = `se.started_at, se.rowid, s.ordinal`;
-  const chronoDesc = `se.started_at DESC, se.rowid DESC, s.ordinal DESC`;
+  const base = STEP_BASE;
+  const chrono = CHRONO;
+  const chronoDesc = CHRONO_DESC;
+  // 影响面取当前生效的那一步，且**必须已经收尾**——还开着的那条 verdict 是空的，
+  // 印出来就是一栏空白；而结案校验用的是同一个函数，两边不会各说各话
+  const impact = effectiveStep(db, caseId, 'impact');
   return {
     rootCause: q<{ step_id: string; verdict_text: string; confidence: number }>(
       `SELECT s.id AS step_id, s.verdict_text, s.verdict_confidence AS confidence ${base}
@@ -124,10 +151,7 @@ export function reportSections(db: Db, caseId: string): ReportSections {
        ORDER BY s.verdict_confidence DESC, ${chronoDesc} LIMIT 1`,
       caseId,
     )[0],
-    impact: q<{ verdict_text: string }>(
-      `SELECT s.verdict_text ${base} AND s.kind='impact' ORDER BY ${chronoDesc} LIMIT 1`,
-      caseId,
-    )[0],
+    impact: impact && impact.status !== 'open' ? { verdict_text: impact.verdict_text ?? '' } : undefined,
     leftovers: q(
       `SELECT s.id AS step_id, s.direction, s.verdict_text ${base}
          AND s.status='inconclusive' ORDER BY ${chrono}`,

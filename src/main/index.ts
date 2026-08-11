@@ -10,7 +10,7 @@ import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { DEMO_INCIDENT_DATE, DEMO_QUESTION } from '../backend/datasource/demo.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
-import { readIntake } from '../backend/store/sqlite-store.js';
+import { readIntake, sweepZombies } from '../backend/store/sqlite-store.js';
 import { localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
 import { CaseRegistry } from './case-registry.js';
@@ -260,6 +260,11 @@ app.whenReady().then(async () => {
   const dbFile = path.join(app.getPath('userData'), 'inquestry.db');
   db = openDatabase(dbFile);
   blobs = blobDir(dbFile);
+  // **必须赶在任何 runner 建起来之前**：此刻库里所有 pending 的调用与 live 的会话
+  // 都必然是上一个进程留下的（进程一走，等着人回答的 Promise 也就没了）。
+  // 建完 runner 再扫就会把这一轮自己的活计一起判成放弃
+  const swept = sweepZombies(db, { blobDir: blobs, now: () => Date.now() });
+  if (swept.calls || swept.sessions) console.log('[main] 清扫上次遗留', swept);
   cases = new CaseRegistry<CaseRunner>({ db, create: loadCase });
   restoreLatestCase();
 
@@ -294,11 +299,27 @@ app.whenReady().then(async () => {
   // 唯一要回执的一个：送没送出去，renderer 据此决定草稿该不该清
   ipcMain.handle('case:send', async (_e, caseId: string, text: string) => {
     const runner = cases.currentIf(caseId);
-    if (!runner) return false;
-    await runner.send(text);
-    return true;
+    return runner ? runner.send(text) : false;
   });
   ipcMain.handle('case:interrupt', (_e, caseId: string) => cases.currentIf(caseId)?.interrupt());
+  // 收尾后两档（D29）。问询与执行是两个入口：合成一个的话，界面就得靠 60ms 前的快照
+  // 决定"这一下是问还是执行"，而隔着那一拍点下去的会是不可逆的结案
+  ipcMain.handle(
+    'case:requestClosing',
+    (_e, caseId: string) => cases.currentIf(caseId)?.requestClosing() ?? { missing: [], asked: false },
+  );
+  // 不成立时差的那两步要原样回给界面，不然人只看到按钮没反应
+  ipcMain.handle(
+    'case:close',
+    (_e, caseId: string) => cases.currentIf(caseId)?.closeCase() ?? { ok: false, missing: [] },
+  );
+  ipcMain.handle('case:archive', (_e, caseId: string) => {
+    const runner = cases.currentIf(caseId);
+    if (!runner) return false;
+    runner.archiveCase();
+    schedulePush();
+    return true;
+  });
   ipcMain.handle('case:answerOperator', (_e, caseId: string, reply: OperatorReply) =>
     cases.currentIf(caseId)?.answerOperator(reply) ?? false,
   );

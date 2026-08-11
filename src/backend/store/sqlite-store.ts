@@ -7,9 +7,11 @@
 import type { Db } from '../db/database.js';
 import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
+import { effectiveStep } from '../db/queries.js';
 import { locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
 import type { InvestigationStore } from '../tools/definitions.js';
 import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../tools/schemas.js';
+import type { ClosingStepKind } from '../../shared/ipc.js';
 
 export type SessionContext = {
   caseId: string;
@@ -95,6 +97,96 @@ export function openCase(db: Db, ctx: CaseContext, intake: CaseIntake): CaseInta
     emitTo(db, ctx, null, { type: 'case.opened', payload: { caseId: ctx.caseId, ...intake, at: ctx.now() } });
   }
   return readIntake(db, ctx.caseId) ?? intake;
+}
+
+/**
+ * 收尾三档里改状态的那两档（D29）。
+ *
+ * 走事件而不是 `UPDATE cases`：重放时 `case.opened` 会把 status 写回 `open`，
+ * 直接改的库值一重建投影就没了，而且没有任何报错。
+ */
+export function setCaseStatus(db: Db, ctx: CaseContext, status: CaseStatus): void {
+  if (readCaseStatus(db, ctx.caseId) === status) return;
+  emitTo(db, ctx, null, {
+    type: 'case.status_changed',
+    payload: { caseId: ctx.caseId, status, at: ctx.now() },
+  });
+}
+
+export type CaseStatus = 'open' | 'closed' | 'aborted';
+
+export function readCaseStatus(db: Db, caseId: string): CaseStatus | null {
+  const row = db.prepare(`SELECT status FROM cases WHERE id=?`).get(caseId) as
+    | { status: CaseStatus }
+    | undefined;
+  return row?.status ?? null;
+}
+
+/**
+ * 结案前必须走完的两步（overview §6.2）：影响面要量化，遗留疑点必须明写。
+ * 取值本身是 renderer 也要认的契约，所以类型在 `shared/ipc` 里，这里只给清单。
+ */
+export const CLOSING_STEP_KINDS: readonly ClosingStepKind[] = ['impact', 'leftover'];
+
+/**
+ * 还差哪几步才能结案。
+ *
+ * 判的是**当前生效的那一步**（`effectiveStep`），不是"历史上出现过没有"：
+ *
+ * - 只问"有没有一条收好的 impact"的话，agent 收好一条之后又新开一条打算重做、还没 close，
+ *   这里照样放行——而报告取的是最新那条，于是影响面栏是空的。结案校验与报告章节
+ *   必须共用同一条"哪一步算数"的规则，否则两边各说各话
+ * - 已被推翻的一律不算数：结论被明确否掉了。被同类的新 step 顶掉时新的自然接上，
+ *   漏的是被**别的 kind** 推翻那种——章节看着齐全，报告那栏却是一份作废的影响面
+ */
+export function missingClosingSteps(db: Db, caseId: string): ClosingStepKind[] {
+  return CLOSING_STEP_KINDS.filter((kind) => {
+    const step = effectiveStep(db, caseId, kind);
+    return !step || step.status === 'open';
+  });
+}
+
+/**
+ * 上一个进程留下的僵尸行（D29 / data-model.md §4）。**只在启动、任何 runner 建起来之前跑**：
+ * 那一刻库里所有 `pending` 的调用与所有 `live` 的会话都必然是上次残留的。
+ *
+ * 不扫的话它们会一直挂在那儿：轨道上是永远「进行中」的调用，报告里数出来的
+ * 「跑过多少次」也永远多几笔——而它们其实一次都没跑完。
+ *
+ * 同样走事件，理由同 `setCaseStatus`。
+ */
+export function sweepZombies(
+  db: Db,
+  opts: { blobDir: string; now: () => number },
+): { calls: number; sessions: number } {
+  const calls = db
+    .prepare(
+      `SELECT tc.id, se.case_id, tc.session_id FROM tool_calls tc
+       JOIN sessions se ON se.id = tc.session_id WHERE tc.status='pending'`,
+    )
+    .all() as { id: string; case_id: string; session_id: string }[];
+  const sessions = db
+    .prepare(`SELECT id, case_id FROM sessions WHERE status='live'`)
+    .all() as { id: string; case_id: string }[];
+
+  for (const c of calls) {
+    const ctx: CaseContext = { caseId: c.case_id, blobDir: opts.blobDir, now: opts.now };
+    // 与人按停止散掉的那些记成同一档：它连"该不该跑"都没被问到，不是工具坏了
+    const blob = storeBlob(opts.blobDir, '(已放弃) 上一次运行没有跑完这次调用。');
+    emitTo(db, ctx, c.session_id, { type: 'blob.stored', payload: { ...blob, at: opts.now() } });
+    emitTo(db, ctx, c.session_id, {
+      type: 'toolcall.completed',
+      payload: { callId: c.id, outputSha256: blob.sha256, status: 'abandoned', at: opts.now() },
+    });
+  }
+  for (const s of sessions) {
+    const ctx: CaseContext = { caseId: s.case_id, blobDir: opts.blobDir, now: opts.now };
+    emitTo(db, ctx, s.id, {
+      type: 'session.ended',
+      payload: { sessionId: s.id, status: 'crashed', at: opts.now() },
+    });
+  }
+  return { calls: calls.length, sessions: sessions.length };
 }
 
 function emitTo(db: Db, ctx: CaseContext, sessionId: string | null, ev: DomainEvent) {

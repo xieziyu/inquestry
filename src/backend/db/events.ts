@@ -20,6 +20,14 @@ export type DomainEvents = {
     clues: string | null;
     at: number;
   };
+  /**
+   * 收尾三档里的后两档（D29）。**状态变更必须走事件**：直接 `UPDATE cases` 的值
+   * 一重放就被 `case.opened` 抹回 `open`，而重放正是换 schema 时重建投影的唯一手段。
+   *
+   * 不带「为什么」——归档理由目前没有列可落，宁可不收也不留个填不进库的字段。
+   */
+  'case.status_changed': { caseId: string; status: 'open' | 'closed' | 'aborted'; at: number };
+
   'session.started': {
     sessionId: string;
     caseId: string;

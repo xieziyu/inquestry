@@ -13,8 +13,12 @@ import { locateEvidence, readBlobText } from '../backend/db/blobs.js';
 import { buildSnapshot } from '../backend/db/snapshot.js';
 import {
   createInvestigationSession,
+  missingClosingSteps,
   openCase,
+  readCaseStatus,
+  setCaseStatus,
   type CaseIntake,
+  type CaseStatus,
   type GateOutcome,
   type InvestigationSession,
 } from '../backend/store/sqlite-store.js';
@@ -25,6 +29,9 @@ import {
   type AgentChoice,
   type CaseBrief,
   type ChatLine,
+  type ClosingOutcome,
+  type ClosingRequest,
+  type ClosingStepKind,
   type GateDecision,
   type OperatorReply,
   type PendingAsk,
@@ -51,7 +58,16 @@ const CHORES = ['TodoWrite', 'ToolSearch'];
  */
 const NEVER_ALLOWED = ['Bash', 'BashOutput', 'KillShell', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
-type Pending = { ask: PendingAsk; resolve: (r: OperatorReply) => void; timer: NodeJS.Timeout };
+type Pending = {
+  ask: PendingAsk;
+  /**
+   * 这条回填对应的 tool call。散场时要把它记成 `abandoned`，没有这个键就只能让它
+   * 永远挂在 `pending` 上——库里于是攒下一批"发起了但永远不会有结果"的调用。
+   */
+  callId?: string;
+  resolve: (r: OperatorReply) => void;
+  timer: NodeJS.Timeout;
+};
 type Gate = {
   ask: PendingGate;
   /** 有人处置了：判决进账，调用按判决收尾。 */
@@ -81,6 +97,13 @@ export class CaseRunner {
   private sessionId = randomUUID();
   private chat: ChatLine[] = [];
   private pending = new Map<string, Pending>();
+  /**
+   * PreToolUse 记下的 ask_operator 调用，等工具正文跑起来时认领。
+   *
+   * 两侧的键天生不同：账上的是 backend 的 `toolUseID`，回填卡上的是自己发的 `ask_*`。
+   * hook 一定先于工具正文，所以这里排的就是"已记账、还没开始等人"的那些。
+   */
+  private askCalls: { callId: string; statement: string }[] = [];
   private gates = new Map<string, Gate>();
   /** 闸门赶在 PreToolUse 之前落定时，判决先搁这儿，等 started 事件把它带上。 */
   private preGated = new Map<string, GateOutcome>();
@@ -202,7 +225,20 @@ export class CaseRunner {
     return locateEvidence(text, anchor, undefined)?.excerpt ?? text.slice(0, 4000);
   }
 
+  /** 案子的状态以库为准，不在内存里另存一份——收尾之后重建运行时也得照样是冻的。 */
+  get caseStatus(): CaseStatus {
+    return readCaseStatus(this.db, this.caseId) ?? 'open';
+  }
+
+  /** 还差哪几步才能结案（§6.2）。空数组 = 现在就能结。 */
+  get closingGaps(): ClosingStepKind[] {
+    return missingClosingSteps(this.db, this.caseId);
+  }
+
   async start(question?: string) {
+    // 结案与归档都是冻结：再开一轮会往一个已下结论的案子里追加步骤，
+    // 报告与它记录的过程就此对不上。要接着查就另立案件
+    if (this.caseStatus !== 'open') return;
     const opening = question?.trim() || openingMessage(this.intake);
     if (this.q) return this.send(opening);
     const session = this.beginSession();
@@ -320,11 +356,14 @@ export class CaseRunner {
     }
   }
 
-  async send(text: string) {
+  /** 返回是否真的送进去了：冻结的案子没有会话接得住，送了只会静静排在一个没人消费的队列里。 */
+  async send(text: string): Promise<boolean> {
+    if (this.caseStatus !== 'open') return false;
     this.pushChat('user', text);
     this.busy = true;
     this.inbox.push(text);
     this.onChange();
+    return true;
   }
 
   /**
@@ -340,24 +379,73 @@ export class CaseRunner {
   }
 
   /** 关窗 / 换案子时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
-  close() {
-    // 挂起的回填必须**逐条 resolve 掉**：只清定时器和 Map 的话，工具那侧的 Promise
-    // 既没了超时兜底也永远不会落地，连同它的闭包一直挂在进程里
-    for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.resolve({ id: p.ask.id, statement: p.ask.statement, answer: '(案子已关闭，这条回填作废)' });
-    }
-    this.pending.clear();
+  close(why = '案子已关闭。') {
+    this.discardPending(why);
     // 闸门同理：它挂着的也是一个 agent 那侧在等的 Promise
-    for (const g of [...this.gates.values()]) g.abandon('案子已关闭。');
+    for (const g of [...this.gates.values()]) g.abandon(why);
+    // 上面两轮只收「卡在人这儿」的那些。**正跑着的普通调用同样收不了尾**：
+    // 一次已经自动放行、还在跑的 Read / 日志查询，库里只有 started，
+    // 而 `close()` 之后 SDK 保证不再有任何消息（sdk.d.ts: "After calling close(),
+    // no further messages will be received."），PostToolUse 永远不会来。
+    // 忙着的时候归档是允许的动作，不收的话冻结后的报告里那条会永远显示「进行中」，
+    // 一直挂到下次启动清扫——而那时案子早就冻上、甚至已经导出了。
+    // 中断走的是另一条路：它不关查询，在跑的调用会由 PostToolUseFailure 带 is_interrupt 收尾
+    this.abandonInFlight(why);
     this.endOnce('ended');
     this.q?.close();
     this.q = null;
+    // **收尾这条路上没有别人会清它**：`consume()` 的 finally 认的是 `this.q === q`，
+    // 而上一行刚把 q 置空，那一轮醒来时已经不是"自己那次查询"了，直接 return。
+    // 留着 busy=true 的后果不只是界面一直显示「进行中」——`trimIdle()` 跳过忙着的运行时，
+    // 于是每收尾一个就永久占住一格，载入上限形同虚设
+    this.busy = false;
     // 输入流是**跟着查询走的**：`createInbox` 是一个 async generator，只能有一个消费者。
     // 不在这儿换掉的话，`restart()` 随后 push 进去的开场白会被正在收尾的旧查询取走，
     // 或者旧迭代器一关、新查询上来直接看到 done——库里已经有了新 session、界面显示
     // 进行中，agent 那侧却什么都没收到，而且不报任何错
     this.inbox = createInbox();
+  }
+
+  /**
+   * 散掉挂起中的人工回填（D29 的"终止只做两件事"之一）。
+   *
+   * 两件事缺一不可：
+   *
+   * 1. **逐条 resolve**——只清定时器和 Map 的话，工具那侧的 Promise 既没了超时兜底
+   *    也永远不会落地，连同它的闭包一直挂在进程里
+   * 2. **把账也收掉**——那次 `ask_operator` 调用还记在 `pending` 上。不收的话
+   *    库里会攒下一批永远等不到结果的调用（闸门那侧一直是这么做的，回填这侧原先漏了）
+   *
+   * 记 `abandoned` 不记 `failed`：人按了停止不是工具坏了；也不记 `denied`——
+   * 没有任何人看过这一条并说不行（tools.md §2 那张表）。
+   */
+  private discardPending(why: string) {
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      if (p.callId) this.abandonCall(p.callId, why);
+      p.resolve({ id: p.ask.id, statement: p.ask.statement, answer: `(${why}这条回填作废)` });
+    }
+    this.pending.clear();
+    // 还没认领的也要收：PreToolUse 记完账、工具正文还没跑到 askOperator 的那一小段里
+    // 撞上停止，这条调用两头不靠——不在 `pending` 里所以上面那轮扫不到，
+    // 而它的行确实已经在库里挂着 `pending` 了，只能等下次启动清扫才纠正得回来
+    for (const c of this.askCalls) this.abandonCall(c.callId, why);
+    this.askCalls = [];
+  }
+
+  /**
+   * 收掉这个会话里所有还没着落的调用。
+   *
+   * 与前两轮不同，这里不认识它们是什么——按库里的 `pending` 扫，因为**能挂住的不止那两种**。
+   * `abandonCall()` 自己会跳过已经有结论的，所以扫过去不会把 `failed` / `denied` 改写掉。
+   * 只扫当前会话：别的会话留下的是上一次运行的事，归启动清扫管。
+   */
+  private abandonInFlight(why: string) {
+    if (!this.session) return;
+    const rows = this.db
+      .prepare(`SELECT id FROM tool_calls WHERE session_id=? AND status='pending'`)
+      .all(this.sessionId) as { id: string }[];
+    for (const r of rows) this.abandonCall(r.id, why);
   }
 
   private endOnce(status: 'ended' | 'crashed') {
@@ -368,14 +456,77 @@ export class CaseRunner {
     this.session.endSession(status);
   }
 
+  /**
+   * 收尾第一档：**停止**（D29）。中断当前轮，案子仍是 `open`，随时能接着查。
+   *
+   * 挂起的两种待办都得散：这一轮已经没了，人再回答也回给不到任何人——
+   * 而那条 `ask_operator` 调用会一直挂在 `pending` 上（回填这侧原先漏了这一下）。
+   */
   async interrupt() {
     // 先散闸门再中断：还卡在闸门上的调用会挡住 interrupt 想收的那一轮
     for (const g of [...this.gates.values()]) g.abandon('这一轮已被中断。');
+    this.discardPending('这一轮已被中断，');
+    // 排队里还没送出去的一起清（D7）：留着它们下一轮一开就会被翻出来接着跑，
+    // 而人按停止多半正是因为方向错了
+    const dropped = this.inbox.clear();
     // Stop 传 cancel_queued（D7）；SDK 若不支持这个签名就退回无参 interrupt
     const q = this.q as unknown as { interrupt?: (o?: unknown) => Promise<unknown> } | null;
     await q?.interrupt?.({ cancel_queued: true }).catch(() => undefined);
     this.busy = false;
-    this.pushChat('system', '已中断当前轮。');
+    // 清掉的那几条人是发过的，聊天带上还留着——不说一声就成了"发出去石沉大海"
+    this.pushChat('system', dropped ? `已中断当前轮，${dropped} 条还没送出的消息一并清掉。` : '已中断当前轮。');
+    this.onChange();
+  }
+
+  /**
+   * 结案前的问询。**这条路不改任何状态**，缺了就把那两步派给 agent。
+   *
+   * 与 `closeCase()` 分开是这一带最要紧的一条边界：界面拿的是 60ms 合流推来的快照，
+   * 隔着这一拍，一次本以为"去补两步"的点击会落进执行路径，把案子直接冻上且没经过确认。
+   * 分开之后，执行入口只有确认按钮够得到。
+   */
+  requestClosing(): ClosingRequest {
+    if (this.caseStatus !== 'open') return { missing: [], asked: false };
+    const missing = this.closingGaps;
+    if (!missing.length) return { missing, asked: false };
+    // 会话还活着就直接派给 agent：这两步的内容只有查过的人给得出来
+    const asked = !!this.q;
+    if (asked) void this.send(closingMessage(missing));
+    return { missing, asked };
+  }
+
+  /**
+   * 收尾第二档：**结案**（D29）。先走完影响面与遗留疑点两个强制 step（§6.2）才给结。
+   *
+   * 挡在这里而不是结完再补：报告的影响面栏是那一步的投影，缺了它结案只会得到
+   * 一份"看起来完整实则半截"的报告。真要就这么收手，走的是归档——那一档明写着放弃。
+   *
+   * **执行入口只回绝、不派活**：派活是问询那条路的事。缺步走到这儿只说明界面那份
+   * 快照过期了（或者确认条挂着的时候强制 step 被推翻了），这时该做的是不动手。
+   */
+  async closeCase(): Promise<ClosingOutcome> {
+    if (this.caseStatus !== 'open') return { ok: true, status: this.caseStatus };
+    const missing = this.closingGaps;
+    if (missing.length) return { ok: false, missing };
+    this.freeze('closed', '案子已结案，');
+    return { ok: true, status: 'closed' };
+  }
+
+  /**
+   * 收尾第三档：**归档**（D29）。同"停止"，外加标记放弃。
+   *
+   * **不销毁任何证据**——查到的事实照旧在库里，残报告的主体正是它们（ui.md §8.4）。
+   */
+  archiveCase(): CaseStatus {
+    if (this.caseStatus !== 'open') return this.caseStatus;
+    this.freeze('aborted', '案子已归档，');
+    return 'aborted';
+  }
+
+  /** 收尾的公共动作：散待办 → 收会话 → 落状态。状态最后落，前两步失败不该留下个冻住的空壳。 */
+  private freeze(status: Exclude<CaseStatus, 'open'>, why: string) {
+    this.close(why);
+    setCaseStatus(this.db, { caseId: this.caseId, blobDir: this.blobs, now: () => Date.now() }, status);
     this.onChange();
   }
 
@@ -495,6 +646,11 @@ export class CaseRunner {
   private abandonCall(callId: string, why: string) {
     // 走到闸门就说明 PreToolUse 已经记过账了；没有行可收就是真没有，不必补建
     if (!this.session?.hasToolCall(callId)) return;
+    // **已经有结论的一律不动。** 散场是"把还没着落的收干净"，不是"把账重写一遍"：
+    // 一次 `failed`（工具自己坏了）或 `denied`（有人看过并说了不行）被改写成 `abandoned`，
+    // 丢掉的正是那三种"没跑成"的区别——而这道保护要放在这里而不是各个调用点，
+    // 因为闸门散场那条路一样够得到已经被规则判过 denied 的调用
+    if (this.statusOf(callId) !== 'pending') return;
     this.session.recordToolEnd({ callId, output: `(已放弃) ${why}`, status: 'abandoned' });
   }
 
@@ -506,6 +662,7 @@ export class CaseRunner {
     env?: string;
   }): Promise<{ answer: string; statement: string; executedAt?: string }> {
     const id = `ask_${randomUUID().slice(0, 8)}`;
+    const callId = this.claimAskCall(args.statement);
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -515,11 +672,31 @@ export class CaseRunner {
 
       this.pending.set(id, {
         ask: { id, askedAt: Date.now(), ...args, suggestedAnswer: suggestOperatorAnswer(args.statement) },
+        callId,
         resolve: (r) => resolve({ answer: r.answer, statement: r.statement, executedAt: r.executedAt }),
         timer,
       });
       this.onChange();
     });
+  }
+
+  /**
+   * 认领这次回填对应的调用。
+   *
+   * 按语句认而不是按先后：子 agent 可以同时问出好几条，先后顺序对不上就会把甲的
+   * 放弃记到乙头上。认之前先把**已经不在 pending 上的**清掉——被规则拦下、
+   * 或压根没跑起来的调用会一直留在队列里。
+   *
+   * **认不到就认不到，不拿队首兜底。** 语句两边同源（都来自这次调用的入参），
+   * 对不上就说明这条根本不是它；猜一个的代价是散场时把**别人**那次调用记成放弃，
+   * 而真正该收的那条继续挂着——正好是"三种没跑成不能混"要防的那类错账。
+   * 没认到的调用由停止/收尾那条路统一清，不靠这里猜。
+   */
+  private claimAskCall(statement: string): string | undefined {
+    this.askCalls = this.askCalls.filter((c) => this.statusOf(c.callId) === 'pending');
+    const at = this.askCalls.findIndex((c) => c.statement === statement);
+    if (at < 0) return undefined;
+    return this.askCalls.splice(at, 1)[0]?.callId;
   }
 
   private classify(toolName: string): 'allow' | 'deny' | 'gate' {
@@ -559,6 +736,13 @@ export class CaseRunner {
       agentId: i.agent_id,
       gate,
     });
+    // 回填卡与它的调用在这里连线：hook 一定先于工具正文，正文里才发得出那张卡
+    if (i.tool_name === toolName('ask_operator') && !gate) {
+      this.askCalls.push({
+        callId: toolUseID,
+        statement: String((i.tool_input as { statement?: unknown } | undefined)?.statement ?? ''),
+      });
+    }
     if (gate) this.closeIfDenied(toolUseID, gate);
     this.onChange();
 
@@ -570,7 +754,13 @@ export class CaseRunner {
     const i = input as { tool_name?: string; tool_response?: unknown };
     if (!i.tool_name || STRUCTURAL.has(i.tool_name) || !toolUseID) return {};
     const text = outputText(i.tool_response);
-    this.session?.recordToolEnd({ callId: toolUseID, output: text });
+    // 已经收过尾的不再收第二次。停止/结案/归档会把还挂着的回填就地记成 `abandoned`，
+    // 而散场用的正是"给工具那侧一个结果"——它随后照样会走完 PostToolUse。
+    // 不挡这一下，人按停止散掉的调用会被这条迟到的成功盖成 `done`，
+    // 轨道上于是多出一次"跑完了"的调用，实际上没有任何人回答过它
+    if (this.statusOf(toolUseID) === 'pending') {
+      this.session?.recordToolEnd({ callId: toolUseID, output: text });
+    }
     const n = (
       this.db
         .prepare(
@@ -710,7 +900,31 @@ function createInbox() {
       notify?.();
       notify = null;
     },
+    /** 停止要连排队消息一起清（D7）。返回清掉几条——人发过的东西凭空消失得说一声。 */
+    clear() {
+      const n = items.length;
+      items.length = 0;
+      return n;
+    },
   };
+}
+
+/**
+ * 结案缺步时派给 agent 的话。
+ *
+ * 说的是"补这两步"而不是"结案吧"：这两块的内容只能由查过的人给，
+ * harness 替它写一句空话进去，报告里那一栏就是编的。
+ */
+function closingMessage(missing: ClosingStepKind[]): string {
+  const what: Record<ClosingStepKind, string> = {
+    impact: '用 open_step(kind="impact") 量化影响面：影响了多少用户/请求、时间窗口多长，要有查询作证据',
+    leftover: '用 open_step(kind="leftover") 汇总还没查清的疑点；一条都没有也要开一步并写明"没有遗留"',
+  };
+  return [
+    '准备结案了。结案前还差这几步，请依次补上，每一步都要 close_step 收口：',
+    ...missing.map((k) => `- ${what[k]}`),
+    '补完就停下来等我，不要顺手开新的排查方向。',
+  ].join('\n');
 }
 
 function extractText(content: unknown): string {

@@ -9,7 +9,7 @@ import type { AgentChoice, CaseMeta, IncidentEntry, Snapshot, StepNode } from '.
 import { readBlobHead } from './blobs.js';
 import type { Db } from './database.js';
 import { reportSections } from './queries.js';
-import { readIntake } from '../store/sqlite-store.js';
+import { missingClosingSteps, readCaseStatus, readIntake } from '../store/sqlite-store.js';
 
 const PREVIEW_LINES = 6;
 
@@ -161,6 +161,7 @@ export function buildSnapshot(
     case: meta,
     ...extra,
     steps: stepNodes,
+    closingGaps: missingClosingSteps(db, ctx.caseId),
     incident: incident.map(
       (r): IncidentEntry => ({
         occurredAtMs: r.occurred_at_ms,
@@ -188,7 +189,7 @@ export function buildSnapshot(
  */
 function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
   const intake = readIntake(db, caseId);
-  return intake && { id: caseId, ...intake, agent };
+  return intake && { id: caseId, ...intake, agent, status: readCaseStatus(db, caseId) ?? 'open' };
 }
 
 function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {

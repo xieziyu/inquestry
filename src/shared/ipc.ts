@@ -163,6 +163,26 @@ export type GateDecision =
 
 export type ChatLine = { role: 'user' | 'assistant' | 'system'; text: string; at: number };
 
+/** 结案前的两个强制 step（overview §6.2）。 */
+export type ClosingStepKind = 'impact' | 'leftover';
+
+/**
+ * 「现在还差什么」的问询结果。**这条路永远不改状态**，问完顺带把缺的那两步派给 agent。
+ * `asked` = 真派出去了（会话还活着才派得出去）。
+ */
+export type ClosingRequest = { missing: ClosingStepKind[]; asked: boolean };
+
+/**
+ * 结案的结果。**不成立时要说清差什么**，否则界面只能给一句"还不能结案"，人无从下手。
+ *
+ * 与 `ClosingRequest` 分开是因为两者的语义天差地别：那个只问，这个**执行且不可逆**。
+ * 合成一个的话，界面就得靠快照决定"这一下是问还是执行"——而快照是 60ms 合流推的，
+ * 隔着这一拍，一次本以为"去补两步"的点击会直接把案子冻上，且完全没经过确认。
+ */
+export type ClosingOutcome =
+  | { ok: true; status: 'open' | 'closed' | 'aborted' }
+  | { ok: false; missing: ClosingStepKind[] };
+
 /** 当前案子的立案单投影。为 null 表示还没立案，UI 该显示立案面板。 */
 export type CaseMeta = {
   id: string;
@@ -173,6 +193,8 @@ export type CaseMeta = {
   tzOffset: string;
   clues: string | null;
   agent: AgentChoice;
+  /** 收尾三档（D29）。`closed` / `aborted` 都是冻结：开不了新会话，只能导出。 */
+  status: 'open' | 'closed' | 'aborted';
 };
 
 export type Snapshot = {
@@ -191,6 +213,11 @@ export type Snapshot = {
   pending: PendingAsk[];
   gates: PendingGate[];
   chat: ChatLine[];
+  /**
+   * 结案还差哪几步（§6.2）。**放快照里而不是等点了结案再问**：
+   * 「还差影响面」是排查中途就该看得见的进度，不是按钮弹出来的一句错误。
+   */
+  closingGaps: ClosingStepKind[];
   report: {
     rootCause: string | null;
     impact: string | null;
@@ -212,6 +239,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   pending: [],
   gates: [],
   chat: [],
+  closingGaps: [],
   report: { rootCause: null, impact: null, leftovers: 0, refuted: 0 },
 };
 
@@ -236,7 +264,17 @@ export type InquestryApi = {
   restart(caseId: string): Promise<void>;
   /** 返回是否真的送出去了；没送出去 renderer 要把草稿留着。 */
   send(caseId: string, text: string): Promise<boolean>;
+  /** 收尾三档（D29 / ui.md §8.4）。三个动作各有各的后果，不能合成一个「结束」。 */
   interrupt(caseId: string): Promise<void>;
+  /**
+   * 问「现在还差哪几步」，缺了就顺手派给 agent。**不执行任何收尾**——
+   * 点「结案」先走这条，拿到空缺口才弹确认条，于是快照过期也绕不过那道确认。
+   */
+  requestClosing(caseId: string): Promise<ClosingRequest>;
+  /** 结案：**执行且不可逆**，只该由确认按钮调。仍会再校验一次强制 step。 */
+  closeCase(caseId: string): Promise<ClosingOutcome>;
+  /** 归档：同「停止」，外加标记放弃。证据一条不销毁，残报告照旧能导。回执是执行了没有。 */
+  archiveCase(caseId: string): Promise<boolean>;
   /**
    * 待办的两个处置同样要带 caseId，理由同上；回执是**处置成功了没有**。
    * 丢掉一次闸门判决的后果比丢一条消息重：人按了拒绝却没落地，三分钟后它会自动放行。

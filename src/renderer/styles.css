@@ -70,6 +70,20 @@ body {
   padding: 3px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
 }
 
+/* 收尾要人确认那一下（D29）：说的是后果，不是警告，所以走中性面板色不占语义色 */
+.banner.confirm {
+  background: var(--panel-2); color: var(--text); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 12px;
+}
+.banner.confirm span { flex: 1; }
+.banner.confirm button {
+  background: none; border: 1px solid var(--line); color: var(--dim);
+  padding: 3px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.banner.confirm button.primary { background: var(--fill); border-color: var(--fill); color: var(--on-fill); }
+/* 已收尾：陈述一个状态，不是坏消息也不是待办——两个语义色都不该动 */
+.banner.frozen { background: var(--panel); color: var(--dim); border-bottom: 1px solid var(--line); }
+
 /* ── 案件切换栏 ──
    切换只换投影不中断任何一个；chip 上的「等你 N」是并发排查里唯一能看见
    后台支线在等人的地方（D28），所以它用暖色，和待办栏同一档 */
@@ -244,6 +258,7 @@ button.primary small { opacity: .6; font-weight: 400; }
   flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 9px; padding: 9px 12px; resize: none; height: 54px; font: inherit;
 }
+.composer textarea:disabled { background: var(--panel); color: var(--dim); cursor: not-allowed; }
 
 /* ── 原文浮层 ── */
 .overlay {

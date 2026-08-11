@@ -52,6 +52,11 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       );
       return;
     }
+    case 'case.status_changed': {
+      const p = ev.payload;
+      db.prepare(`UPDATE cases SET status=? WHERE id=?`).run(p.status, p.caseId);
+      return;
+    }
     case 'session.started': {
       const p = ev.payload;
       db.prepare(

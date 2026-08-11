@@ -4,6 +4,7 @@ import {
   type CallNode,
   type CaseBrief,
   type CaseMeta,
+  type ClosingStepKind,
   type InquestryApi,
   type PendingAsk,
   type Snapshot,
@@ -41,6 +42,16 @@ export function App() {
    */
   const [notice, setNotice] = useState<string | null>(null);
   /**
+   * 收尾里要人再点一下的那两档（D29）。停止不在此列——它随时能接着查，拦一道只是碍事；
+   * 结案与归档都会把案子冻上，冻错了没有回头路，所以要说清后果再确认。
+   *
+   * **必须连 caseId 一起记。** 只记动作的话，在 A 案弹出确认条之后切到 B 案，
+   * 这条 state 还在，而按钮那一下取的是**当时**的 `openCase`——于是把 B 案不可逆地收掉了，
+   * 确认文案讲的还是 A 的事。这是本页唯一一个"点下去就没有回头路"的手势，
+   * 它是唯一必须自己带上下文的。
+   */
+  const [confirm, setConfirm] = useState<{ caseId: string; kind: 'closed' | 'aborted' } | null>(null);
+  /**
    * 待办卡里人已经敲进去的东西（改过的语句 / 粘贴的结果 / 执行时间 / 拒绝理由）。
    *
    * **按「案子 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一切案子旧卡片就卸载，
@@ -54,6 +65,8 @@ export function App() {
    * 输入框却还能发，消息进的是一个已经没人消费的队列。
    */
   const live = snap.sessionStatus === 'live';
+  /** 结案 / 归档之后只能看和导出：开新会话会往一个已下结论的案子里追加步骤。 */
+  const frozen = !!snap.case && snap.case.status !== 'open';
   // ①档永远置顶：闸门到点会自己放行，回填不处理就永远等下去（ui.md §4）
   const todos = useMemo(
     () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
@@ -87,6 +100,10 @@ export function App() {
       return todos[Math.min(focusAt.current, todos.length - 1)] ?? null;
     });
   }, [todos]);
+
+  // 换了案子就把没点完的确认收掉。渲染那侧还会再核一次 caseId：
+  // effect 要等这一帧渲染完才跑，中间那一下按钮照样点得到
+  useEffect(() => setConfirm(null), [snap.case?.id]);
 
   // 从快照上消失的待办，草稿也跟着清（自动放行 / 超时 / 被停止散掉都走这儿）
   useEffect(() => {
@@ -164,6 +181,46 @@ export function App() {
     });
 
   /**
+   * 点「结案」。**先问 main 现在还差什么，再决定弹确认还是派活**——
+   * 不拿快照上的 `closingGaps` 做这个判断：它是 60ms 合流推来的，
+   * agent 可能刚补完最后一步而这一屏还没收到，那时按钮上写着"差 1 步"、
+   * 点下去却会走进执行路径，把案子不可逆地冻上且完全没经过确认。
+   *
+   * 缺步时不是报个错就完：那两步的内容只有查过的人给得出来，所以派给 agent 去补。
+   */
+  const requestClose = async () => {
+    const r = await window.inquestry.requestClosing(openCase).catch(() => null);
+    if (!r) return setNotice('没问到这个案子的状态，可能它已经切走了。切回去再点一次。');
+    if (!r.missing.length) return setConfirm({ caseId: openCase, kind: 'closed' });
+    const what = r.missing.map(closingLabel).join('与');
+    setNotice(
+      r.asked
+        ? `结案前还差${what}，已经让 agent 去补了。补完再点一次结案。`
+        : `结案前还差${what}。先点「${startLabel(snap)}」让 agent 补上这两步；就此收手请用归档。`,
+    );
+  };
+
+  /**
+   * 确认那一下的落地回执。**没落地就别把确认条收掉**——确认条挂在屏幕上的这段时间里，
+   * 强制 step 可能被推翻、案子可能被切走，两种情况 main 都会回绝；
+   * 收掉确认条而什么都没发生的话，人会以为已经结案了。
+   */
+  const doClose = async (kind: 'closed' | 'aborted', id: string) => {
+    if (kind === 'aborted') {
+      const ok = await window.inquestry.archiveCase(id).catch(() => false);
+      if (ok) return setConfirm(null);
+      return setNotice('归档没执行：这个案子已经不是当前案子了。切回去再试一次。');
+    }
+    const r = await window.inquestry.closeCase(id).catch(() => null);
+    if (r?.ok) return setConfirm(null);
+    setNotice(
+      r && !r.ok && r.missing.length
+        ? `结案没执行：刚才这会儿又缺了${r.missing.map(closingLabel).join('与')}——多半是那一步刚被推翻。补上再来。`
+        : '结案没执行：这个案子已经不是当前案子了。切回去再试一次。',
+    );
+  };
+
+  /**
    * 待办与闸门的处置回执。落地了卡片自己会随下一次快照消失，草稿跟着清掉；
    * 没落地才要说话——而且这时那张卡多半已经不在屏幕上了，所以提示挂在应用级。
    */
@@ -209,7 +266,33 @@ export function App() {
           <span className={`pill ${snap.busy ? 'busy' : snap.sessionStatus}`}>
             {snap.busy ? '进行中' : statusLabel(snap.sessionStatus)}
           </span>
-          {snap.busy && <button onClick={() => void window.inquestry.interrupt(openCase)}>停止</button>}
+          {/* 收尾三档各是一个动作，不合成一个「结束」（D29）：
+              停止随时能接着查、结案要走完两个强制 step、归档是明写的放弃 */}
+          {!frozen && (
+            <>
+              {snap.busy && (
+                <button title="中断当前轮，案子照旧开着" onClick={() => void window.inquestry.interrupt(openCase)}>
+                  停止
+                </button>
+              )}
+              <button
+                title={
+                  snap.closingGaps.length
+                    ? `结案前还差：${snap.closingGaps.map(closingLabel).join(' / ')}`
+                    : '下结论并冻结这个案子'
+                }
+                onClick={() => void requestClose()}
+              >
+                结案{snap.closingGaps.length ? `（差 ${snap.closingGaps.length} 步）` : ''}
+              </button>
+              <button
+                title="放弃这次排查；证据全部保留"
+                onClick={() => setConfirm({ caseId: openCase, kind: 'aborted' })}
+              >
+                归档
+              </button>
+            </>
+          )}
         </div>
       </header>
 
@@ -228,10 +311,37 @@ export function App() {
         </div>
       )}
 
+      {confirm?.caseId === openCase && (
+        <div className="banner confirm">
+          <span>{confirmText(confirm.kind, snap)}</span>
+          <button
+            className="primary"
+            // 收的是**弹出确认时**那个案子，不是此刻屏幕上的那个。
+            // main 那侧还会用 `currentIf` 再核一次：切走了就整个不执行，
+            // 而不是落到新案子头上——而回绝了这边要说出来，见 doClose
+            onClick={() => void doClose(confirm.kind, confirm.caseId)}
+          >
+            {confirm.kind === 'closed' ? '确认结案' : '确认归档'}
+          </button>
+          <button onClick={() => setConfirm(null)}>再想想</button>
+        </div>
+      )}
+
+      {frozen && (
+        <div className="banner frozen">
+          <span>{frozenText(snap.case.status)}</span>
+        </div>
+      )}
+
+      {/* 冻结之后这条只剩陈述：`restart()` 最终走 `start()`，而它对已收尾的案子直接返回，
+          按钮点了没有任何反应。留着错误本身是有用的——多半正是当初放弃的原因 */}
       {snap.lastError && !snap.busy && (
         <div className="banner err">
-          <span>上一轮没跑起来：{snap.lastError}</span>
-          <button onClick={() => void window.inquestry.restart(openCase)}>重开一轮会话</button>
+          <span>
+            {frozen ? '收尾前最后一轮没跑起来：' : '上一轮没跑起来：'}
+            {snap.lastError}
+          </span>
+          {!frozen && <button onClick={() => void window.inquestry.restart(openCase)}>重开一轮会话</button>}
         </div>
       )}
 
@@ -257,7 +367,7 @@ export function App() {
           />
         ))}
 
-        {!live && (
+        {!live && !frozen && (
           <div className="empty">
             <p>{snap.case.question}</p>
             {snap.sessionStatus === 'crashed' && <p className="warn">上一轮会话中断了。</p>}
@@ -279,7 +389,10 @@ export function App() {
         <div className="composer">
           <textarea
             value={input}
-            placeholder={live ? '补充线索、纠偏方向，或让它换个假设…' : `先点「${startLabel(snap)}」`}
+            disabled={frozen}
+            placeholder={
+              frozen ? '这个案子已经收尾了，接着查请另立案件。' : live ? '补充线索、纠偏方向，或让它换个假设…' : `先点「${startLabel(snap)}」`
+            }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && live) {
@@ -345,6 +458,26 @@ function CaseBar({ cases }: { cases: CaseBrief[] }) {
 function startLabel(snap: Snapshot) {
   if (snap.sessionStatus === 'crashed') return '重开一轮会话';
   return snap.steps.length ? '接着查（新起一轮会话）' : '开始排查';
+}
+
+function closingLabel(k: ClosingStepKind) {
+  return ({ impact: '影响面', leftover: '遗留疑点' } as const)[k];
+}
+
+/** 确认那一下要说的是**后果**，不是"你确定吗"——两档的后果不一样，说反了就白确认了。 */
+function confirmText(kind: 'closed' | 'aborted', snap: Snapshot) {
+  if (kind === 'closed') {
+    return `结案会冻结这个案子：不能再开会话，只能导出。根因取的是当前置信度最高的那条结论${
+      snap.report.rootCause ? `（${snap.report.rootCause.slice(0, 40)}…）` : '——目前一条已证实的都没有'
+    }。`;
+  }
+  return '归档 = 明写放弃这次排查。已经查到的证据一条都不删，仍能导出残报告——但那份报告没有根因栏，主体是排除掉的方向与遗留疑点。';
+}
+
+function frozenText(status: CaseMeta['status']) {
+  return status === 'closed'
+    ? '本案已结案并冻结。证据与结论都还在，接着查请另立案件。'
+    : '本案已归档（人为终止）。证据一条没少，可导出残报告——它没有根因栏，因为没查出来就是没查出来。';
 }
 
 function caseStateLabel(c: CaseBrief) {
