@@ -13,12 +13,9 @@
 
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SCHEMA = path.join(HERE, '../src/backend/db/schema.sql');
+// schema 现在是 TS 常量不是 .sql 文件（打包后相对路径必然失效，见 ui.md §10）
+import { SCHEMA_SQL } from '../src/backend/db/schema.js';
 
 const CASE_ID = 'case_dup_record';
 const T0 = Date.parse('2026-08-09T12:03:00.000+08:00');
@@ -33,9 +30,11 @@ function apply(db: Database.Database, ev: Event) {
   const p = ev.payload as never as Record<string, string & number>;
   switch (ev.type) {
     case 'case.opened':
+      // 基准日与时区是 schema v2 起的硬字段：没有它们 occurred_at_ms 落不成绝对时刻
       db.prepare(
-        `INSERT INTO cases (id,title,status,created_at,updated_at) VALUES (?,?,'open',?,?)`,
-      ).run(CASE_ID, p.title, ev.createdAt, ev.createdAt);
+        `INSERT INTO cases (id,title,status,incident_date,tz_offset,created_at,updated_at)
+         VALUES (?,?,'open',?,?,?,?)`,
+      ).run(CASE_ID, p.title, '2026-08-09', '+08:00', ev.createdAt, ev.createdAt);
       break;
     case 'session.started':
       db.prepare(
@@ -227,7 +226,7 @@ const INCIDENT_TIMELINE = `
 
 function main() {
   const db = new Database(':memory:');
-  db.exec(readFileSync(SCHEMA, 'utf8'));
+  db.exec(SCHEMA_SQL);
   const log = seed(db);
 
   const checks: [string, boolean, string][] = [];
