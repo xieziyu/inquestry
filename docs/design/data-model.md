@@ -116,6 +116,11 @@ spike 用 overview §1.4 那个"两条重复记录"的样例跑通，事故线�
 
 **但 `pending` 跨不过进程重启**：resolve 靠的是 main 进程里活着的 Promise，进程没了就永远 resolve 不了。启动时必须把上一进程遗留的 `pending` 一律改判 `abandoned`，否则库里会攒下永不落地的僵尸节点。
 
+已落成 `sweepZombies()`（`store/sqlite-store.ts`），随 D29 的收尾三档一起接上，同批也把上次遗留的 `live` 会话收成 `crashed`。两条落地时才看清的约束：
+
+- **清扫必须赶在任何 runner 建起来之前**（`main/index.ts` 里紧跟 `openDatabase`）。那一刻库里的 `pending` 与 `live` 才必然全是上次残留的；建完 runner 再扫会把这一轮自己的活计一起判成放弃
+- **清扫走事件**，与收尾同理：直接 `UPDATE tool_calls` 的值一重放就被 `toolcall.started` 抹回 `pending`
+
 ## 5. FTS5 的中文坑（实测，影响 schema）
 
 默认 tokenizer 对中文**完全不可用**：
