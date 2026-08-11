@@ -5,21 +5,20 @@
  * 正是 duetlens 上「Discussion 栏静默为空」那种最难发现的 bug。等量级上来再换增量。
  */
 
-import type { IncidentEntry, Snapshot, StepNode } from '../../shared/ipc.js';
+import type { AgentChoice, CaseMeta, IncidentEntry, Snapshot, StepNode } from '../../shared/ipc.js';
 import { readBlobText } from './blobs.js';
 import type { Db } from './database.js';
 import { reportSections } from './queries.js';
+import { readIntake } from '../store/sqlite-store.js';
 
 const PREVIEW_LINES = 6;
 
 export function buildSnapshot(
   db: Db,
-  ctx: { caseId: string; sessionId: string; blobDir: string },
+  ctx: { caseId: string; sessionId: string; blobDir: string; agent: AgentChoice },
   extra: Pick<Snapshot, 'busy' | 'chat' | 'pending' | 'sessionStatus'>,
 ): Snapshot {
-  const caseRow = db.prepare(`SELECT title FROM cases WHERE id=?`).get(ctx.caseId) as
-    | { title: string }
-    | undefined;
+  const meta = caseMeta(db, ctx.caseId, ctx.agent);
 
   const steps = db
     .prepare(
@@ -135,7 +134,7 @@ export function buildSnapshot(
   const rep = reportSections(db, ctx.caseId);
 
   return {
-    caseTitle: caseRow?.title ?? null,
+    case: meta,
     ...extra,
     steps: stepNodes,
     incident: incident.map(
@@ -157,6 +156,15 @@ export function buildSnapshot(
       refuted: rep.refuted.length,
     },
   };
+}
+
+/**
+ * agent 三项由 runner 给，不从 sessions 表读：会话要到真的开跑时才建，
+ * 而立完案还没开跑时顶栏也得显示"待会儿用哪个模型"。
+ */
+function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
+  const intake = readIntake(db, caseId);
+  return intake && { id: caseId, ...intake, agent };
 }
 
 /** 原始输出不进 IPC（architecture.md）：只给前几行，展开时再按需拉。 */

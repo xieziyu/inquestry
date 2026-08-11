@@ -1,14 +1,22 @@
+/* 色板见 ui.md §5，是定稿不是草稿：四阶冷灰蓝 + 三个语义色，不用纯黑、不加第四个色 */
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1d212a;
-  --line: #262b36;
-  --text: #dfe3ea;
-  --dim: #8c94a3;
-  --accent: #6ea8fe;
-  --ok: #5fd39a;
-  --bad: #f0806c;
-  --warn: #e6c07b;
+  --code: #0e1317;
+  --bg: #141a1f;
+  --panel: #1a2128;
+  --panel-2: #212a32;
+  --line: #273038;
+  --text: #dfe5ec;
+  --dim: #8a96a4;
+  /* 成立就是主色：蓝。绿色不在这套色板里 */
+  --ok: #5a9edd;
+  --accent: var(--ok);
+  --bad: #c9564c;
+  /* 暖色是「需要人动手」的全局专属，别处一律不用 */
+  --warn: #e0a94a;
+  /* 蓝底必须配浅字；琥珀相反，配深字才对 */
+  --fill: #2a6598;
+  --on-fill: #f2f8fd;
+  --on-warn: #1a1206;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -46,14 +54,14 @@ body {
 .status { display: flex; align-items: center; gap: 8px; }
 .pill { font-size: 12px; padding: 3px 9px; border-radius: 20px; background: var(--panel-2); color: var(--dim); }
 .pill.busy { background: #1f3350; color: var(--accent); }
-.pill.ended { color: var(--ok); }
+.pill.ended { color: var(--dim); }
 .pill.crashed { color: var(--bad); }
 .status button, .toggle {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
   padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
 }
 
-.banner { background: #3a2a1c; color: var(--warn); padding: 8px 16px; font-size: 13px; }
+.banner { background: #2e2415; color: var(--warn); padding: 8px 16px; font-size: 13px; }
 
 /* ── 主区 ── */
 .stage { flex: 1; overflow-y: auto; padding: 16px 20px 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -61,7 +69,7 @@ body {
 .empty p { max-width: 520px; margin: 0 auto 16px; }
 
 button.primary {
-  background: var(--accent); color: #0b1220; border: 0; font-weight: 600;
+  background: var(--fill); color: var(--on-fill); border: 0; font-weight: 600;
   padding: 8px 16px; border-radius: 7px; cursor: pointer;
 }
 button.primary:disabled { opacity: .35; cursor: default; }
@@ -87,7 +95,7 @@ button.primary small { opacity: .6; font-weight: 400; }
 .state.inconclusive { color: var(--warn); }
 .superseded { color: var(--bad); }
 .step .direction { margin: 8px 0 0; }
-.step.refuted .direction, .step.superseded .direction { text-decoration: line-through; text-decoration-color: #f0806c60; }
+.step.refuted .direction, .step.superseded .direction { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 50%, transparent); }
 .step .verdict { margin: 6px 0 0; color: var(--dim); border-left: 2px solid var(--line); padding-left: 10px; }
 
 .evidence { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -132,15 +140,15 @@ button.primary small { opacity: .6; font-weight: 400; }
 .report .meta { color: var(--dim); font-size: 12px; }
 
 /* ── 人工回填 ── */
-.pending { background: #1c1a14; border: 1px solid #40361f; border-radius: 10px; padding: 12px 14px; }
+.pending { background: #211a10; border: 1px solid #45381f; border-radius: 10px; padding: 12px 14px; }
 .pending .head { display: flex; gap: 8px; align-items: center; font-size: 12px; }
-.pending .tag { background: var(--warn); color: #2a2010; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.pending .tag { background: var(--warn); color: var(--on-warn); padding: 2px 8px; border-radius: 4px; font-weight: 600; }
 .pending .engine, .pending .env { color: var(--dim); font-family: var(--mono); }
 .pending .changed { margin-left: auto; color: var(--warn); }
 .pending p { margin: 8px 0 0; font-size: 13px; }
 .pending b { color: var(--warn); margin-right: 8px; font-size: 12px; }
 .pending textarea, .pending input {
-  width: 100%; margin-top: 8px; background: #12141a; color: var(--text);
+  width: 100%; margin-top: 8px; background: var(--code); color: var(--text);
   border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px;
   font-family: var(--mono); font-size: 12px; resize: vertical;
 }
@@ -175,3 +183,41 @@ button.primary small { opacity: .6; font-weight: 400; }
 .sheet h3 { margin: 0 0 10px; font-size: 14px; }
 .sheet pre { max-height: none; color: var(--text); }
 .sheet button { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 7px; cursor: pointer; }
+
+/* ── 立案面板 ── */
+.intake { max-width: 720px; margin: 0 auto; padding: 28px 8px 60px; display: flex; flex-direction: column; gap: 18px; }
+.intake h1 { margin: 0; font-size: 20px; font-weight: 600; }
+.intake .lede { margin: -8px 0 0; color: var(--dim); font-size: 12.5px; }
+.intake .field { display: flex; flex-direction: column; gap: 6px; }
+.intake .k { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.intake .k em { font-style: normal; text-transform: none; letter-spacing: 0; opacity: .7; }
+.intake .k.sub { align-self: center; }
+.intake .hint { font-size: 12px; color: var(--dim); }
+.intake code { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+.intake input, .intake textarea {
+  background: var(--code); color: var(--text); border: 1px solid var(--line);
+  border-radius: 7px; padding: 8px 10px; font: inherit; resize: vertical; width: 100%;
+}
+.intake input:focus, .intake textarea:focus { outline: 0; border-color: var(--fill); }
+.intake .row { display: flex; gap: 8px; align-items: center; }
+.intake .row.wrap { flex-wrap: wrap; }
+.intake .row input { flex: 1; }
+.intake .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.intake .recent { display: flex; gap: 6px; flex-wrap: wrap; }
+.intake .agent { display: flex; flex-direction: column; gap: 8px; }
+.intake .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+/* 选中不用填色：填色会和语义色打架（ui.md §5） */
+.intake button {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+}
+.intake button.on { border-color: var(--ok); background: var(--panel-2); }
+.intake button:disabled { opacity: .4; cursor: default; }
+.intake button em { font-style: normal; color: var(--dim); font-size: 11px; }
+.intake button.primary { background: var(--fill); color: var(--on-fill); border: 0; font-weight: 600; padding: 8px 18px; }
+
+/* 顶栏上的案子元信息：立案单里那几项要一直看得见，否则基准日填错要到报告空了才发现 */
+.casemeta { display: flex; gap: 10px; align-items: center; font-size: 11.5px; color: var(--dim); }
+.casemeta code { font-family: var(--mono); }
+.intake input.bad { border-color: var(--bad); }
+.intake .hint.err { color: var(--bad); }

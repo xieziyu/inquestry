@@ -2,7 +2,7 @@
 
 > 返回 [总设计纪要](overview.md)
 >
-> 展开 overview §4。**schema 本体在 [`src/backend/db/schema.sql`](../../src/backend/db/schema.sql)，本文只讲为什么。**
+> 展开 overview §4。**schema 本体在 [`src/backend/db/schema.ts`](../../src/backend/db/schema.ts)，本文只讲为什么。**
 > 全部结论由 `npm run spike:db` 实跑验证（2026-08-10，SQLite 3.53.2 / better-sqlite3 12.x）。
 
 ## 1. 三层结构
@@ -51,18 +51,33 @@ D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接
 
 第一次接线时这条 0/17 全错（还叠加了 blob 存成 JSON 的 bug）；修好后 17/17 全部能回到真实那一行。
 
-### `cases` 还缺四个字段
+### `cases` 上的立案单（schema v2 已落库）
 
-日志时间串大多**既无日期也无时区**（`12:03:01.220`）。没有基准日与时区，`occurred_at_ms` 落不成绝对时刻，事故时间线就排不出来。目前挂在会话上下文里，必须落到 `cases` 表——而且要**在立案时收**，不能等结案（overview D27）。
+日志时间串大多**既无日期也无时区**（`12:03:01.220`）。没有基准日与时区，`occurred_at_ms` 落不成绝对时刻，事故时间线就排不出来。所以它们**在立案时收**，不能等结案（overview D27）。
 
 | 字段 | 为什么 |
 | --- | --- |
-| `incident_date` / `tz_offset` | 上述基准。由立案面板收集 |
-| `project_root` | agent 的运行目录，决定它继承哪套 skill / MCP，也决定会话记录落盘位置 |
-| `verdict_shape ∈ (sequence \| state \| chain \| distribution \| open)` | 决定报告装哪几块（overview §6.1.1）。**趁历史数据还少赶紧加**——事后补的代价是历史案子全部残缺 |
-| `status` 增加 `aborted` | 区分"停下来还能接着查"（`open`）与"放弃了"（`aborted`）。后者仍可导出残报告，形态强制 `open`（overview D29） |
+| `incident_date` / `tz_offset` | 上述基准，`NOT NULL`。基准日由立案面板收，**时区不收**——取立案机器的本机偏移落库。重开旧案时一律以库里那份为准：重算或改动都会让新证据与老证据错开 |
+| `project_root` | agent 的运行目录（`Options.cwd`），决定它继承哪套 skill / MCP，也决定会话记录落盘位置。为空即演示模式，玩具数据源只在这时挂上去 |
+| `question` / `clues` | 立案时写的完整问题与已知线索。新开 session 时由它们拼出首轮提问，基准日也一并写进正文——harness 与 agent 两边补齐时间串的基准必须一致 |
+| `verdict_shape ∈ (sequence \| state \| chain \| distribution \| open)` | 决定报告装哪几块（overview §6.1.1）。列已加、**尚无写入方**，等报告那一步 |
+| `status ∈ (open \| closed \| aborted)` | 区分"停下来还能接着查"（`open`）与"放弃了"（`aborted`）。后者仍可导出残报告，形态强制 `open`（overview D29）。收尾三档尚未实现 |
 
-状态型报告还需要一对 `expected` / `actual`，挂在那个 `confirmed` step 上而非 case 上——它是某一步的判定内容，不是案件属性。
+状态型报告还需要一对 `expected` / `actual`，挂在那个 `confirmed` step 上而非 case 上——它是某一步的判定内容，不是案件属性。列已加，同样等报告那一步。
+
+### 开发期不做跨版本迁移：版本对不上就重建库
+
+**发版前，`user_version` 变化一律是「把旧库挪开，新建一个空的」**，不写迁移。
+
+一度写成了"DROP 投影表 → 按 events 重放"。它跑得通——实测老库照样重建出 5 个 step / 9 条证据——但那只是因为 better-sqlite3 把 `undefined` 绑成 NULL：**老事件缺的字段一路静默落 NULL，看起来迁移成功，实际是一批半残的案子**。重放这条路只在"事件载荷形状没变过"时才真的成立，而破坏性升级恰恰改的就是形状。
+
+开发阶段的数据本来就是随手造的，重新补一份远比维护一条没人验过的迁移路径便宜。所以：旧库改名留在原地（连 `-wal` / `-shm` 一起挪，留一个都会让新库读到半截旧状态），不删——事故记录哪怕格式过时也不该被工具自己抹掉。发版后要换成真迁移时，`openDatabase` 里那个判断就是决策点。
+
+> `user_version` 的默认值就是 `0`，所以 0 有两种含义：空文件，或者一个没打过版本号的老库。**靠有没有应用表来分**——有表的 0 号库必须按不兼容处理。放过它的话 `CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，却照样把它标成 v2，等第一次查 `incident_date` 才炸，而那时错误已经离原因很远了。
+
+> 这不否定 §1「events 是唯一真相」：**同一个 schema 版本内**投影随时可从 events 重建，`rebuildProjections` 仍是排障与自检工具（`spike:wire` 就靠它比对重建前后的全表指纹）。重放时 `caseId` 必须取**每条事件自己的**——传单个 caseId 会把所有案子的 FTS 行标成同一个 case，检索时静默串台。
+
+配套的一条：`incident_date` / `tz_offset` 是 `NOT NULL`。**没有基准的案子不该存在**，缺了就该在写入时炸，而不是留个空值让下游各自现算一个"今天"——那会让同一个 case 的证据按不同的日子解析，全程无报错。
 
 ### `tool_calls.origin ∈ (agent | operator)`
 

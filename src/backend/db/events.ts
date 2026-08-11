@@ -9,13 +9,24 @@
  */
 
 export type DomainEvents = {
-  'case.opened': { caseId: string; title: string; at: number };
+  /** 立案单（D27）。基准日与时区是必填：没有它们事故时间线排不出来。 */
+  'case.opened': {
+    caseId: string;
+    title: string;
+    question: string;
+    projectRoot: string | null;
+    incidentDate: string;
+    tzOffset: string;
+    clues: string | null;
+    at: number;
+  };
   'session.started': {
     sessionId: string;
     caseId: string;
     backend: 'claude' | 'codex';
     nativeSessionRef?: string;
     model?: string;
+    effort?: string;
     at: number;
   };
   'session.ended': { sessionId: string; status: 'ended' | 'crashed'; at: number };

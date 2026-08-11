@@ -16,13 +16,9 @@ export type SessionContext = {
   sessionId: string;
   backend: 'claude' | 'codex';
   blobDir: string;
-  /**
-   * 日志里常常只有 `12:03:01.220` 这种**不带日期**的时间串。没有这个基准日，
-   * occurredAt 就落不成绝对时刻，事故时间线也就排不出来。
-   */
-  incidentDate: string;
-  /** 时区偏移，同理：日志时间串多半不带时区。 */
-  tzOffset: string;
+  /** 落 sessions 而非 cases（D27）：一个案子跨多会话，中途换模型是常态。 */
+  model?: string | null;
+  effort?: string | null;
   /** 哪些工具的输出自带时间戳 —— 决定 occurredAt 强制到什么程度（tools.md §3）。 */
   isTimestampedSource: (toolName: string) => boolean;
   now: () => number;
@@ -31,8 +27,29 @@ export type SessionContext = {
   runOperator: (args: AskOperatorArgs) => Promise<{ answer: string; statement: string; executedAt?: string }>;
 };
 
+/**
+ * 立案单（ui.md §8.1）。
+ *
+ * `incidentDate` / `tzOffset` 是硬字段不是可选线索：日志里常常只有 `12:03:01.220`
+ * 这种既无日期也无时区的时间串，没有基准日 occurredAt 就落不成绝对时刻，
+ * 事故时间线也就排不出来。
+ */
+export type CaseIntake = {
+  title: string;
+  question: string;
+  projectRoot: string | null;
+  incidentDate: string;
+  tzOffset: string;
+  clues: string | null;
+};
+
+/** 时间基准的最小切面：解析日志时间串只需要这两项。 */
+export type TimeBase = Pick<CaseIntake, 'incidentDate' | 'tzOffset'>;
+
 export type InvestigationSession = {
   store: InvestigationStore;
+  /** 案子的立案单。已存在的 case 以库里那份为准，不被本次调用方覆盖。 */
+  intake: CaseIntake;
   /** 由 PreToolUse hook 调用：把任意工具调用归属到当前 open 的 step 上。 */
   recordToolStart(input: { callId: string; toolName: string; input: unknown; agentId?: string }): {
     callNumber: number;
@@ -43,28 +60,53 @@ export type InvestigationSession = {
   endSession(status?: 'ended' | 'crashed'): void;
 };
 
+type CaseContext = Pick<SessionContext, 'caseId' | 'blobDir'> & { now: () => number };
+
+/**
+ * 立案：case 只开一次（overview §4.1）。
+ *
+ * **与开会话分开**，因为两者的时机不同：立案是人点「立案」那一刻，
+ * 开会话是真的要跑第一轮的时候。合在一起会让"打开 app 看一眼"也留下一个空 session。
+ *
+ * 返回生效的立案单——已存在的 case 以库里那份为准：基准日一旦变过，
+ * 已落库的 occurred_at_ms 就对不上了。
+ */
+export function openCase(db: Db, ctx: CaseContext, intake: CaseIntake): CaseIntake {
+  if (!db.prepare(`SELECT 1 FROM cases WHERE id=?`).get(ctx.caseId)) {
+    emitTo(db, ctx, null, { type: 'case.opened', payload: { caseId: ctx.caseId, ...intake, at: ctx.now() } });
+  }
+  return readIntake(db, ctx.caseId) ?? intake;
+}
+
+function emitTo(db: Db, ctx: CaseContext, sessionId: string | null, ev: DomainEvent) {
+  const deps: ProjectorDeps = { blobDir: ctx.blobDir, caseId: ctx.caseId };
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`,
+    ).run(ctx.caseId, sessionId, ev.type, JSON.stringify(ev.payload), ctx.now());
+    applyEvent(db, ev, deps);
+  })();
+}
+
 export function createInvestigationSession(
   db: Db,
   ctx: SessionContext,
-  opts: { title: string },
+  opts: CaseIntake,
 ): InvestigationSession {
-  const deps: ProjectorDeps = { blobDir: ctx.blobDir, caseId: ctx.caseId };
+  const emit = (ev: DomainEvent) => emitTo(db, ctx, ctx.sessionId, ev);
 
-  const emit = db.transaction((ev: DomainEvent) => {
-    db.prepare(
-      `INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`,
-    ).run(ctx.caseId, ctx.sessionId, ev.type, JSON.stringify(ev.payload), ctx.now());
-    applyEvent(db, ev, deps);
-  });
+  const intake = openCase(db, ctx, opts);
 
-  // 一次事故跨多个会话（overview §4.1）：case 只开一次，每次启动都是它下面的新 session。
-  const caseExists = db.prepare(`SELECT 1 FROM cases WHERE id=?`).get(ctx.caseId);
-  if (!caseExists) {
-    emit({ type: 'case.opened', payload: { caseId: ctx.caseId, title: opts.title, at: ctx.now() } });
-  }
   emit({
     type: 'session.started',
-    payload: { sessionId: ctx.sessionId, caseId: ctx.caseId, backend: ctx.backend, at: ctx.now() },
+    payload: {
+      sessionId: ctx.sessionId,
+      caseId: ctx.caseId,
+      backend: ctx.backend,
+      model: ctx.model ?? undefined,
+      effort: ctx.effort ?? undefined,
+      at: ctx.now(),
+    },
   });
 
   /** 没有 open step 时的兜底节点（overview §4.4）：工具调用不能丢。 */
@@ -141,7 +183,7 @@ export function createInvestigationSession(
           warnings.push(`callRef ${e.callRef} 在本 step 内不存在。`);
           continue;
         }
-        const occurred = parseOccurredAt(e.occurredAt, ctx);
+        const occurred = parseOccurredAt(e.occurredAt, intake);
         // 只有「自带时间戳的数据源 + 本次确实有命中」才强制 occurredAt：
         // 一刀切会逼 agent 拿查询执行时间凑数，假时间直接进报告主体（tools.md §3）
         const hasHits = (call.line_count ?? 0) > 1;
@@ -201,6 +243,7 @@ export function createInvestigationSession(
 
   return {
     store,
+    intake,
 
     recordToolStart({ callId, toolName, input, agentId }) {
       const stepId = ensureStep();
@@ -245,6 +288,31 @@ export function createInvestigationSession(
   };
 }
 
+export function readIntake(db: Db, caseId: string): CaseIntake | null {
+  const row = db
+    .prepare(
+      `SELECT title, question, project_root, incident_date, tz_offset, clues FROM cases WHERE id=?`,
+    )
+    .get(caseId) as
+    | {
+        title: string;
+        question: string | null;
+        project_root: string | null;
+        incident_date: string;
+        tz_offset: string;
+        clues: string | null;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    title: row.title,
+    question: row.question ?? row.title,
+    projectRoot: row.project_root,
+    incidentDate: row.incident_date,
+    tzOffset: row.tz_offset,
+    clues: row.clues,
+  };
+}
 function anchorKind(anchor?: string): 'lines' | 'jsonpath' | 'whole' {
   if (!anchor) return 'whole';
   if (anchor.trim().startsWith('$')) return 'jsonpath';
@@ -255,7 +323,7 @@ function anchorKind(anchor?: string): 'lines' | 'jsonpath' | 'whole' {
  * 日志时间串大多既无日期也无时区，必须靠 case 的基准日与时区补齐；
  * 原始串照样存进 `occurred_at_raw`，解析错了才有得回溯（data-model.md §2）。
  */
-export function parseOccurredAt(raw: string | undefined, ctx: Pick<SessionContext, 'incidentDate' | 'tzOffset'>) {
+export function parseOccurredAt(raw: string | undefined, ctx: TimeBase) {
   if (!raw) return { ms: null };
   const s = raw.trim();
   const timeOnly = s.match(/^(\d{1,2}):(\d{2}):(\d{2})(\.\d{1,3})?$/);

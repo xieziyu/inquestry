@@ -20,16 +20,35 @@ export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
     case 'case.opened': {
       const p = ev.payload;
       db.prepare(
-        `INSERT INTO cases (id,title,status,created_at,updated_at) VALUES (?,?,'open',?,?)`,
-      ).run(p.caseId, p.title, p.at, p.at);
+        `INSERT INTO cases (id,title,question,status,project_root,incident_date,tz_offset,clues,created_at,updated_at)
+         VALUES (?,?,?,'open',?,?,?,?,?,?)`,
+      ).run(
+        p.caseId,
+        p.title,
+        p.question,
+        p.projectRoot,
+        p.incidentDate,
+        p.tzOffset,
+        p.clues,
+        p.at,
+        p.at,
+      );
       return;
     }
     case 'session.started': {
       const p = ev.payload;
       db.prepare(
-        `INSERT INTO sessions (id,case_id,backend,native_session_ref,model,status,started_at)
-         VALUES (?,?,?,?,?,'live',?)`,
-      ).run(p.sessionId, p.caseId, p.backend, p.nativeSessionRef ?? null, p.model ?? null, p.at);
+        `INSERT INTO sessions (id,case_id,backend,native_session_ref,model,effort,status,started_at)
+         VALUES (?,?,?,?,?,?,'live',?)`,
+      ).run(
+        p.sessionId,
+        p.caseId,
+        p.backend,
+        p.nativeSessionRef ?? null,
+        p.model ?? null,
+        p.effort ?? null,
+        p.at,
+      );
       return;
     }
     case 'session.ended': {
@@ -144,7 +163,8 @@ function insertNarrative(db: Db, caseId: string, refId: string, kind: string, te
   );
 }
 
-const PROJECTION_TABLES = [
+/** 子表在前：外键开着时也能按这个顺序删干净。 */
+export const PROJECTION_TABLES = [
   'evidence_refs',
   'tool_calls',
   'steps',
@@ -155,16 +175,25 @@ const PROJECTION_TABLES = [
   'payload_fts',
 ];
 
-/** schema 迁移与排障用：清空投影后按 seq 重放。blob 目录不动，它是真相的另一半。 */
-export function rebuildProjections(db: Db, deps: ProjectorDeps): number {
-  const rows = db.prepare(`SELECT type,payload FROM events ORDER BY seq`).all() as {
+/**
+ * schema 迁移与排障用：清空投影后按 seq 重放。blob 目录不动，它是真相的另一半。
+ *
+ * caseId 取每条事件自己的，不由调用方给——重放是全库的事，用单个 caseId 会把
+ * 别的案子的 FTS 行全标成同一个 case，检索时静默串台。
+ */
+export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>): number {
+  const rows = db.prepare(`SELECT case_id,type,payload FROM events ORDER BY seq`).all() as {
+    case_id: string;
     type: string;
     payload: string;
   }[];
   db.transaction(() => {
     for (const t of PROJECTION_TABLES) db.prepare(`DELETE FROM ${t}`).run();
     for (const r of rows) {
-      applyEvent(db, { type: r.type, payload: JSON.parse(r.payload) } as DomainEvent, deps);
+      applyEvent(db, { type: r.type, payload: JSON.parse(r.payload) } as DomainEvent, {
+        ...deps,
+        caseId: r.case_id,
+      });
     }
   })();
   return rows.length;

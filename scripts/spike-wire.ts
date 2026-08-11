@@ -31,6 +31,9 @@ const PROMPT = readFileSync(path.join(HERE, '../src/backend/prompt/investigation
 const DB_FILE = path.join(process.env.TMPDIR ?? '/tmp', 'inquestry-spike', 'wire.db');
 const CASE_ID = 'case_dup_order';
 const INCIDENT_DATE = '2026-08-09';
+const QUESTION =
+  '线上反馈：2026-08-09 12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。\n' +
+  '可用数据源：query_logs（gateway / app / sentry）。数据库不可直连，需要查库时用 ask_operator。';
 
 const LOGS: Record<string, string[]> = {
   gateway: [
@@ -95,14 +98,19 @@ const session = createInvestigationSession(
     sessionId: randomUUID(),
     backend: 'claude',
     blobDir: BLOBS,
-    incidentDate: INCIDENT_DATE,
-    tzOffset: '+08:00',
     isTimestampedSource: (name) => name.includes('query_logs'),
     now: () => Date.parse('2026-08-09T12:40:00+08:00') + ++seq * 1000,
     newId: (prefix) => `${prefix}_${String(++seq).padStart(3, '0')}`,
     runOperator: async (args) => operatorAnswer(args),
   },
-  { title: '提交一次却产生两条重复订单' },
+  {
+    title: '提交一次却产生两条重复订单',
+    question: QUESTION,
+    projectRoot: null,
+    incidentDate: INCIDENT_DATE,
+    tzOffset: '+08:00',
+    clues: null,
+  },
 );
 
 /** open_step / close_step 是结构声明，本身不是证据来源，不进 tool_calls。 */
@@ -151,9 +159,7 @@ async function* prompt(): AsyncGenerator<SDKUserMessage> {
     type: 'user',
     message: {
       role: 'user',
-      content:
-        '线上反馈：2026-08-09 12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。\n' +
-        '可用数据源：query_logs（gateway / app / sentry）。数据库不可直连，需要查库时用 ask_operator。',
+      content: QUESTION,
     },
     parent_tool_use_id: null,
     session_id: '',
@@ -253,7 +259,7 @@ function report(sessionId: string) {
       db.prepare(`SELECT * FROM evidence_refs ORDER BY id`).all(),
     ]);
   const before = fp();
-  const replayed = rebuildProjections(db, { blobDir: BLOBS, caseId: CASE_ID });
+  const replayed = rebuildProjections(db, { blobDir: BLOBS });
   const after = fp();
 
   // 溯源不能只验「取到了东西」：锚点取回的原文必须**确实含有这条证据声称的时间串**，

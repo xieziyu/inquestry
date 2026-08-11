@@ -40,16 +40,31 @@ CREATE TABLE IF NOT EXISTS blobs (
 
 -- ─────────────────────────────── 投影层 ───────────────────────────────
 
+-- 收尾三档（D29）：停止仍是 open，结案 closed，归档 aborted 仍可导出残报告
 CREATE TABLE IF NOT EXISTS cases (
-  id          TEXT    PRIMARY KEY,
-  title       TEXT    NOT NULL,
-  status      TEXT    NOT NULL CHECK (status IN ('open','resolved','abandoned')),
-  report_md   TEXT,
-  created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  id            TEXT    PRIMARY KEY,
+  title         TEXT    NOT NULL,        -- 案件切换栏上的短标签，由问题首行截出
+  question      TEXT,                    -- 立案时写的完整问题，新开 session 时用它起头
+  status        TEXT    NOT NULL CHECK (status IN ('open','closed','aborted')),
+  -- agent 的 cwd。它决定继承哪个项目的 skill / MCP，也决定会话记录落在哪个 ~/.claude/projects 目录
+  project_root  TEXT,
+  -- 基准日与时区不是"可选线索"：日志时间串多半既无日期也无时区，
+  -- 没有它们 occurred_at_ms 落不成绝对时刻，事故时间线就是空的（D11 / D27）。
+  -- NOT NULL 是有意的：没有基准的案子不该存在，缺了就该在写入时炸，
+  -- 而不是留个空值让下游各自现算一个"今天"
+  incident_date TEXT    NOT NULL,
+  tz_offset     TEXT    NOT NULL,   -- 立案机器的本机偏移，不由用户填
+  clues         TEXT,                  -- 立案时已知的服务 / traceId / 用户 ID，拼进首轮提问
+  -- 决定报告装哪几块（D25）。结案时才写，形态取值见 overview §6.1.1
+  verdict_shape TEXT CHECK (verdict_shape IN ('sequence','state','chain','distribution','open')),
+  report_md     TEXT,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
 );
 
 -- backend / native_session_ref 是 D20 纪律 1：接第二个 backend 时不必迁移历史数据
+-- model / effort 落这里而不是 cases（D27）：一个案子跨多会话，中途换模型是常态，
+-- 报告里要能标出"这一步是哪个模型跑的"
 CREATE TABLE IF NOT EXISTS sessions (
   id                 TEXT    PRIMARY KEY,
   case_id            TEXT    NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
@@ -57,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   native_session_ref TEXT,               -- Claude 的 sessionId / codex 的 threadId
   forked_from        TEXT REFERENCES sessions(id),
   model              TEXT,
+  effort             TEXT,               -- backend 不支持时为 NULL，不是给个假值
   status             TEXT    NOT NULL CHECK (status IN ('live','idle','ended','crashed')),
   started_at         INTEGER NOT NULL,
   ended_at           INTEGER
@@ -71,6 +87,9 @@ CREATE TABLE IF NOT EXISTS steps (
   ordinal            INTEGER NOT NULL,   -- 会话内序号，排查时间线的稳定排序键
   kind               TEXT    NOT NULL CHECK (kind IN ('normal','unclassified','impact','leftover')),
   direction          TEXT,               -- 可证伪的命题；unclassified 兜底节点为 NULL
+  -- 状态型故障（verdict_shape='state'）的报告主体是这一对，不是时间线（D25）
+  expected           TEXT,
+  actual             TEXT,
   verdict_text       TEXT,
   verdict_confidence REAL CHECK (verdict_confidence BETWEEN 0 AND 1),
   status             TEXT    NOT NULL CHECK (status IN ('open','confirmed','refuted','inconclusive','superseded')),

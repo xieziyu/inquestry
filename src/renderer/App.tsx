@@ -1,25 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { EMPTY_SNAPSHOT, type PendingAsk, type Snapshot, type StepNode } from '../shared/ipc.js';
+import {
+  EMPTY_SNAPSHOT,
+  type CaseMeta,
+  type InquestryApi,
+  type PendingAsk,
+  type Snapshot,
+  type StepNode,
+} from '../shared/ipc.js';
+import { Intake } from './Intake.js';
 import { PendingCard } from './PendingCard.js';
 
 declare global {
   interface Window {
-    inquestry: {
-      envCheck(): Promise<{ claude: string | null; hint: string }>;
-      start(q: string): Promise<void>;
-      send(t: string): Promise<void>;
-      interrupt(): Promise<void>;
-      answerOperator(r: { id: string; statement: string; answer: string; executedAt?: string }): Promise<void>;
-      snapshot(): Promise<Snapshot>;
-      excerpt(callId: string, anchor: string | null): Promise<string>;
-      onSnapshot(cb: (s: Snapshot) => void): () => void;
-    };
+    inquestry: InquestryApi;
   }
 }
-
-const DEMO_QUESTION =
-  '线上反馈：2026-08-09 12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。\n' +
-  '可用数据源：query_logs（gateway / app / sentry）。数据库不可直连，需要查库时用 ask_operator。';
 
 type View = 'investigation' | 'incident';
 
@@ -41,13 +36,33 @@ export function App() {
     setExcerpt({ title, body: await window.inquestry.excerpt(callId, anchor) });
   };
 
+  // 还没立案时整屏只有立案面板：这一步不做完，后面所有东西都没有基准
+  if (!snap.case) {
+    return (
+      <div className="app">
+        <header className="topbar">
+          <div className="brand">
+            Inquestry<span className="dot" />
+          </div>
+        </header>
+        {env && !env.claude && (
+          <div className="banner">未找到 claude 可执行文件。请先安装 Claude Code 并在终端登录一次。</div>
+        )}
+        <main className="stage">
+          <Intake onSubmit={(d) => window.inquestry.createCase(d)} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">
           Inquestry<span className="dot" />
-          <span className="case">{snap.caseTitle ?? '尚未开始'}</span>
+          <span className="case">{snap.case.title}</span>
         </div>
+        <CaseMetaStrip meta={snap.case} />
         <div className="tabs">
           <button className={view === 'investigation' ? 'on' : ''} onClick={() => setView('investigation')}>
             排查时间线
@@ -75,8 +90,8 @@ export function App() {
 
         {!started && (
           <div className="empty">
-            <p>演示事故：一次提交产生两条重复订单。数据源是内置的玩具日志，数据库走人工回填。</p>
-            <button className="primary" onClick={() => void window.inquestry.start(DEMO_QUESTION)}>
+            <p>{snap.case.question}</p>
+            <button className="primary" onClick={() => void window.inquestry.start()}>
               开始排查
             </button>
           </div>
@@ -125,6 +140,23 @@ export function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** 基准日填错时报告会静静地空掉，所以它得一直在屏幕上，而不是藏在立案那一刻。 */
+function CaseMetaStrip({ meta }: { meta: CaseMeta }) {
+  return (
+    <div className="casemeta">
+      <span>
+        基准日 <code>{meta.incidentDate}</code> {meta.tzOffset}
+      </span>
+      <span>{meta.projectRoot ? <code>{meta.projectRoot.split('/').slice(-1)[0]}</code> : '演示数据源'}</span>
+      <span>
+        {meta.agent.backend}
+        {meta.agent.model ? ` · ${meta.agent.model}` : ''}
+        {meta.agent.effort ? ` · ${meta.agent.effort}` : ''}
+      </span>
     </div>
   );
 }

@@ -1,10 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { OperatorReply, Snapshot } from '../shared/ipc.js';
+import type { InquestryApi, IntakeDraft, OperatorReply, Snapshot } from '../shared/ipc.js';
 
 /** renderer 只能经这里够到 main —— contextIsolation 开、nodeIntegration 关。 */
-contextBridge.exposeInMainWorld('inquestry', {
+const api: InquestryApi = {
   envCheck: () => ipcRenderer.invoke('env:check'),
-  start: (question: string) => ipcRenderer.invoke('case:start', question),
+  intakeOptions: () => ipcRenderer.invoke('intake:options'),
+  pickProjectRoot: () => ipcRenderer.invoke('intake:pickRoot'),
+  createCase: (draft: IntakeDraft) => ipcRenderer.invoke('case:create', draft),
+  start: (question?: string) => ipcRenderer.invoke('case:start', question),
   send: (text: string) => ipcRenderer.invoke('case:send', text),
   interrupt: () => ipcRenderer.invoke('case:interrupt'),
   answerOperator: (reply: OperatorReply) => ipcRenderer.invoke('case:answerOperator', reply),
@@ -15,4 +18,6 @@ contextBridge.exposeInMainWorld('inquestry', {
     ipcRenderer.on('snapshot', handler);
     return () => ipcRenderer.off('snapshot', handler);
   },
-});
+};
+
+contextBridge.exposeInMainWorld('inquestry', api);
