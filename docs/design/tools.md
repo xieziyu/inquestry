@@ -24,10 +24,24 @@ agent 下结论时要指明"第几次调用的哪几行"。**不让它抄 toolUs
 
 **注入机制已实测通过**（`npm run spike:wire`）：`PostToolUse` hook 的 `hookSpecificOutput.updatedToolOutput` **替换发给模型的工具输出**，因此标记可以注入到**任何**工具的结果里——包括用户自己的 skill 与 MCP，不只是我们自建的三个。这是 D5「工具调用自动归属」能覆盖全量工具的前提。
 
-两个接线时踩到的坑：
+三个接线时踩到的坑：
 
 - **`tool_response` 对 MCP 工具直接就是 content 数组本身**，不是 `{ content: [...] }`。只认后者的话 blob 里存进去的是一段 JSON，行号锚点全部失真
 - 标记要**行内前缀**（`[call #1] 正文`）而不是单独一行，否则模型看到的行号与 blob 物理行号整体错位一行
+- **一次调用的收尾散在三个 hook 上**，只接 `PostToolUse` 的话，凡是没跑成的调用就只有 `toolcall.started`，库里和 UI 上永远停在 `pending`，正文也进不了 blob——而"查不到东西"的原因常常就写在那句报错里
+
+| 收尾 | 走哪个 hook | 载荷 | 记成 |
+| --- | --- | --- | --- |
+| 跑完了 | `PostToolUse` | `tool_response` | `done` |
+| 工具报错 | `PostToolUseFailure` | `error`（不是 `tool_response`） | `failed`；`is_interrupt` 记 `abandoned`——人按了停止不是工具坏了 |
+| 规则拒绝 | `PermissionDenied` | `reason` | `denied`。项目 settings 里 deny 掉的（比如不许读 `.env`）走这条，**不经过本地闸门** |
+| 停止 / 关案时散掉的闸门 | 没有 hook，harness 自己收 | —— | `abandoned` |
+
+> 我们自己在 PreToolUse 里硬拒的**不发** `PermissionDenied`（SDK 契约），那些在记账那一刻就收完了；闸门（`canUseTool`）拒的会发。
+>
+> 三者会**互相重叠**：一次规则拒绝同时也是一次失败，两个 hook 都到，顺序不保证。所以收尾要按当前状态判——已经是 `denied` 就不动（别用规则给的理由顶掉闸门的留话），是 `failed` 则允许被 `denied` 纠正，只有 `pending` 才认失败。少这一层，「这里有一道权限边界」会被记成「这个工具坏了」，报告里是两句完全不同的话。
+>
+> **最后一行没有 hook 可接**：人按停止时，还卡在闸门上的调用得由 harness 自己收。agent 那侧只有 allow / deny 两种收法，所以照样回一个 deny——**但账上不能记成 `denied`**：被拒的意思是有人看过这一条并说了不行，中断连"这次调用该不该跑"都没问到。真按被拒记，轨道上会多出一条从没有人下过的判断。`gate_decision` 也保持原样不动，闸门确实没做出判决，补一个反而是编的。
 
 > **harness 侧解析必须宽容**：实测 agent 会照抄整个标记写成 `call #1` 而不是 `#1`——它照做了提示词说的"照抄"。取第一个整数即可，不要精确匹配格式。这是 harness 的活，不是 agent 的错。
 

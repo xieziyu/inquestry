@@ -51,7 +51,13 @@ const CHORES = ['TodoWrite', 'ToolSearch'];
 const NEVER_ALLOWED = ['Bash', 'BashOutput', 'KillShell', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
 type Pending = { ask: PendingAsk; resolve: (r: OperatorReply) => void; timer: NodeJS.Timeout };
-type Gate = { ask: PendingGate; finish: (outcome: GateOutcome) => void };
+type Gate = {
+  ask: PendingGate;
+  /** 有人处置了：判决进账，调用按判决收尾。 */
+  finish: (outcome: GateOutcome) => void;
+  /** 没人处置就散了（停止 / 关案）：调用记「已放弃」，不记「被拒」。 */
+  abandon: (why: string) => void;
+};
 
 export type CaseRunnerInit = {
   db: Db;
@@ -215,6 +221,10 @@ export class CaseRunner {
         hooks: {
           PreToolUse: [{ hooks: [async (input, id) => this.onToolStart(input, id)] }],
           PostToolUse: [{ hooks: [async (input, id) => this.onToolEnd(input, id)] }],
+          // 成功与失败是两个 hook：只接 PostToolUse 的话，报错的调用永远停在 pending
+          PostToolUseFailure: [{ hooks: [async (input, id) => this.onToolFailed(input, id)] }],
+          // 规则层的拒绝要抢在失败之前把调用收成 denied，否则会被记成工具故障
+          PermissionDenied: [{ hooks: [async (input, id) => this.onPermissionDenied(input, id)] }],
         },
       },
     });
@@ -261,7 +271,7 @@ export class CaseRunner {
     }
     this.pending.clear();
     // 闸门同理：它挂着的也是一个 agent 那侧在等的 Promise
-    for (const g of [...this.gates.values()]) g.finish({ decision: 'deny', message: '案子已关闭。' });
+    for (const g of [...this.gates.values()]) g.abandon('案子已关闭。');
     this.endOnce('ended');
     this.q?.close();
     this.q = null;
@@ -277,7 +287,7 @@ export class CaseRunner {
 
   async interrupt() {
     // 先散闸门再中断：还卡在闸门上的调用会挡住 interrupt 想收的那一轮
-    for (const g of [...this.gates.values()]) g.finish({ decision: 'deny', message: '这一轮已被中断。' });
+    for (const g of [...this.gates.values()]) g.abandon('这一轮已被中断。');
     // Stop 传 cancel_queued（D7）；SDK 若不支持这个签名就退回无参 interrupt
     const q = this.q as unknown as { interrupt?: (o?: unknown) => Promise<unknown> } | null;
     await q?.interrupt?.({ cancel_queued: true }).catch(() => undefined);
@@ -320,15 +330,19 @@ export class CaseRunner {
     const askedAt = Date.now();
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (outcome: GateOutcome) => {
+      const settle = (outcome: GateOutcome, record: () => void) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         this.gates.delete(id);
-        this.applyGate(id, outcome);
+        record();
         this.onChange();
         resolve(outcome);
       };
+      const finish = (outcome: GateOutcome) => settle(outcome, () => this.applyGate(id, outcome));
+      // agent 那侧只有 allow / deny 两种收法，所以中断也得回 deny；账上记的却不能是「被拒」
+      const abandon = (why: string) =>
+        settle({ decision: 'deny', message: why }, () => this.abandonCall(id, why));
       const timer = setTimeout(() => finish({ decision: 'timeout' }), GATE_TIMEOUT_MS);
 
       this.gates.set(id, {
@@ -342,11 +356,10 @@ export class CaseRunner {
           deadline: askedAt + GATE_TIMEOUT_MS,
         },
         finish,
+        abandon,
       });
       // 中断当前轮（D7）时闸门也得散：留着它 agent 那侧的 Promise 就永远悬着
-      opts.signal.addEventListener('abort', () => finish({ decision: 'deny', message: '这一轮已被中断。' }), {
-        once: true,
-      });
+      opts.signal.addEventListener('abort', () => abandon('这一轮已被中断。'), { once: true });
       this.onChange();
     });
   }
@@ -374,6 +387,21 @@ export class CaseRunner {
   private closeIfDenied(callId: string, outcome: GateOutcome) {
     if (outcome.decision !== 'deny') return;
     this.session?.recordToolEnd({ callId, output: `(被拒) ${outcome.message ?? ''}`, status: 'denied' });
+  }
+
+  /**
+   * 停止 / 关案时散掉的闸门。
+   *
+   * **不能复用被拒那条路**：`denied` 的意思是有人看过这一条并说了不行，中断没有这层判断——
+   * 它连"这次调用该不该跑"都没问到。真按被拒记，轨道上会多出一条从没有人下过的判断，
+   * 而 `abandoned` 正是 schema 给这种情况留的档。
+   *
+   * `gate_decision` 保持原样不动：闸门确实没做出判决，补一个反而是编的。
+   */
+  private abandonCall(callId: string, why: string) {
+    // 走到闸门就说明 PreToolUse 已经记过账了；没有行可收就是真没有，不必补建
+    if (!this.session?.hasToolCall(callId)) return;
+    this.session.recordToolEnd({ callId, output: `(已放弃) ${why}`, status: 'abandoned' });
   }
 
   private askOperator(args: {
@@ -463,6 +491,72 @@ export class CaseRunner {
     return {
       hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: `[call #${n}] ${text}` },
     } as never;
+  }
+
+  /**
+   * 工具**失败**走的是另一个 hook（`PostToolUseFailure`），载荷里是 `error` 不是 `tool_response`。
+   *
+   * 只接 PostToolUse 的话，任何报错的调用就只有 started：库里和 UI 上永远是 `pending`，
+   * 错误内容也进不了 blob——而查不到东西的原因常常就写在那句报错里。
+   * 闸门放开了更多外部工具之后，这条路只会更常走到。
+   */
+  private onToolFailed(input: unknown, toolUseID: string | undefined) {
+    const i = input as { tool_name?: string; error?: string; is_interrupt?: boolean };
+    if (!i.tool_name || STRUCTURAL.has(i.tool_name) || !toolUseID) return {};
+    // 被拒的调用在拒绝那一刻就收过尾了。backend 照样会把它当成一次失败发过来，
+    // 再收一次就会把 `denied` 覆盖成 `failed`，被拦下的和工具自己坏掉的就此混为一谈
+    if (this.statusOf(toolUseID) !== 'pending') return {};
+    this.session?.recordToolEnd({
+      callId: toolUseID,
+      output: i.error ?? '(工具失败，未给出错误信息)',
+      // 人按了停止不是工具坏了，报告里这两件事不能混
+      status: i.is_interrupt ? 'abandoned' : 'failed',
+    });
+    this.onChange();
+    return {};
+  }
+
+  /**
+   * 规则层的拒绝：项目自己的 settings 里 deny 掉的（比如不许读 `.env`）走这个 hook。
+   *
+   * 它不经过本地闸门，所以调用还挂在 `pending` 上，随后那条失败会把它记成 `failed` ——
+   * 报告里「这里有一道权限边界，绕过去」和「这个工具坏了」是完全不同的两句话。
+   *
+   * 我们自己在 PreToolUse 里硬拒的不会到这儿（SDK 契约），那些在 `onToolStart` 就收完了。
+   */
+  private onPermissionDenied(input: unknown, toolUseID: string | undefined) {
+    const i = input as { tool_name?: string; tool_input?: unknown; reason?: string };
+    if (!i.tool_name || STRUCTURAL.has(i.tool_name) || !toolUseID) return {};
+    const status = this.statusOf(toolUseID);
+    // 只纠正这两种：还没收尾的（`pending`，也含"规则抢在记账之前"的没有行），
+    // 和被后到的失败记成故障的（`failed`）。其余一律不动——
+    // `denied` 的留话不能被规则理由顶掉；`abandoned` 更不是一次权限判断，
+    // 而中断散闸门时**照样会回一个 deny**，所以这条 hook 一定会追着 abandoned 来一趟
+    if (status && status !== 'pending' && status !== 'failed') return {};
+    const gate: GateOutcome = { decision: 'deny', message: i.reason ?? '(权限规则拒绝，未给出原因)' };
+
+    // 规则若抢在 PreToolUse 之前短路，调用行还不存在，UPDATE 会静默命中 0 行
+    if (!this.session?.hasToolCall(toolUseID)) {
+      this.session?.recordToolStart({
+        callId: toolUseID,
+        toolName: i.tool_name,
+        input: i.tool_input,
+        gate,
+      });
+    } else {
+      this.session.recordGate({ callId: toolUseID, gate });
+    }
+    this.closeIfDenied(toolUseID, gate);
+    this.onChange();
+    return {};
+  }
+
+  private statusOf(callId: string) {
+    return (
+      this.db.prepare(`SELECT status FROM tool_calls WHERE id=?`).get(callId) as
+        | { status: string }
+        | undefined
+    )?.status;
   }
 
   private pushChat(role: ChatLine['role'], text: string) {

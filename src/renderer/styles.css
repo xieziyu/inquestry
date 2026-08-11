@@ -187,9 +187,11 @@ button.primary small { opacity: .6; font-weight: 400; }
 .gate .ghost small { opacity: .55; margin-left: 4px; }
 
 .pill.todo { background: var(--warn); color: var(--on-warn); font-weight: 600; }
-/* 被拒的调用留在轨道上，划掉但不删：走过的死路也是排查过程的一部分 */
-.call.denied { opacity: .7; }
+/* 被拒 / 失败的调用留在轨道上，压暗但不删：走过的死路也是排查过程的一部分 */
+.call.denied, .call.failed, .call.abandoned { opacity: .7; }
 .gated { color: var(--warn); font-size: 11px; }
+.cs { font-size: 11px; color: var(--dim); }
+.cs.failed { color: var(--bad); }
 
 /* ── 底部输入带（对话在这里被降级） ── */
 .dock { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 20px 12px; }

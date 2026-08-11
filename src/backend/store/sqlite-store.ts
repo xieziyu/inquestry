@@ -69,7 +69,11 @@ export type InvestigationSession = {
   /** 闸门后于 PreToolUse 落定时补记判决。 */
   recordGate(input: { callId: string; gate: GateOutcome }): void;
   /** 由 PostToolUse hook 调用：原始输出落 blob，只把 sha256 进库。 */
-  recordToolEnd(input: { callId: string; output: string; status?: 'done' | 'failed' | 'denied' }): void;
+  recordToolEnd(input: {
+    callId: string;
+    output: string;
+    status?: 'done' | 'failed' | 'denied' | 'abandoned';
+  }): void;
   /** 这个 callId 有没有落过库 —— 闸门用它判断该补记还是该等 started 带上判决。 */
   hasToolCall(callId: string): boolean;
   endSession(status?: 'ended' | 'crashed'): void;

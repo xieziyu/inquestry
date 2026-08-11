@@ -31,7 +31,9 @@ type Probe = {
     opts: { toolUseID: string; agentID?: string; signal: AbortSignal; title?: string },
   ): Promise<GateOutcome>;
   onToolStart(input: unknown, toolUseID: string): void;
-  gates: Map<string, { finish: (o: GateOutcome) => void }>;
+  onToolFailed(input: unknown, toolUseID: string): void;
+  onPermissionDenied(input: unknown, toolUseID: string): void;
+  gates: Map<string, { finish: (o: GateOutcome) => void; abandon: (why: string) => void }>;
 };
 
 type Row = {
@@ -105,8 +107,51 @@ async function main() {
   probe.gates.get('call_d')?.finish({ decision: 'timeout' });
   await d;
 
-  const [ra, rb, rc, rd] = ['call_a', 'call_b', 'call_c', 'call_d'].map(row);
-  const denyText = rb?.output_sha256 ? (readBlobText(blobs, rb.output_sha256) ?? '') : '';
+  // ④ 放行之后工具自己报错：成功与失败是两个 hook，失败那条不接就永远停在 pending
+  const e = ask('call_e', 'select 4');
+  started('call_e', 'select 4');
+  runner.decideGate({ id: 'call_e', action: 'allow' });
+  await e;
+  probe.onToolFailed({ tool_name: 'mcp__logs__query', error: 'ECONNREFUSED 10.0.0.7:5432' }, 'call_e');
+
+  // 被拒的调用 backend 照样会当成一次失败发过来，不能让它把 denied 覆盖成 failed
+  probe.onToolFailed({ tool_name: 'mcp__logs__query', error: 'permission denied' }, 'call_b');
+  // 闸门拒过的也会走一趟 PermissionDenied：留话已经落过，别被规则给的理由顶掉
+  probe.onPermissionDenied({ tool_name: 'mcp__logs__query', reason: 'blocked by rule' }, 'call_b');
+
+  // ⑤ 项目 settings 的 deny 规则：不经过本地闸门，两个 hook 谁先到都得记成 denied
+  const readF = { tool_name: 'Read', tool_input: { file_path: '/x/.env' }, error: 'permission denied' };
+  started('call_f', 'noop');
+  probe.onPermissionDenied({ ...readF, reason: '项目规则禁止读取 .env' }, 'call_f');
+  probe.onToolFailed(readF, 'call_f');
+
+  // 反序：失败先到，规则拒绝后到——`failed` 要被纠正回 `denied`
+  started('call_g', 'noop');
+  probe.onToolFailed(readF, 'call_g');
+  probe.onPermissionDenied({ ...readF, reason: '项目规则禁止读取 .env' }, 'call_g');
+
+  // ⑥ 人按了停止：闸门上等着的那条记「已放弃」，不能记成有人拦下了它。
+  // 散闸门时照样要回一个 deny 给 agent，所以 PermissionDenied 一定会追着来一趟——
+  // 这条后到的不能把 abandoned 改写成 denied
+  const h = ask('call_h', 'select 5');
+  started('call_h', 'select 5');
+  await runner.interrupt();
+  await h;
+  probe.onPermissionDenied({ tool_name: 'mcp__logs__query', reason: '这一轮已被中断。' }, 'call_h');
+
+  const [ra, rb, rc, rd, re, rf, rg, rh] = [
+    'call_a',
+    'call_b',
+    'call_c',
+    'call_d',
+    'call_e',
+    'call_f',
+    'call_g',
+    'call_h',
+  ].map(row);
+  const blob = (r?: Row) => (r?.output_sha256 ? (readBlobText(blobs, r.output_sha256) ?? '') : '');
+  const denyText = blob(rb);
+  const errText = blob(re);
 
   check(
     '改写：参数被换掉且留痕',
@@ -137,6 +182,31 @@ async function main() {
     `放行=${rc?.status} 超时=${rd?.status}`,
   );
   check('闸门散尽后待办栏是空的', probe.gates.size === 0, `还挂着 ${probe.gates.size} 条`);
+  check(
+    '放行后报错的调用收尾成 failed，错误进 blob',
+    re?.status === 'failed' && errText.includes('ECONNREFUSED'),
+    `status=${re?.status} blob 内容=${errText.slice(0, 40)}`,
+  );
+  check(
+    '被拒的调用不会被后到的失败覆盖成 failed',
+    rb?.status === 'denied' && denyText.includes('ask_operator'),
+    `status=${rb?.status} blob 内容=${denyText.slice(0, 24)}`,
+  );
+  check(
+    '规则层拒绝记成 denied 不是 failed，理由留得住',
+    rf?.status === 'denied' && (blob(rf) ?? '').includes('禁止读取 .env'),
+    `status=${rf?.status} blob 内容=${blob(rf)?.slice(0, 30)}`,
+  );
+  check(
+    '反序：失败先到也要被纠正回 denied',
+    rg?.status === 'denied',
+    `status=${rg?.status} blob 内容=${blob(rg)?.slice(0, 30)}`,
+  );
+  check(
+    '停止散掉的闸门记 abandoned，不是被拒',
+    rh?.status === 'abandoned' && rh.gate_decision === 'auto',
+    `status=${rh?.status} gate=${rh?.gate_decision} blob 内容=${blob(rh)?.slice(0, 24)}`,
+  );
 
   // 判决落在哪条事件上取决于到达顺序（反序那次是 started 直接带走的），
   // 所以不数 gated 的条数，只问重放后是不是同一批判决——events 是不是真相看这一条

@@ -262,6 +262,7 @@ function StepCard({
                   <b>#{c.callNumber}</b> {c.toolName}
                   <span className={`origin ${c.origin}`}>{c.origin === 'operator' ? '人工' : 'agent'}</span>
                   {gateLabel(c.gate) && <span className="gated">{gateLabel(c.gate)}</span>}
+                  {callStatusLabel(c.status) && <span className={`cs ${c.status}`}>{callStatusLabel(c.status)}</span>}
                   <span className="lines">{c.outputLines} 行</span>
                 </div>
                 <pre>{c.outputPreview}</pre>
@@ -356,6 +357,15 @@ function statusLabel(s: string) {
   return (
     { open: '进行中', confirmed: '已证实', refuted: '已推翻', inconclusive: '未查清', superseded: '被推翻', live: '会话中', ended: '已结束', crashed: '已中断', idle: '待开始' } as Record<string, string>
   )[s] ?? s;
+}
+
+/**
+ * 跑完的是多数，不标。其余三种都要写出来：一次查不到东西，原因常常是它压根没跑成，
+ * 而不是"这里确实没有数据"——这两件事在报告里的分量完全不同。
+ * `denied` 不在这儿，它由闸门那个标签说了。
+ */
+function callStatusLabel(status: string) {
+  return ({ pending: '进行中', failed: '失败', abandoned: '已放弃' } as Record<string, string>)[status];
 }
 
 /** 自动放行的是多数，标出来只会成噪声；过过闸门的四种才要在节点上留痕。 */
