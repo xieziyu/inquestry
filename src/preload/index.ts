@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { InquestryApi, IntakeDraft, OperatorReply, Snapshot } from '../shared/ipc.js';
+import type { GateDecision, InquestryApi, IntakeDraft, OperatorReply, Snapshot } from '../shared/ipc.js';
 
 /** renderer 只能经这里够到 main —— contextIsolation 开、nodeIntegration 关。 */
 const api: InquestryApi = {
@@ -11,6 +11,7 @@ const api: InquestryApi = {
   send: (text: string) => ipcRenderer.invoke('case:send', text),
   interrupt: () => ipcRenderer.invoke('case:interrupt'),
   answerOperator: (reply: OperatorReply) => ipcRenderer.invoke('case:answerOperator', reply),
+  decideGate: (d: GateDecision) => ipcRenderer.invoke('case:decideGate', d),
   snapshot: () => ipcRenderer.invoke('case:snapshot'),
   excerpt: (callId: string, anchor: string | null) => ipcRenderer.invoke('case:excerpt', callId, anchor),
   onSnapshot: (cb: (s: Snapshot) => void) => {

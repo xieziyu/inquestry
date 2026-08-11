@@ -64,6 +64,19 @@ export type DomainEvents = {
     gateDecision: 'auto' | 'allow' | 'rewrite' | 'deny' | 'timeout';
     at: number;
   };
+  /**
+   * 闸门的处置（ui.md §8.2）。与 `toolcall.started` 分开是因为两者到达顺序不保证：
+   * PreToolUse 与 canUseTool 谁先谁后由 backend 决定，先到的那个不该等另一个。
+   *
+   * deny 的留话不在这里 —— 它就是 agent 真正收到的工具结果，走 `toolcall.completed` 的 blob。
+   */
+  'toolcall.gated': {
+    callId: string;
+    decision: 'allow' | 'rewrite' | 'deny' | 'timeout';
+    /** 改写后的参数，rewrite 才有。 */
+    input?: string;
+    at: number;
+  };
   'toolcall.completed': {
     callId: string;
     outputSha256: string | null;

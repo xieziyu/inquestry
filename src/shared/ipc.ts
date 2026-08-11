@@ -68,6 +68,8 @@ export type CallNode = {
   origin: 'agent' | 'operator';
   status: string;
   input: string;
+  /** 闸门判决。`auto` 是自动放行的多数情况，UI 只标出其余四种。 */
+  gate: string | null;
   outputPreview: string;
   outputLines: number;
 };
@@ -118,6 +120,31 @@ export type PendingAsk = {
   suggestedAnswer?: string;
 };
 
+/**
+ * 卡在闸门上的一次调用（②档，ui.md §4）。
+ *
+ * 与 ①档 `PendingAsk` 的分别在于**不处理会怎样**：这一档到点按预设放行，
+ * 所以有 `deadline`；①档故意没有，自动填个假结果比让人等着更糟。
+ */
+export type PendingGate = {
+  /** 就是 backend 的 toolUseID —— 与 `CallNode.id` 同一个键，处置后能直接对上节点。 */
+  id: string;
+  toolName: string;
+  /** 参数的 JSON 文本，可改后放行。 */
+  input: string;
+  agentId?: string;
+  /** backend 说得出「为什么问你」时带上，说不出就没有。 */
+  reason?: string;
+  askedAt: number;
+  deadline: number;
+};
+
+/** 闸门的三个手势。改写与放行是一个动作的两种形态，拒绝必须留话——不留话 agent 不知道换什么。 */
+export type GateDecision =
+  | { id: string; action: 'allow' }
+  | { id: string; action: 'rewrite'; input: string }
+  | { id: string; action: 'deny'; message: string };
+
 export type ChatLine = { role: 'user' | 'assistant' | 'system'; text: string; at: number };
 
 /** 当前案子的立案单投影。为 null 表示还没立案，UI 该显示立案面板。 */
@@ -139,6 +166,7 @@ export type Snapshot = {
   steps: StepNode[];
   incident: IncidentEntry[];
   pending: PendingAsk[];
+  gates: PendingGate[];
   chat: ChatLine[];
   report: {
     rootCause: string | null;
@@ -157,6 +185,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   steps: [],
   incident: [],
   pending: [],
+  gates: [],
   chat: [],
   report: { rootCause: null, impact: null, leftovers: 0, refuted: 0 },
 };
@@ -171,6 +200,7 @@ export type InquestryApi = {
   send(text: string): Promise<void>;
   interrupt(): Promise<void>;
   answerOperator(reply: OperatorReply): Promise<void>;
+  decideGate(decision: GateDecision): Promise<void>;
   excerpt(callId: string, anchor: string | null): Promise<string>;
   snapshot(): Promise<Snapshot>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;

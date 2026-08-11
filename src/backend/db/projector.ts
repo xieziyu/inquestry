@@ -113,6 +113,16 @@ export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       );
       return;
     }
+    case 'toolcall.gated': {
+      const p = ev.payload;
+      // 只落判决与改写后的参数：被拒的 status 由随后那条 completed 写，
+      // 因为留话本身就是 agent 收到的工具结果，两处各写一半会对不上
+      db.prepare(
+        `UPDATE tool_calls SET gate_decision=?, input_rewritten=?, input_json=COALESCE(?,input_json)
+         WHERE id=?`,
+      ).run(p.decision, p.decision === 'rewrite' ? 1 : 0, p.input ?? null, p.callId);
+      return;
+    }
     case 'toolcall.completed': {
       const p = ev.payload;
       db.prepare(`UPDATE tool_calls SET output_sha256=?, status=?, ended_at=? WHERE id=?`).run(

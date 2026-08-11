@@ -16,7 +16,7 @@ const PREVIEW_LINES = 6;
 export function buildSnapshot(
   db: Db,
   ctx: { caseId: string; sessionId: string; blobDir: string; agent: AgentChoice },
-  extra: Pick<Snapshot, 'busy' | 'chat' | 'pending' | 'sessionStatus'>,
+  extra: Pick<Snapshot, 'busy' | 'chat' | 'pending' | 'gates' | 'sessionStatus'>,
 ): Snapshot {
   const meta = caseMeta(db, ctx.caseId, ctx.agent);
 
@@ -38,7 +38,7 @@ export function buildSnapshot(
 
   const calls = db
     .prepare(
-      `SELECT tc.id, tc.step_id, tc.tool_name, tc.origin, tc.status, tc.input_json,
+      `SELECT tc.id, tc.step_id, tc.tool_name, tc.origin, tc.status, tc.input_json, tc.gate_decision,
               tc.output_sha256, b.line_count
        FROM tool_calls tc LEFT JOIN blobs b ON b.sha256 = tc.output_sha256
        WHERE tc.session_id=? ORDER BY tc.started_at, tc.rowid`,
@@ -50,6 +50,7 @@ export function buildSnapshot(
     origin: 'agent' | 'operator';
     status: string;
     input_json: string;
+    gate_decision: string | null;
     output_sha256: string | null;
     line_count: number | null;
   }[];
@@ -94,6 +95,7 @@ export function buildSnapshot(
           origin: c.origin,
           status: c.status,
           input: c.input_json,
+          gate: c.gate_decision,
           outputPreview: preview(ctx.blobDir, c.output_sha256),
           outputLines: c.line_count ?? 0,
         };

@@ -46,17 +46,32 @@ export type CaseIntake = {
 /** 时间基准的最小切面：解析日志时间串只需要这两项。 */
 export type TimeBase = Pick<CaseIntake, 'incidentDate' | 'tzOffset'>;
 
+/** 闸门给出的处置。`input` 只有 rewrite 用得上，`message` 只有 deny 用得上。 */
+export type GateOutcome = {
+  decision: 'allow' | 'rewrite' | 'deny' | 'timeout';
+  input?: string;
+  message?: string;
+};
+
 export type InvestigationSession = {
   store: InvestigationStore;
   /** 案子的立案单。已存在的 case 以库里那份为准，不被本次调用方覆盖。 */
   intake: CaseIntake;
   /** 由 PreToolUse hook 调用：把任意工具调用归属到当前 open 的 step 上。 */
-  recordToolStart(input: { callId: string; toolName: string; input: unknown; agentId?: string }): {
-    callNumber: number;
-    stepId: string;
-  };
+  recordToolStart(input: {
+    callId: string;
+    toolName: string;
+    input: unknown;
+    agentId?: string;
+    /** 闸门先于 PreToolUse 落定时，判决直接写进 started，不必再补一条 gated。 */
+    gate?: GateOutcome;
+  }): { callNumber: number; stepId: string };
+  /** 闸门后于 PreToolUse 落定时补记判决。 */
+  recordGate(input: { callId: string; gate: GateOutcome }): void;
   /** 由 PostToolUse hook 调用：原始输出落 blob，只把 sha256 进库。 */
-  recordToolEnd(input: { callId: string; output: string; failed?: boolean }): void;
+  recordToolEnd(input: { callId: string; output: string; status?: 'done' | 'failed' | 'denied' }): void;
+  /** 这个 callId 有没有落过库 —— 闸门用它判断该补记还是该等 started 带上判决。 */
+  hasToolCall(callId: string): boolean;
   endSession(status?: 'ended' | 'crashed'): void;
 };
 
@@ -245,7 +260,7 @@ export function createInvestigationSession(
     store,
     intake,
 
-    recordToolStart({ callId, toolName, input, agentId }) {
+    recordToolStart({ callId, toolName, input, agentId, gate }) {
       const stepId = ensureStep();
       const before = db
         .prepare(`SELECT COUNT(*) c FROM tool_calls WHERE step_id=?`)
@@ -259,26 +274,32 @@ export function createInvestigationSession(
           agentId,
           toolName,
           origin: toolName.includes('ask_operator') ? 'operator' : 'agent',
-          input: JSON.stringify(input ?? {}),
-          inputRewritten: false,
-          gateDecision: 'auto',
+          input: gate?.input ?? JSON.stringify(input ?? {}),
+          inputRewritten: gate?.decision === 'rewrite',
+          gateDecision: gate?.decision ?? 'auto',
           at: ctx.now(),
         },
       });
       return { callNumber: before.c + 1, stepId };
     },
 
-    recordToolEnd({ callId, output, failed }) {
+    recordGate({ callId, gate }) {
+      emit({
+        type: 'toolcall.gated',
+        payload: { callId, decision: gate.decision, input: gate.input, at: ctx.now() },
+      });
+    },
+
+    hasToolCall(callId) {
+      return !!db.prepare(`SELECT 1 FROM tool_calls WHERE id=?`).get(callId);
+    },
+
+    recordToolEnd({ callId, output, status }) {
       const blob = storeBlob(ctx.blobDir, output);
       emit({ type: 'blob.stored', payload: { ...blob, at: ctx.now() } });
       emit({
         type: 'toolcall.completed',
-        payload: {
-          callId,
-          outputSha256: blob.sha256,
-          status: failed ? 'failed' : 'done',
-          at: ctx.now(),
-        },
+        payload: { callId, outputSha256: blob.sha256, status: status ?? 'done', at: ctx.now() },
       });
     },
 

@@ -11,11 +11,12 @@
     "spike:db": "tsx scripts/spike-db.ts",
     "spike:tools": "tsx scripts/spike-tools.ts",
     "spike:wire": "tsx scripts/spike-wire.ts",
+    "spike:gate": "tsx scripts/spike-gate.ts",
     "start": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
-    "rebuild:node": "npm rebuild better-sqlite3"
+    "rebuild:node": "cd node_modules/better-sqlite3 && npm run build-release"
   },
   "author": {
     "name": "xieziyu",

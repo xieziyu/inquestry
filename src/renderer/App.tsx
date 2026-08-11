@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
+  type CallNode,
   type CaseMeta,
   type InquestryApi,
   type PendingAsk,
   type Snapshot,
   type StepNode,
 } from '../shared/ipc.js';
+import { GateCard } from './GateCard.js';
 import { Intake } from './Intake.js';
+import { isPlainKey, isTyping } from './keys.js';
 import { PendingCard } from './PendingCard.js';
 
 declare global {
@@ -25,12 +28,52 @@ export function App() {
   const [env, setEnv] = useState<{ claude: string | null; hint: string } | null>(null);
   const [excerpt, setExcerpt] = useState<{ title: string; body: string } | null>(null);
   const started = snap.sessionStatus !== 'idle';
+  // ①档永远置顶：闸门到点会自己放行，回填不处理就永远等下去（ui.md §4）
+  const todos = useMemo(
+    () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
+    [snap.pending, snap.gates],
+  );
+  const [focus, setFocus] = useState<string | null>(null);
+  /** 焦点那条消失后要接上它的**位置**，所以光记 id 不够——id 这时已经不在列表里了。 */
+  const focusAt = useRef(0);
 
   useEffect(() => {
     void window.inquestry.snapshot().then(setSnap);
     void window.inquestry.envCheck().then(setEnv);
     return window.inquestry.onSnapshot((s) => s && setSnap(s));
   }, []);
+
+  useEffect(() => {
+    // 全清空了就回到头：下一批待办是新一轮，接着上一轮的位置落点没有意义
+    if (!todos.length) focusAt.current = 0;
+    const at = todos.indexOf(focus ?? '');
+    if (at >= 0) focusAt.current = at;
+  }, [todos, focus]);
+
+  // 处置掉当前这条后焦点顺位落到接替它的那条，而不是掉回列表头：
+  // 连着处置一串待办时，掉回头等于把已经越过的又看一遍
+  useEffect(() => {
+    setFocus((f) => {
+      if (f && todos.includes(f)) return f;
+      if (!todos.length) return null;
+      return todos[Math.min(focusAt.current, todos.length - 1)] ?? null;
+    });
+  }, [todos]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPlainKey(e) || isTyping(e.target)) return;
+      const dir = e.key === 'j' ? 1 : e.key === 'k' ? -1 : 0;
+      if (!dir || !todos.length) return;
+      e.preventDefault();
+      setFocus((f) => {
+        const next = todos.indexOf(f ?? '') + dir;
+        return todos[Math.max(0, Math.min(todos.length - 1, next))] ?? null;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [todos]);
 
   const showExcerpt = async (callId: string, anchor: string | null, title: string) => {
     setExcerpt({ title, body: await window.inquestry.excerpt(callId, anchor) });
@@ -72,6 +115,7 @@ export function App() {
           </button>
         </div>
         <div className="status">
+          {todos.length > 0 && <span className="pill todo">等你 {todos.length}</span>}
           <span className={`pill ${snap.busy ? 'busy' : snap.sessionStatus}`}>
             {snap.busy ? '进行中' : statusLabel(snap.sessionStatus)}
           </span>
@@ -85,7 +129,20 @@ export function App() {
 
       <main className="stage">
         {snap.pending.map((p) => (
-          <PendingCard key={p.id} ask={p} onSubmit={(r) => void window.inquestry.answerOperator(r)} />
+          <PendingCard
+            key={p.id}
+            ask={p}
+            focused={focus === p.id}
+            onSubmit={(r) => void window.inquestry.answerOperator(r)}
+          />
+        ))}
+        {snap.gates.map((g) => (
+          <GateCard
+            key={g.id}
+            gate={g}
+            focused={focus === g.id}
+            onDecide={(d) => void window.inquestry.decideGate(d)}
+          />
         ))}
 
         {!started && (
@@ -200,10 +257,11 @@ function StepCard({
           </button>
           {open &&
             step.calls.map((c) => (
-              <div key={c.id} className="call" onClick={() => onExcerpt(c.id, null, c.toolName)}>
+              <div key={c.id} className={`call ${c.status}`} onClick={() => onExcerpt(c.id, null, c.toolName)}>
                 <div className="callhead">
                   <b>#{c.callNumber}</b> {c.toolName}
                   <span className={`origin ${c.origin}`}>{c.origin === 'operator' ? '人工' : 'agent'}</span>
+                  {gateLabel(c.gate) && <span className="gated">{gateLabel(c.gate)}</span>}
                   <span className="lines">{c.outputLines} 行</span>
                 </div>
                 <pre>{c.outputPreview}</pre>
@@ -298,6 +356,13 @@ function statusLabel(s: string) {
   return (
     { open: '进行中', confirmed: '已证实', refuted: '已推翻', inconclusive: '未查清', superseded: '被推翻', live: '会话中', ended: '已结束', crashed: '已中断', idle: '待开始' } as Record<string, string>
   )[s] ?? s;
+}
+
+/** 自动放行的是多数，标出来只会成噪声；过过闸门的四种才要在节点上留痕。 */
+function gateLabel(gate: CallNode['gate']) {
+  return ({ allow: '已放行', rewrite: '参数被改写', deny: '被拒', timeout: '自动放行' } as Record<string, string>)[
+    gate ?? ''
+  ];
 }
 
 function kindLabel(k: StepNode['kind']) {

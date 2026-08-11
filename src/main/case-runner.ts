@@ -15,6 +15,7 @@ import {
   createInvestigationSession,
   openCase,
   type CaseIntake,
+  type GateOutcome,
   type InvestigationSession,
 } from '../backend/store/sqlite-store.js';
 import { createInquestryMcpServer, toolName } from '../backend/tools/sdk-mcp-adapter.js';
@@ -23,19 +24,34 @@ import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
   type ChatLine,
+  type GateDecision,
   type OperatorReply,
   type PendingAsk,
+  type PendingGate,
   type Snapshot,
 } from '../shared/ipc.js';
 
 /** 人工回填的超时兜底（D9）。到点自动作废，节点标注为超时，agent 不会干挂。 */
 const OPERATOR_TIMEOUT_MS = 15 * 60 * 1000;
+/** ②档闸门的倒计时。归零按预设放行并标记"自动放行"（ui.md §4）——人不在时排查不该停。 */
+const GATE_TIMEOUT_MS = 3 * 60 * 1000;
 
 const STRUCTURAL = new Set([toolName('open_step'), toolName('close_step')]);
-/** 有项目起点时给的只读三件套。写操作与查库一律走 ask_operator —— 这是有意的权限边界。 */
+/** 有项目起点时给的只读三件套：读代码是排查的地基，不值得每次拦一下。 */
 const READONLY_BUILTINS = ['Read', 'Grep', 'Glob'];
+/** agent 自理的杂务：记事本与工具检索。它们取不到任何证据，拦下来只会把待办栏刷满。 */
+const CHORES = ['TodoWrite', 'ToolSearch'];
+/**
+ * 写盘与跑命令一律不给，**闸门也放行不了**：要动这些东西就走 ask_operator 由人执行，
+ * 这是有意的权限边界（overview §5.1）。
+ *
+ * 同时进 `disallowedTools`——真项目模式会加载该项目自己的 settings，
+ * 里面若有 allow 规则，canUseTool 根本不会被问到，只靠这里的判断守不住。
+ */
+const NEVER_ALLOWED = ['Bash', 'BashOutput', 'KillShell', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 
 type Pending = { ask: PendingAsk; resolve: (r: OperatorReply) => void; timer: NodeJS.Timeout };
+type Gate = { ask: PendingGate; finish: (outcome: GateOutcome) => void };
 
 export type CaseRunnerInit = {
   db: Db;
@@ -58,6 +74,9 @@ export class CaseRunner {
   private sessionId = randomUUID();
   private chat: ChatLine[] = [];
   private pending = new Map<string, Pending>();
+  private gates = new Map<string, Gate>();
+  /** 闸门赶在 PreToolUse 之前落定时，判决先搁这儿，等 started 事件把它带上。 */
+  private preGated = new Map<string, GateOutcome>();
   private busy = false;
   private ended = false;
   private status: Snapshot['sessionStatus'] = 'idle';
@@ -79,6 +98,7 @@ export class CaseRunner {
     this.allowed = new Set([
       ...STRUCTURAL,
       toolName('ask_operator'),
+      ...CHORES,
       ...(this.demoMode ? [DEMO_TOOL] : READONLY_BUILTINS),
     ]);
   }
@@ -120,6 +140,7 @@ export class CaseRunner {
           busy: this.busy,
           chat: this.chat,
           pending: [...this.pending.values()].map((p) => p.ask),
+          gates: [...this.gates.values()].map((g) => g.ask),
           sessionStatus: this.status,
         },
       );
@@ -155,7 +176,12 @@ export class CaseRunner {
         // 真项目要加载磁盘上的 settings，否则「继承该项目的 skill 与 MCP」只是句话：
         // **必须含 `project` 才会读该项目的 CLAUDE.md**（SDK 契约），
         // 而项目约束正是排查时最不该缺的上下文。演示模式反过来要可复现，用隔离模式。
-        // 放开的是**上下文**不是权限——每次调用照样过 canUseTool 的白名单。
+        //
+        // ⚠️ 这不只是放开上下文：磁盘 settings 里的 `hooks` 是 shell 命令，**加载即执行**
+        // （实测 SessionStart 在第一次工具调用之前就跑了），项目 `.mcp.json` 同理直接拉起进程。
+        // 两者都绕过 PreToolUse / canUseTool / disallowedTools——三分法只管得住 agent
+        // 自己发出的调用。真正的信任边界是「立案时选的那个目录」，等价于在那儿直接跑 claude。
+        // 尚未缓解，见 ui.md §12。
         settingSources: this.demoMode ? [] : ['user', 'project', 'local'],
         // 项目起点决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
         cwd: this.intake.projectRoot ?? undefined,
@@ -163,18 +189,29 @@ export class CaseRunner {
         effort: (this.init.agent.effort as never) ?? undefined,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: this.init.promptText },
         includeHookEvents: true,
+        // 硬边界不靠 canUseTool 一个人守：项目自己的 settings 里有 allow 规则时它不会被问到
+        disallowedTools: NEVER_ALLOWED,
         mcpServers: {
           inquestry: createInquestryMcpServer(session.store),
           ...(this.demoMode ? { datasource: createDemoDataSource() } : {}),
         },
-        canUseTool: async (name) =>
-          this.allowed.has(name)
-            ? { behavior: 'allow' as const, updatedInput: undefined as never }
+        canUseTool: async (name, input, opts) => {
+          const verdict = this.classify(name);
+          if (verdict === 'allow') return { behavior: 'allow' as const };
+          if (verdict === 'deny') {
+            const message = hardDenyMessage(name);
+            this.applyGate(opts.toolUseID, { decision: 'deny', message });
+            // deny + message 不中断 turn（D6）：agent 就地换个手段接着查
+            return { behavior: 'deny' as const, message };
+          }
+          const outcome = await this.gate(name, input, opts);
+          return outcome.decision === 'deny'
+            ? { behavior: 'deny' as const, message: outcome.message! }
             : {
-                behavior: 'deny' as const,
-                // deny + message 不中断 turn（D6）：agent 就地换个手段接着查
-                message: `本次排查不要用 ${name}。查库、写操作、敏感数据一律用 ask_operator 交给人执行。`,
-              },
+                behavior: 'allow' as const,
+                updatedInput: outcome.input ? (JSON.parse(outcome.input) as Record<string, unknown>) : input,
+              };
+        },
         hooks: {
           PreToolUse: [{ hooks: [async (input, id) => this.onToolStart(input, id)] }],
           PostToolUse: [{ hooks: [async (input, id) => this.onToolEnd(input, id)] }],
@@ -223,6 +260,8 @@ export class CaseRunner {
       p.resolve({ id: p.ask.id, statement: p.ask.statement, answer: '(案子已关闭，这条回填作废)' });
     }
     this.pending.clear();
+    // 闸门同理：它挂着的也是一个 agent 那侧在等的 Promise
+    for (const g of [...this.gates.values()]) g.finish({ decision: 'deny', message: '案子已关闭。' });
     this.endOnce('ended');
     this.q?.close();
     this.q = null;
@@ -237,6 +276,8 @@ export class CaseRunner {
   }
 
   async interrupt() {
+    // 先散闸门再中断：还卡在闸门上的调用会挡住 interrupt 想收的那一轮
+    for (const g of [...this.gates.values()]) g.finish({ decision: 'deny', message: '这一轮已被中断。' });
     // Stop 传 cancel_queued（D7）；SDK 若不支持这个签名就退回无参 interrupt
     const q = this.q as unknown as { interrupt?: (o?: unknown) => Promise<unknown> } | null;
     await q?.interrupt?.({ cancel_queued: true }).catch(() => undefined);
@@ -252,6 +293,87 @@ export class CaseRunner {
     this.pending.delete(reply.id);
     p.resolve(reply);
     this.onChange();
+  }
+
+  /** 待办栏上的两个控制手势最终都落到这里（ui.md §8.2）。 */
+  decideGate(d: GateDecision) {
+    this.gates.get(d.id)?.finish(
+      d.action === 'deny'
+        ? { decision: 'deny', message: d.message }
+        : d.action === 'rewrite'
+          ? { decision: 'rewrite', input: d.input }
+          : { decision: 'allow' },
+    );
+  }
+
+  /**
+   * ②档闸门：把一次调用挂起，等人放行 / 改写 / 拒绝，到点按预设放行。
+   *
+   * 与 ①档一样只能待在 main —— renderer 关掉了，这个 Promise 也得有人负责落地。
+   */
+  private gate(
+    toolName: string,
+    input: Record<string, unknown>,
+    opts: { toolUseID: string; agentID?: string; signal: AbortSignal; title?: string; decisionReason?: string },
+  ): Promise<GateOutcome> {
+    const id = opts.toolUseID;
+    const askedAt = Date.now();
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (outcome: GateOutcome) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.gates.delete(id);
+        this.applyGate(id, outcome);
+        this.onChange();
+        resolve(outcome);
+      };
+      const timer = setTimeout(() => finish({ decision: 'timeout' }), GATE_TIMEOUT_MS);
+
+      this.gates.set(id, {
+        ask: {
+          id,
+          toolName,
+          input: JSON.stringify(input ?? {}, null, 2),
+          agentId: opts.agentID,
+          reason: opts.title ?? opts.decisionReason,
+          askedAt,
+          deadline: askedAt + GATE_TIMEOUT_MS,
+        },
+        finish,
+      });
+      // 中断当前轮（D7）时闸门也得散：留着它 agent 那侧的 Promise 就永远悬着
+      opts.signal.addEventListener('abort', () => finish({ decision: 'deny', message: '这一轮已被中断。' }), {
+        once: true,
+      });
+      this.onChange();
+    });
+  }
+
+  /**
+   * 把闸门判决落进那次调用。
+   *
+   * PreToolUse 与 canUseTool 谁先到不保证：调用行还没有就先搁着，让 started 事件带上判决；
+   * 已经有了就补一条 gated。判断与写入之间不能有 await，否则两条路会挑同一个空档各写一遍。
+   */
+  private applyGate(callId: string, outcome: GateOutcome) {
+    if (!this.session) return;
+    if (!this.session.hasToolCall(callId)) {
+      this.preGated.set(callId, outcome);
+      return;
+    }
+    this.session.recordGate({ callId, gate: outcome });
+    this.closeIfDenied(callId, outcome);
+  }
+
+  /**
+   * 被拒的调用不会有 PostToolUse，不在这里收尾它就永远挂在 `pending` 上。
+   * 留话原样落 blob —— 它就是 agent 收到的那份工具结果，节点上要看得见被拒的理由。
+   */
+  private closeIfDenied(callId: string, outcome: GateOutcome) {
+    if (outcome.decision !== 'deny') return;
+    this.session?.recordToolEnd({ callId, output: `(被拒) ${outcome.message ?? ''}`, status: 'denied' });
   }
 
   private askOperator(args: {
@@ -278,17 +400,48 @@ export class CaseRunner {
     });
   }
 
+  private classify(toolName: string): 'allow' | 'deny' | 'gate' {
+    if (this.allowed.has(toolName)) return 'allow';
+    if (NEVER_ALLOWED.includes(toolName)) return 'deny';
+    return 'gate';
+  }
+
+  /**
+   * PreToolUse 既是记账口，也是**闸门真正的入口**。
+   *
+   * 实跑打出来的：`canUseTool` 只在 backend 自己决定要问的时候才被调用——只读工具按默认模式
+   * 直接放行，白名单根本轮不到发言（第一次跑出来 Read 是 `gate_decision='auto'` 就是这么来的）。
+   * 而 PreToolUse 每次调用都到，所以要拦谁得在这里说：回 `ask` 才会把它推到 `canUseTool` 上去。
+   *
+   * 放行一档回空而不是回 `allow`：项目自己的 settings 里若有 deny 规则（比如不许读 .env），
+   * 明写 allow 会把那条规则盖掉——这里要的是别多管，不是抢权。
+   */
   private onToolStart(input: unknown, toolUseID: string | undefined) {
     const i = input as { tool_name?: string; tool_input?: unknown; agent_id?: string };
-    if (!i.tool_name || STRUCTURAL.has(i.tool_name) || !toolUseID) return {};
+    if (!i.tool_name || !toolUseID) return {};
+    const verdict = this.classify(i.tool_name);
+    // 结构工具就是账本本身，不给自己记一笔
+    if (STRUCTURAL.has(i.tool_name)) return {};
+
+    // hook 的 deny 会绕过 canUseTool（SDK 契约），所以硬边界的记账只能落在这一侧
+    const gate: GateOutcome | undefined =
+      verdict === 'deny'
+        ? { decision: 'deny', message: hardDenyMessage(i.tool_name) }
+        : this.preGated.get(toolUseID);
+    this.preGated.delete(toolUseID);
+
     this.session?.recordToolStart({
       callId: toolUseID,
       toolName: i.tool_name,
       input: i.tool_input,
       agentId: i.agent_id,
+      gate,
     });
+    if (gate) this.closeIfDenied(toolUseID, gate);
     this.onChange();
-    return {};
+
+    if (gate) return hookDecision(gate.decision === 'deny' ? 'deny' : 'allow', gate.message);
+    return verdict === 'gate' ? hookDecision('ask', '这次排查里它要过一道人工闸门。') : {};
   }
 
   private onToolEnd(input: unknown, toolUseID: string | undefined) {
@@ -316,6 +469,16 @@ export class CaseRunner {
     this.chat.push({ role, text, at: Date.now() });
     this.onChange();
   }
+}
+
+function hookDecision(permissionDecision: 'allow' | 'deny' | 'ask', permissionDecisionReason?: string) {
+  return {
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason },
+  } as never;
+}
+
+function hardDenyMessage(name: string) {
+  return `本次排查不给 ${name}。跑命令、写盘、动生产数据一律用 ask_operator 交给人执行——把要跑的语句、为什么跑、预期看到什么写进去。`;
 }
 
 /**

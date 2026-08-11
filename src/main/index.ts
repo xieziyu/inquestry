@@ -17,6 +17,7 @@ import { CaseRunner } from './case-runner.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
+  type GateDecision,
   type IntakeDraft,
   type IntakeOptions,
   type IntakeResult,
@@ -254,6 +255,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('case:send', (_e, text: string) => runner!.send(text));
   ipcMain.handle('case:interrupt', () => runner!.interrupt());
   ipcMain.handle('case:answerOperator', (_e, reply: OperatorReply) => runner!.answerOperator(reply));
+  ipcMain.handle('case:decideGate', (_e, d: GateDecision) => runner!.decideGate(d));
   ipcMain.handle('case:snapshot', () => snapshot());
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) => runner!.excerpt(callId, anchor));
 
@@ -296,9 +298,11 @@ app.whenReady().then(async () => {
       if (process.env.INQUESTRY_SHOT_QUIT) app.quit();
     });
 
-    // 无人值守时代替操作员回填
+    // 无人值守时代替操作员回填。闸门也要一起放行：否则跑到第一个 ②档就停在那儿，
+    // 而它三分钟后才自动放行，截图早就拍完了
     if (process.env.INQUESTRY_AUTO_OPERATOR) {
       setInterval(() => {
+        for (const gate of snapshot().gates) runner!.decideGate({ id: gate.id, action: 'allow' });
         for (const ask of snapshot().pending) {
           runner!.answerOperator({
             id: ask.id,

@@ -117,6 +117,8 @@ stdin 喂 JSON 消息、stdout 吐事件流，长驻进程，多轮对话。上�
 
 每次工具调用前回调到 UI，参数含 `toolName` / `input` / `toolUseID` / `agentID`（子 agent 来源，`undefined` 为主线）/ `title` / `displayName` / `description` / `suggestions` / `signal`。
 
+> ⚠️ 接起来才发现：**"每次工具调用前"要打个折扣**——backend 觉得不用问就不会问，只读工具按默认模式直接放行，`canUseTool` 根本不到。真正每次都到的是 `PreToolUse` hook，闸门的入口在那儿（[ui](ui.md) §8.1）。
+
 | 返回 | 效果 |
 |---|---|
 | `{behavior:'allow', updatedInput}` | **可改写参数再放行**——查询语句写窄了，直接改了让它跑 |
