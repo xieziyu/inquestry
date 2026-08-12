@@ -5,7 +5,14 @@
  * 正是 duetlens 上「Discussion 栏静默为空」那种最难发现的 bug。等量级上来再换增量。
  */
 
-import type { AgentChoice, CaseMeta, IncidentEntry, Snapshot, StepNode } from '../../shared/ipc.js';
+import type {
+  AgentChoice,
+  CaseMeta,
+  IncidentEntry,
+  ReportStepRef,
+  Snapshot,
+  StepNode,
+} from '../../shared/ipc.js';
 import { readBlobHead } from './blobs.js';
 import type { Db } from './database.js';
 import { reportSections } from './queries.js';
@@ -184,14 +191,23 @@ export function buildSnapshot(
       }),
     ),
     report: {
-      rootCause: rep.rootCause?.verdict_text ?? null,
+      // 根因**连它的 id 一起带**：报告屏按形态组装章节时要认出"链条末端是哪一环"，
+      // 而挑根因的选择器只此一条（queries.reportSections）——renderer 再挑一次的话，
+      // 报告的结构与内容会指着两条不同的根因，且毫无报错
+      rootCause: rep.rootCause
+        ? {
+            stepId: rep.rootCause.step_id,
+            text: rep.rootCause.verdict_text,
+            confidence: rep.rootCause.confidence,
+          }
+        : null,
       impact: rep.impact?.verdict_text ?? null,
       // 应然实然跟着根因那一步走：根因换人了，这对也跟着换，不会留下一段没有出处的对照
       // 纯空白按没有算，否则报告里那一栏是视觉上的空白，而不是"没有这一栏"
       expected: rep.rootCause?.expected?.trim() || null,
       actual: rep.rootCause?.actual?.trim() || null,
-      leftovers: rep.leftovers.length,
-      refuted: rep.refuted.length,
+      leftovers: rep.leftovers.map(stepRef),
+      refuted: rep.refuted.map(stepRef),
     },
   };
 }
@@ -211,6 +227,21 @@ function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
       verdictShape: readVerdictShape(db, caseId),
     }
   );
+}
+
+/** 报告的遗留疑点与排除矩阵只用到这几项；`superseded_by` 只有排除矩阵那份有。 */
+function stepRef(r: {
+  step_id: string;
+  direction: string | null;
+  verdict_text: string;
+  superseded_by?: string | null;
+}): ReportStepRef {
+  return {
+    stepId: r.step_id,
+    direction: r.direction,
+    text: r.verdict_text,
+    supersededBy: r.superseded_by ?? null,
+  };
 }
 
 function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {

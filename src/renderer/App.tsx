@@ -13,12 +13,14 @@ import {
   type StepNode,
   type VerdictShape,
 } from '../shared/ipc.js';
+import { SHAPE_COPY } from '../shared/report.js';
 import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
 import { trackLayout, type TrackRow } from './track.js';
 import { GateCard } from './GateCard.js';
 import { Intake } from './Intake.js';
 import { isPlainKey, isTyping } from './keys.js';
 import { PendingCard } from './PendingCard.js';
+import { Report } from './Report.js';
 
 declare global {
   interface Window {
@@ -26,11 +28,16 @@ declare global {
   }
 }
 
-type View = 'investigation' | 'incident';
-
 export function App() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
-  const [view, setView] = useState<View>('investigation');
+  /**
+   * 报告开着的是**哪个案子**的（D21：调查台与报告是两个屏，不是同屏两个 tab）。
+   *
+   * 记案子而不是记一个 `screen` 枚举：切到别的案子时报告屏得自己让开——
+   * 留着的话，屏幕上是 B 案的标题配 A 案的章节，而报告正是这个工具唯一交出去的东西。
+   * 与确认条按 caseId 记是同一条理由，只是那一条的代价大得多。
+   */
+  const [reportOf, setReportOf] = useState<string | null>(null);
   /**
    * 输入草稿**按案子分开存**。共用一个的话，在 A 案写到一半切到 B 案，输入框里还是那段字，
    * 一发送就把 A 的线索写进了 B 的会话——串案而且毫无提示。
@@ -243,13 +250,21 @@ export function App() {
    * 收掉确认条而什么都没发生的话，人会以为已经结案了。
    */
   const doClose = async (kind: 'closed' | 'aborted', id: string, shape: VerdictShape) => {
+    // 落地之后直接翻到报告屏：收尾之后这个案子能做的只剩看和导出，
+    // 而报告装成什么样正是刚才那一下决定的——让人当场看见自己按下去的后果
     if (kind === 'aborted') {
       const ok = await window.inquestry.archiveCase(id).catch(() => false);
-      if (ok) return setConfirm(null);
+      if (ok) {
+        setConfirm(null);
+        return setReportOf(id);
+      }
       return setNotice('归档没执行：这个案子已经不是当前案子了。切回去再试一次。');
     }
     const r = await window.inquestry.closeCase(id, shape).catch(() => null);
-    if (r?.ok) return setConfirm(null);
+    if (r?.ok) {
+      setConfirm(null);
+      return setReportOf(id);
+    }
     setNotice(
       r && !r.ok && r.missing.length
         ? `结案没执行：刚才这会儿又缺了${r.missing.map(closingLabel).join('与')}——多半是那一步刚被推翻。补上再来。`
@@ -273,6 +288,15 @@ export function App() {
     setNotice('刚才那条没处置成功：可能案子已经切走了，也可能它已经到点自动放行。切回那个案子再看一眼，刚才填的还在。');
   };
 
+  /**
+   * 报告是**另一个屏**，整屏换掉（D21）：主角、密度、能做的事都不一样。
+   * 挂在这儿而不是塞进主区，是为了让调查台的顶栏与底部输入带一并让开——
+   * 报告上只有导出，留着"停止 / 结案 / 归档"会让人以为这份还能改。
+   */
+  if (reportOf === openCase) {
+    return <Report snap={snap} onBack={() => setReportOf(null)} />;
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -281,15 +305,16 @@ export function App() {
           <span className="case">{snap.case.title}</span>
         </div>
         <CaseMetaStrip meta={snap.case} />
-        <div className="tabs">
-          <button className={view === 'investigation' ? 'on' : ''} onClick={() => setView('investigation')}>
-            排查时间线
-          </button>
-          <button className={view === 'incident' ? 'on' : ''} onClick={() => setView('incident')}>
-            事故时间线 <span className="count">{snap.incident.length}</span>
-          </button>
-        </div>
+        {/* 两条时间线不是顶栏的两个 tab：排查线属于调查台，事故线属于报告（ui.md §1）。
+            它们是同一批证据的两次投影，这是数据模型的事实，不该翻译成一对开关 */}
         <div className="status">
+          <button
+            className="toreport"
+            title={frozen ? '这个案子已经收尾，报告是冻住的那一份' : '按现有数据预览报告；结案那一下才冻'}
+            onClick={() => setReportOf(openCase)}
+          >
+            报告{!frozen && <em>预览</em>}
+          </button>
           {todos.length > 0 && <span className="pill todo">等你 {todos.length}</span>}
           {elsewhere.length > 0 && (
             <button
@@ -377,6 +402,7 @@ export function App() {
       {frozen && (
         <div className="banner frozen">
           <span>{frozenText(snap.case)}</span>
+          <button onClick={() => setReportOf(openCase)}>看报告</button>
         </div>
       )}
 
@@ -424,11 +450,7 @@ export function App() {
           </div>
         )}
 
-        {view === 'investigation'
-          ? <InvestigationTimeline steps={snap.steps} onExcerpt={showExcerpt} />
-          : <IncidentTimeline snap={snap} onExcerpt={showExcerpt} />}
-
-        {view === 'investigation' && <ReportStrip snap={snap} />}
+        <InvestigationTimeline steps={snap.steps} onExcerpt={showExcerpt} />
       </main>
 
       <footer className="dock">
@@ -512,18 +534,6 @@ function closingLabel(k: ClosingStepKind) {
 }
 
 /**
- * 五种结论形态（D25 / overview §6.1.1）。文案说的是**什么时候是它**，不是术语解释：
- * 人在确认条上停留的那几秒里要能对着自己的案子选，而不是先学一遍名词。
- */
-const SHAPE_COPY: Record<VerdictShape, { label: string; when: string; body: string }> = {
-  sequence: { label: '时序型', when: '顺序 / 竞态错了', body: '事故时间线' },
-  state: { label: '状态型', when: '某个东西一直就是错的', body: '应然 / 实然对照' },
-  chain: { label: '因果链型', when: '一处变更连锁放大', body: '因果链 + 最弱一环' },
-  distribution: { label: '分布型', when: '问题只在某一小撮上', body: '归因切分' },
-  open: { label: '未决型', when: '没查出来', body: '排除矩阵 + 遗留疑点' },
-};
-
-/**
  * 结案那一下选报告形态。**它是这一步唯一需要人做的判断**——
  * agent 声明过就预选它的，没声明就预选推断值，人不动手也能一路按到底。
  *
@@ -581,7 +591,7 @@ function shapeSourceLabel(source: 'agent' | 'inferred' | 'operator') {
 function confirmText(kind: 'closed' | 'aborted', snap: Snapshot) {
   if (kind === 'closed') {
     return `结案会冻结这个案子：不能再开会话，只能导出。根因取的是当前置信度最高的那条结论${
-      snap.report.rootCause ? `（${snap.report.rootCause.slice(0, 40)}…）` : '——目前一条已证实的都没有'
+      snap.report.rootCause ? `（${snap.report.rootCause.text.slice(0, 40)}…）` : '——目前一条已证实的都没有'
     }。`;
   }
   return '归档 = 明写放弃这次排查。已经查到的证据一条都不删，仍能导出残报告——但那份报告没有根因栏，主体是排除掉的方向与遗留疑点。';
@@ -783,69 +793,6 @@ function StepCard({
             ))}
         </div>
       )}
-    </section>
-  );
-}
-
-function IncidentTimeline({
-  snap,
-  onExcerpt,
-}: {
-  snap: Snapshot;
-  onExcerpt: (callId: string, anchor: string | null, title: string) => void;
-}) {
-  if (!snap.incident.length) {
-    return <div className="empty">还没有带时间的证据。事故时间线由 occurredAt 投影而来，排查早期通常是空的。</div>;
-  }
-  return (
-    <div className="incident">
-      <p className="note">
-        这条线不是 agent 写的，是对 {snap.incident.length} 条证据按事件真实发生时间排的序。
-        被推翻的 step 提供的证据同样在列——结论可以被推翻，事实不会。
-      </p>
-      {snap.incident.map((r, i) => (
-        <div key={i} className="row" onClick={() => onExcerpt(r.callId, r.anchor, r.claim)}>
-          <span className="when">{r.occurredAtRaw}</span>
-          <span className="actor">{r.actor ?? ''}</span>
-          <span className="claim">{r.claim}</span>
-          <span className={`src ${r.stepStatus}`}>{r.stepId}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ReportStrip({ snap }: { snap: Snapshot }) {
-  if (!snap.report.rootCause && !snap.report.impact) return null;
-  const { expected, actual } = snap.report;
-  return (
-    <section className="report">
-      <h4>报告投影</h4>
-      {snap.report.rootCause && (
-        <p>
-          <b>根因</b>
-          {snap.report.rootCause}
-        </p>
-      )}
-      {/* 状态型报告的主体就是这一对（D25）。它挂在根因那一步上，
-          所以根因换了人这里跟着换，不会留下一段没有出处的对照 */}
-      {expected && actual && (
-        <p className="contrast">
-          <b>本该</b>
-          {expected}
-          <b>实际</b>
-          {actual}
-        </p>
-      )}
-      {snap.report.impact && (
-        <p>
-          <b>影响面</b>
-          {snap.report.impact}
-        </p>
-      )}
-      <p className="meta">
-        遗留疑点 {snap.report.leftovers} · 走错的分支 {snap.report.refuted}
-      </p>
     </section>
   );
 }

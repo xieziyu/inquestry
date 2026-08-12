@@ -94,6 +94,13 @@ body {
 .banner.confirm .shape .warn { color: var(--warn); margin-left: 8px; }
 /* 已收尾：陈述一个状态，不是坏消息也不是待办——两个语义色都不该动 */
 .banner.frozen { background: var(--panel); color: var(--dim); border-bottom: 1px solid var(--line); }
+.banner.frozen { display: flex; align-items: center; gap: 12px; }
+.banner.frozen span { flex: 1; }
+.banner.frozen button {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+}
+.toreport em { font-style: normal; color: var(--dim); font-size: 11px; margin-left: 5px; }
 
 /* ── 案件切换栏 ──
    切换只换投影不中断任何一个；chip 上的「等你 N」是并发排查里唯一能看见
@@ -347,3 +354,119 @@ button.primary small { opacity: .6; font-weight: 400; }
 .casemeta code { font-family: var(--mono); }
 .intake input.bad { border-color: var(--bad); }
 .intake .hint.err { color: var(--bad); }
+
+/* ── 报告屏（D21 / D22） ─────────────────────────────────────────────
+   与调查台**同一套色板**，差别只来自密度与字号（ui.md §1 那张表）：
+   正文 13.5→15.5px、页边距 14→60px、小节间距 44px。一深一浅会被读成两个应用。
+
+   单列长页：**没有 tab、没有折叠、没有内部滚动**。滚的只有整屏这一个容器——
+   小节各自带滚动条的话，长图导出拍到的就是各滚一半的半成品（ui.md §7.2）。 */
+.reportscreen { height: 100vh; overflow-y: auto; background: var(--bg); }
+
+/* 锚点导航：点击只滚动，不隐藏任何东西；导出视图里整条移除 */
+.anchors {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 60px 10px 88px;           /* 让开 macOS 交通灯 */
+  background: var(--panel); border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+.anchors a, .anchors button { -webkit-app-region: no-drag; }
+.anchors a { color: var(--dim); font-size: 12.5px; text-decoration: none; }
+.anchors a:hover { color: var(--text); }
+.anchors .back {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; margin-right: 4px;
+}
+
+/* 宽度对齐长图导出的 1240px：所见即所得，同一份内容在屏幕上和图片里断行一致 */
+.paper { max-width: 1240px; margin: 0 auto; padding: 44px 60px 96px; font-size: 15.5px; line-height: 1.72; }
+.paper p { max-width: 76ch; }
+.paper header h1 { margin: 0; font-size: 22px; font-weight: 600; }
+.paper header .question { margin: 10px 0 0; color: var(--dim); }
+.paper header .stamp { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); display: flex; gap: 10px; flex-wrap: wrap; }
+.paper header .stamp code { font-family: var(--mono); color: var(--text); }
+.paper header .preview, .paper header .aborted {
+  margin: 16px 0 0; padding-left: 14px; border-left: 2px solid var(--line);
+  font-size: 13.5px; color: var(--dim);
+}
+.paper header .aborted { border-left-color: var(--dim); color: var(--text); }
+
+.paper section { margin-top: 44px; }
+.paper h2 {
+  display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line); font-size: 15.5px; font-weight: 600;
+}
+/* 每节右侧标注哪来的：把「报告是投影」从一句承诺变成读者能自己核的东西 */
+.paper h2 em { margin-left: auto; font-style: normal; font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+.paper .big { margin: 0; font-size: 26px; line-height: 1.4; font-weight: 600; }
+.paper .conf { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px; color: var(--dim); }
+/* 空的一栏也要写出来：整节消失读起来像"没这回事"，写「无」才是"查过，没有" */
+.paper .none { margin: 0; color: var(--dim); }
+
+.paper .contrast { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 16px; }
+.paper .contrast > div { border-left: 2px solid var(--line); padding-left: 16px; }
+.paper .contrast .is { border-left-color: var(--bad); }
+.paper .contrast .k { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.paper .contrast p { margin: 8px 0 0; }
+
+/* 事故时间线画成真正的时间轴：一条竖线 + 圆点（ui.md §6）。
+   竖线只在时间轴内部出现，与「全屏唯一的曲线表示推翻」不冲突 */
+.paper .axis { list-style: none; margin: 16px 0 0; padding: 0 0 0 26px; position: relative; }
+.paper .axis::before { content: ''; position: absolute; left: 4px; top: 10px; bottom: 10px; width: 1px; background: var(--line); }
+.paper .axis li { position: relative; display: grid; grid-template-columns: 190px 1fr auto; gap: 16px; padding: 8px 0; }
+.paper .axis .dot {
+  position: absolute; left: -26px; top: 14px; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--bg);
+}
+/* 空心 = 这条证据来自一个已被推翻的判定。事实照旧在列（结论可以被推翻，事实不会），
+   但读者该看得出它出自哪种判定 */
+.paper .axis li.refuted .dot, .paper .axis li.superseded .dot { background: var(--bg); border: 1px solid var(--dim); }
+.paper .axis .when { font-family: var(--mono); font-size: 13px; color: var(--dim); }
+.paper .axis .what b { margin-right: 8px; }
+.paper .axis .from { font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+
+.paper .chain { list-style: none; margin: 16px 0 0; padding: 0; }
+.paper .chain li { display: flex; gap: 14px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.paper .chain .n { font-family: var(--mono); color: var(--dim); min-width: 38px; }
+.paper .chain .what { flex: 1; }
+.paper .chain .what b { display: block; font-weight: 600; font-size: 14px; }
+.paper .chain .conf { margin: 0; font-family: var(--mono); font-size: 12.5px; color: var(--dim); }
+.paper .chain .tag { font-size: 11px; border: 1px solid var(--line); color: var(--dim); padding: 1px 8px; border-radius: 4px; }
+.paper .chain li.weak .tag { border-color: var(--bad); color: var(--bad); }
+/* 根因那一环的标签不跟着"最弱"变红：同一环可能既是根因又是最弱，两件事得分得开 */
+.paper .chain li .tag.root { border-color: var(--accent); color: var(--accent); }
+
+.paper .split { list-style: none; margin: 16px 0 0; padding: 0; }
+.paper .split li { display: flex; gap: 16px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.paper .split .who { font-family: var(--mono); min-width: 200px; }
+.paper .split .n { color: var(--accent); font-size: 12.5px; min-width: 84px; }
+.paper .split .claims { flex: 1; color: var(--dim); font-size: 13px; }
+
+.paper .matrix { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14.5px; }
+.paper .matrix th {
+  text-align: left; padding: 0 24px 8px 0; border-bottom: 1px solid var(--line);
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); font-weight: 600;
+}
+.paper .matrix td { padding: 11px 24px 11px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.paper .matrix td em { font-style: normal; color: var(--bad); font-size: 12.5px; margin-left: 8px; }
+
+/* 走错的分支强制留在排查路径里，划掉 + 标注——删掉它就成了假历史 */
+.paper .path { list-style: none; margin: 16px 0 0; padding: 0; }
+.paper .path li { display: flex; gap: 14px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.paper .path .n { font-family: var(--mono); color: var(--dim); min-width: 38px; }
+.paper .path li.confirmed .n { color: var(--accent); }
+.paper .path .what { flex: 1; }
+.paper .path .what em { font-style: normal; color: var(--dim); margin-left: 12px; }
+.paper .path li.refuted .what, .paper .path li.superseded .what { text-decoration: line-through; color: var(--dim); }
+.paper .path .by { color: var(--bad); font-size: 12.5px; }
+.paper .path .cnt { font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+
+.paper .notes { margin: 16px 0 0; padding-left: 20px; }
+.paper .notes li { margin: 10px 0; max-width: 76ch; }
+.paper .notes b { display: block; font-weight: 600; }
+
+.paper footer {
+  margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 12px; color: var(--dim);
+}

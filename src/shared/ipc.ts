@@ -257,6 +257,14 @@ export type CaseMeta = {
   verdictShape: VerdictShape | null;
 };
 
+/** 报告里只用到一步的判定与命题时的窄投影（遗留疑点 / 排除矩阵）。 */
+export type ReportStepRef = {
+  stepId: string;
+  direction: string | null;
+  text: string;
+  supersededBy: string | null;
+};
+
 export type Snapshot = {
   case: CaseMeta | null;
   /** 所有案子，含别处的待办数。为 null 的 `case` 配非空 `cases` = 正在立新案，切换栏照常在。 */
@@ -280,8 +288,14 @@ export type Snapshot = {
   closingGaps: ClosingStepKind[];
   /** 结案确认条的预选形态。案子已冻结时它没有意义——那时看 `case.verdictShape`。 */
   shapeSuggestion: ShapeSuggestion;
+  /**
+   * 报告那几栏的投影。**装的是「哪一步算数」的答案，不是原料**：
+   * 挑根因的选择器只有 `queries.reportSections()` 那一条，renderer 不再挑第二次
+   * （另起一条的后果见 `data-model.md`：报告的结构与内容会指着两条不同的根因）。
+   * 章节怎么组装则在 `shared/report.ts`，报告屏与两种导出共用。
+   */
   report: {
-    rootCause: string | null;
+    rootCause: { stepId: string; text: string; confidence: number | null } | null;
     impact: string | null;
     /**
      * 状态型报告的主体（D25）：应然与实然的一对。挂在根因那一步上，
@@ -289,8 +303,8 @@ export type Snapshot = {
      */
     expected: string | null;
     actual: string | null;
-    leftovers: number;
-    refuted: number;
+    leftovers: ReportStepRef[];
+    refuted: ReportStepRef[];
   };
 };
 
@@ -309,7 +323,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   chat: [],
   closingGaps: [],
   shapeSuggestion: { shape: 'open', source: 'inferred', rootStepId: null, stateFillable: false },
-  report: { rootCause: null, impact: null, expected: null, actual: null, leftovers: 0, refuted: 0 },
+  report: { rootCause: null, impact: null, expected: null, actual: null, leftovers: [], refuted: [] },
 };
 
 export type InquestryApi = {

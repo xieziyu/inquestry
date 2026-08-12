@@ -363,13 +363,17 @@ app.whenReady().then(async () => {
         await writeFile(file!, img.toPNG());
         console.log('[shot]', file);
       }
-      if (process.env.INQUESTRY_SHOT_INCIDENT) {
-        await win!.webContents.executeJavaScript(
-          `[...document.querySelectorAll('.tabs button')].find(b=>b.textContent.includes('事故'))?.click()`,
+      // 事故时间线现在属于报告屏（D21），拍它就是拍报告。
+      // **点不到入口要出声**：`?.click()` 静默跳过的话，拍出来的是调查台，
+      // 而文件名与日志都说这是报告——一张认错了的截图比没有更糟
+      if (process.env.INQUESTRY_SHOT_REPORT) {
+        const opened = await win!.webContents.executeJavaScript(
+          `!!document.querySelector('.toreport') && (document.querySelector('.toreport').click(), true)`,
         );
+        if (!opened) throw new Error('[shot] 进不去报告屏：没找到 .toreport');
         await new Promise((r) => setTimeout(r, 400));
-        await writeFile(process.env.INQUESTRY_SHOT_INCIDENT, (await win!.webContents.capturePage()).toPNG());
-        console.log('[shot] incident');
+        await writeFile(process.env.INQUESTRY_SHOT_REPORT, (await win!.webContents.capturePage()).toPNG());
+        console.log('[shot] report');
       }
       if (process.env.INQUESTRY_SHOT_QUIT) app.quit();
     });
