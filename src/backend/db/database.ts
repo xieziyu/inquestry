@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { SCHEMA_SQL } from './schema.js';
 
-/** 2：立案面板的字段（cases 的项目起点与基准日、sessions.effort、steps 的应然实然）。 */
-export const SCHEMA_VERSION = 2;
+/** 3：steps.shape —— agent 声明的报告形态（v2 只有 cases.verdict_shape 这个终态）。 */
+export const SCHEMA_VERSION = 3;
 
 export type Db = Database.Database;
 
@@ -40,7 +40,7 @@ function archiveIfStale(file: string) {
   const version = Number(probe.pragma('user_version', { simple: true }));
   // `user_version` 的默认值就是 0，所以 0 既可能是一个空文件，也可能是一个没打过版本号的老库。
   // 靠有没有应用表来分：**有表的 0 号库必须按不兼容处理**——`CREATE TABLE IF NOT EXISTS`
-  // 不会给已存在的表补列，放过它只会把老结构标成 v2，等第一次查 incident_date 才炸。
+  // 不会给已存在的表补列，放过它只会把老结构标成当前版本，等第一次查新列才炸。
   const populated =
     !!probe
       .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('events','cases') LIMIT 1`)

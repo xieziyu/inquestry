@@ -1,16 +1,19 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
+  VERDICT_SHAPES,
   type CallNode,
   type CaseBrief,
   type CaseMeta,
   type ClosingStepKind,
   type InquestryApi,
   type PendingAsk,
+  type ShapeSuggestion,
   type Snapshot,
   type StepNode,
+  type VerdictShape,
 } from '../shared/ipc.js';
-import { draftKey, pruneDrafts, type CardDrafts } from './drafts.js';
+import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
 import { GateCard } from './GateCard.js';
 import { Intake } from './Intake.js';
 import { isPlainKey, isTyping } from './keys.js';
@@ -50,7 +53,30 @@ export function App() {
    * 确认文案讲的还是 A 的事。这是本页唯一一个"点下去就没有回头路"的手势，
    * 它是唯一必须自己带上下文的。
    */
-  const [confirm, setConfirm] = useState<{ caseId: string; kind: 'closed' | 'aborted' } | null>(null);
+  const [confirm, setConfirm] = useState<{
+    caseId: string;
+    kind: 'closed' | 'aborted';
+    /**
+     * 报告按哪种形态装（D25）。**跟着这条 state 走，不每帧从快照取**：
+     * 快照每 60ms 一轮，而人正在这条确认条上挑——取快照的话手上选的会被下一轮冲掉。
+     * 归档那一档没有它：残报告强制是未决型，不给选（ui.md §8.4）。
+     */
+    shape?: VerdictShape;
+    /**
+     * 弹出那一刻 main 算出来的**整份**建议，原样冻住。
+     *
+     * 只冻形态、别的（出处、状态型填不填得出来）现取的话，各项会指着不同的根因：
+     * 屏幕上是弹出时那个推断值，标签却成了"agent 判定"——而 agent 声明的是另一种形态；
+     * 更糟的一种是根因整个换了人，预选跟着换成了新根因的 `state`，
+     * "这一块会是空的"却按旧根因判定成不必提醒，人于是在毫不知情下冻出一份空主体报告。
+     */
+    suggestion?: ShapeSuggestion;
+    /**
+     * 人动过手没有。**必须显式记，不能拿"当前值 ≠ 建议值"推**：挑过别的又切回建议值那一档
+     * 会重新显示成 agent 判定，而建议值自己变了的话，人一下没碰过也会被标成"你选的"。
+     */
+    picked?: true;
+  } | null>(null);
   /**
    * 待办卡里人已经敲进去的东西（改过的语句 / 粘贴的结果 / 执行时间 / 拒绝理由）。
    *
@@ -191,7 +217,17 @@ export function App() {
   const requestClose = async () => {
     const r = await window.inquestry.requestClosing(openCase).catch(() => null);
     if (!r) return setNotice('没问到这个案子的状态，可能它已经切走了。切回去再点一次。');
-    if (!r.missing.length) return setConfirm({ caseId: openCase, kind: 'closed' });
+    if (!r.missing.length) {
+      // 冻的是 **main 刚刚算出来的那一份**，不是这一屏快照上的。
+      // 后者是点击那一帧的闭包值，隔着这次 await——main 按最新状态放行了弹窗，
+      // 界面却会冻一个过期的推断值，把 agent 刚落定的声明盖掉
+      return setConfirm({
+        caseId: openCase,
+        kind: 'closed',
+        shape: r.suggestion.shape,
+        suggestion: r.suggestion,
+      });
+    }
     const what = r.missing.map(closingLabel).join('与');
     setNotice(
       r.asked
@@ -205,13 +241,13 @@ export function App() {
    * 强制 step 可能被推翻、案子可能被切走，两种情况 main 都会回绝；
    * 收掉确认条而什么都没发生的话，人会以为已经结案了。
    */
-  const doClose = async (kind: 'closed' | 'aborted', id: string) => {
+  const doClose = async (kind: 'closed' | 'aborted', id: string, shape: VerdictShape) => {
     if (kind === 'aborted') {
       const ok = await window.inquestry.archiveCase(id).catch(() => false);
       if (ok) return setConfirm(null);
       return setNotice('归档没执行：这个案子已经不是当前案子了。切回去再试一次。');
     }
-    const r = await window.inquestry.closeCase(id).catch(() => null);
+    const r = await window.inquestry.closeCase(id, shape).catch(() => null);
     if (r?.ok) return setConfirm(null);
     setNotice(
       r && !r.ok && r.missing.length
@@ -319,17 +355,27 @@ export function App() {
             // 收的是**弹出确认时**那个案子，不是此刻屏幕上的那个。
             // main 那侧还会用 `currentIf` 再核一次：切走了就整个不执行，
             // 而不是落到新案子头上——而回绝了这边要说出来，见 doClose
-            onClick={() => void doClose(confirm.kind, confirm.caseId)}
+            onClick={() => void doClose(confirm.kind, confirm.caseId, confirm.shape ?? 'open')}
           >
             {confirm.kind === 'closed' ? '确认结案' : '确认归档'}
           </button>
           <button onClick={() => setConfirm(null)}>再想想</button>
+          {confirm.kind === 'closed' && (
+            <ShapePicker
+              value={confirm.shape ?? snap.shapeSuggestion.shape}
+              source={confirm.picked ? 'operator' : (confirm.suggestion ?? snap.shapeSuggestion).source}
+              // 状态型的主体就是应然/实然那一对；根因那一步没给的话，选它等于让报告
+              // 装一块空的。冻结之后没有回头路，所以要在人按下去**之前**说
+              stateFillable={stateFillable(confirm.suggestion, snap.shapeSuggestion)}
+              onPick={(shape) => setConfirm((c) => c && { ...c, shape, picked: true })}
+            />
+          )}
         </div>
       )}
 
       {frozen && (
         <div className="banner frozen">
-          <span>{frozenText(snap.case.status)}</span>
+          <span>{frozenText(snap.case)}</span>
         </div>
       )}
 
@@ -464,6 +510,72 @@ function closingLabel(k: ClosingStepKind) {
   return ({ impact: '影响面', leftover: '遗留疑点' } as const)[k];
 }
 
+/**
+ * 五种结论形态（D25 / overview §6.1.1）。文案说的是**什么时候是它**，不是术语解释：
+ * 人在确认条上停留的那几秒里要能对着自己的案子选，而不是先学一遍名词。
+ */
+const SHAPE_COPY: Record<VerdictShape, { label: string; when: string; body: string }> = {
+  sequence: { label: '时序型', when: '顺序 / 竞态错了', body: '事故时间线' },
+  state: { label: '状态型', when: '某个东西一直就是错的', body: '应然 / 实然对照' },
+  chain: { label: '因果链型', when: '一处变更连锁放大', body: '因果链 + 最弱一环' },
+  distribution: { label: '分布型', when: '问题只在某一小撮上', body: '归因切分' },
+  open: { label: '未决型', when: '没查出来', body: '排除矩阵 + 遗留疑点' },
+};
+
+/**
+ * 结案那一下选报告形态。**它是这一步唯一需要人做的判断**——
+ * agent 声明过就预选它的，没声明就预选推断值，人不动手也能一路按到底。
+ *
+ * 摆在确认条里而不是单开一屏：形态决定报告装哪几块，而"确认结案"正是唯一
+ * 看得见后果的那一下；分开的话，人会在不知道要选什么的时候先被问一次。
+ */
+function ShapePicker({
+  value,
+  source,
+  stateFillable,
+  onPick,
+}: {
+  value: VerdictShape;
+  source: 'agent' | 'inferred' | 'operator';
+  /** 根因那一步给了应然/实然没有。没给的话状态型的主体块是空的。 */
+  stateFillable: boolean;
+  onPick: (s: VerdictShape) => void;
+}) {
+  // 不禁用这一档，只把后果说出来：人可能确实知道这是状态型故障，而 agent 没填那一对——
+  // 那一步已经收口了，它补不回来，禁掉等于把人堵死在一个它自己造成的缺口上
+  const empty = value === 'state' && !stateFillable;
+  return (
+    <div className="shape">
+      <span className="lead">
+        报告按
+        <b>{SHAPE_COPY[value].label}</b>
+        装（主体是{SHAPE_COPY[value].body}）
+        <em>{shapeSourceLabel(source)}</em>
+        {empty && <span className="warn">根因那一步没有应然 / 实然，这一块会是空的</span>}
+      </span>
+      {VERDICT_SHAPES.map((s) => (
+        <button
+          key={s}
+          className={`${s === value ? 'on' : ''} ${s === 'state' && !stateFillable ? 'thin' : ''}`}
+          title={
+            s === 'state' && !stateFillable
+              ? '状态型 —— 主体是应然 / 实然对照，但根因那一步没给这一对，选了那一块会是空的'
+              : `${SHAPE_COPY[s].when} —— 主体是${SHAPE_COPY[s].body}`
+          }
+          onClick={() => onPick(s)}
+        >
+          {SHAPE_COPY[s].label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 推断值只是个不至于装错块的兜底，不是一次判断——两者必须让人一眼分得出来。 */
+function shapeSourceLabel(source: 'agent' | 'inferred' | 'operator') {
+  return { agent: 'agent 判定', inferred: '没人判定过，按现有数据推的', operator: '你选的' }[source];
+}
+
 /** 确认那一下要说的是**后果**，不是"你确定吗"——两档的后果不一样，说反了就白确认了。 */
 function confirmText(kind: 'closed' | 'aborted', snap: Snapshot) {
   if (kind === 'closed') {
@@ -474,10 +586,12 @@ function confirmText(kind: 'closed' | 'aborted', snap: Snapshot) {
   return '归档 = 明写放弃这次排查。已经查到的证据一条都不删，仍能导出残报告——但那份报告没有根因栏，主体是排除掉的方向与遗留疑点。';
 }
 
-function frozenText(status: CaseMeta['status']) {
-  return status === 'closed'
-    ? '本案已结案并冻结。证据与结论都还在，接着查请另立案件。'
-    : '本案已归档（人为终止）。证据一条没少，可导出残报告——它没有根因栏，因为没查出来就是没查出来。';
+/** 冻结之后要把**当时定下的形态**说出来：报告装成什么样是那一下决定的，事后没有入口再改。 */
+function frozenText(meta: CaseMeta) {
+  const shape = meta.verdictShape ? `报告按${SHAPE_COPY[meta.verdictShape].label}装。` : '';
+  return meta.status === 'closed'
+    ? `本案已结案并冻结。${shape}证据与结论都还在，接着查请另立案件。`
+    : `本案已归档（人为终止）。${shape}证据一条没少，可导出残报告——它没有根因栏，因为没查出来就是没查出来。`;
 }
 
 function caseStateLabel(c: CaseBrief) {
@@ -616,6 +730,7 @@ function IncidentTimeline({
 
 function ReportStrip({ snap }: { snap: Snapshot }) {
   if (!snap.report.rootCause && !snap.report.impact) return null;
+  const { expected, actual } = snap.report;
   return (
     <section className="report">
       <h4>报告投影</h4>
@@ -623,6 +738,16 @@ function ReportStrip({ snap }: { snap: Snapshot }) {
         <p>
           <b>根因</b>
           {snap.report.rootCause}
+        </p>
+      )}
+      {/* 状态型报告的主体就是这一对（D25）。它挂在根因那一步上，
+          所以根因换了人这里跟着换，不会留下一段没有出处的对照 */}
+      {expected && actual && (
+        <p className="contrast">
+          <b>本该</b>
+          {expected}
+          <b>实际</b>
+          {actual}
         </p>
       )}
       {snap.report.impact && (

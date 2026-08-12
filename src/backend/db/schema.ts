@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS cases (
   incident_date TEXT    NOT NULL,
   tz_offset     TEXT    NOT NULL,   -- 立案机器的本机偏移，不由用户填
   clues         TEXT,                  -- 立案时已知的服务 / traceId / 用户 ID，拼进首轮提问
-  -- 决定报告装哪几块（D25）。结案时才写，形态取值见 overview §6.1.1
+  -- 决定报告装哪几块（D25）。**收尾那一下才写**，在那之前是 NULL：
+  -- 排查中途的形态是会变的，定死一个只会让报告按一个过期的判断装。取值见 overview §6.1.1
   verdict_shape TEXT CHECK (verdict_shape IN ('sequence','state','chain','distribution','open')),
   report_md     TEXT,
   created_at    INTEGER NOT NULL,
@@ -90,6 +91,9 @@ CREATE TABLE IF NOT EXISTS steps (
   -- 状态型故障（verdict_shape='state'）的报告主体是这一对，不是时间线（D25）
   expected           TEXT,
   actual             TEXT,
+  -- agent 在这一步的 close_step 里声明的报告形态。**挂在 step 上而不是直接落 cases**：
+  -- 它是某一步的判定内容，这一步被推翻时声明要跟着失效，否则报告会按一份作废的判断装块
+  shape              TEXT CHECK (shape IN ('sequence','state','chain','distribution','open')),
   verdict_text       TEXT,
   verdict_confidence REAL CHECK (verdict_confidence BETWEEN 0 AND 1),
   status             TEXT    NOT NULL CHECK (status IN ('open','confirmed','refuted','inconclusive','superseded')),

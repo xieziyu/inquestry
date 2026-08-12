@@ -167,10 +167,59 @@ export type ChatLine = { role: 'user' | 'assistant' | 'system'; text: string; at
 export type ClosingStepKind = 'impact' | 'leftover';
 
 /**
+ * 报告按哪种形态组装（D25 / overview §6.1.1）。
+ *
+ * **时间线只是五种之一**：配置写错、索引缺失这类故障没有"事发瞬间"，硬凑一条时间线
+ * 只会得到「某天变更、某天发现」两行，还稀释掉真正该对照的东西。
+ */
+export type VerdictShape = 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
+
+/** 顺序即选择器上的顺序：从「有时序」到「没查出来」。 */
+export const VERDICT_SHAPES: readonly VerdictShape[] = [
+  'sequence',
+  'state',
+  'chain',
+  'distribution',
+  'open',
+];
+
+/**
+ * 结案确认条上的预选值。
+ *
+ * `agent` = 某一步的 `close_step` 里声明过；`inferred` = 没人声明，harness 按现有数据推的。
+ * **两者必须让人分得出来**：推断值只是个不至于装错块的兜底，不是一次判断。
+ */
+export type ShapeSuggestion = {
+  shape: VerdictShape;
+  source: 'agent' | 'inferred';
+  /**
+   * 这份建议是按哪一条根因算出来的；一条已证实的根因都没有时为 null。
+   *
+   * 界面靠它判断"手上冻的这份还说的是不是同一步"：根因换了人，实时快照上的
+   * `stateFillable` 说的就是另一步的事，拿来配已经冻住的形态会得出相反的结论。
+   */
+  rootStepId: string | null;
+  /**
+   * 那条根因给了应然/实然没有——状态型的主体装不装得出来全看它。
+   * 与 `shape` 同次算出，两者因此一定说的是同一步。
+   */
+  stateFillable: boolean;
+};
+
+/**
  * 「现在还差什么」的问询结果。**这条路永远不改状态**，问完顺带把缺的那两步派给 agent。
  * `asked` = 真派出去了（会话还活着才派得出去）。
+ *
+ * `suggestion` 与 `missing` 出自**同一次库状态**，确认条冻的就是它。
+ * 让界面拿自己那份快照去取形态的话，两者会差着一拍：main 按最新状态放行了弹窗，
+ * 而界面冻的是点击那一帧的推断值——agent 刚落定的声明就此被一个过期值盖掉。
+ * 这与「不拿快照上的 closingGaps 决定该弹确认还是派活」是同一条理由。
  */
-export type ClosingRequest = { missing: ClosingStepKind[]; asked: boolean };
+export type ClosingRequest = {
+  missing: ClosingStepKind[];
+  asked: boolean;
+  suggestion: ShapeSuggestion;
+};
 
 /**
  * 结案的结果。**不成立时要说清差什么**，否则界面只能给一句"还不能结案"，人无从下手。
@@ -195,6 +244,11 @@ export type CaseMeta = {
   agent: AgentChoice;
   /** 收尾三档（D29）。`closed` / `aborted` 都是冻结：开不了新会话，只能导出。 */
   status: 'open' | 'closed' | 'aborted';
+  /**
+   * 报告按哪种形态装（D25）。**收尾那一下才落**，在那之前是 null。
+   * 归档一律是 `open`：残报告没有根因栏（ui.md §8.4）。
+   */
+  verdictShape: VerdictShape | null;
 };
 
 export type Snapshot = {
@@ -218,9 +272,17 @@ export type Snapshot = {
    * 「还差影响面」是排查中途就该看得见的进度，不是按钮弹出来的一句错误。
    */
   closingGaps: ClosingStepKind[];
+  /** 结案确认条的预选形态。案子已冻结时它没有意义——那时看 `case.verdictShape`。 */
+  shapeSuggestion: ShapeSuggestion;
   report: {
     rootCause: string | null;
     impact: string | null;
+    /**
+     * 状态型报告的主体（D25）：应然与实然的一对。挂在根因那一步上，
+     * 所以根因被推翻时它跟着一起失效，不会留下一段没有出处的对照。
+     */
+    expected: string | null;
+    actual: string | null;
     leftovers: number;
     refuted: number;
   };
@@ -240,7 +302,8 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   gates: [],
   chat: [],
   closingGaps: [],
-  report: { rootCause: null, impact: null, leftovers: 0, refuted: 0 },
+  shapeSuggestion: { shape: 'open', source: 'inferred', rootStepId: null, stateFillable: false },
+  report: { rootCause: null, impact: null, expected: null, actual: null, leftovers: 0, refuted: 0 },
 };
 
 export type InquestryApi = {
@@ -270,9 +333,14 @@ export type InquestryApi = {
    * 问「现在还差哪几步」，缺了就顺手派给 agent。**不执行任何收尾**——
    * 点「结案」先走这条，拿到空缺口才弹确认条，于是快照过期也绕不过那道确认。
    */
-  requestClosing(caseId: string): Promise<ClosingRequest>;
-  /** 结案：**执行且不可逆**，只该由确认按钮调。仍会再校验一次强制 step。 */
-  closeCase(caseId: string): Promise<ClosingOutcome>;
+  requestClosing(caseId: string): Promise<ClosingRequest | null>;
+  /**
+   * 结案：**执行且不可逆**，只该由确认按钮调。仍会再校验一次强制 step。
+   *
+   * `shape` 与 caseId 同理，取的是**确认条弹出时**那一份：它决定报告装哪几块，
+   * 是人在确认条上看着后果按下去的那个选择，不该被这中间到的新快照换掉。
+   */
+  closeCase(caseId: string, shape: VerdictShape): Promise<ClosingOutcome>;
   /** 归档：同「停止」，外加标记放弃。证据一条不销毁，残报告照旧能导。回执是执行了没有。 */
   archiveCase(caseId: string): Promise<boolean>;
   /**

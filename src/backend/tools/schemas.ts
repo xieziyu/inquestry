@@ -58,6 +58,22 @@ export const closeStepShape = {
     .array(z.string())
     .optional()
     .describe('本步的结论推翻了此前哪些 step，填它们的 id。'),
+  shape: z
+    .enum(['sequence', 'state', 'chain', 'distribution', 'open'])
+    .optional()
+    .describe(
+      '这是哪一类故障——它决定最终报告装哪几块。**只在这一步给出了整个案子的根因时才填**。' +
+        'sequence = 顺序/竞态错了，主体是事故时间线；' +
+        'state = 某个东西一直就是错的（配置写错、索引缺失、证书过期），主体是应然/实然对照，没有时间线；' +
+        'chain = 一处变更连锁放大，主体是因果链；' +
+        'distribution = 问题只出在某一小撮上，主体是归因切分；' +
+        'open = 没查出来。填错的代价是报告装出一块空的，宁可不填让人来选。',
+    ),
+  expected: z
+    .string()
+    .optional()
+    .describe('**本该是什么**。状态型故障（shape=state）的报告主体就是这一对，与 actual 成对填。'),
+  actual: z.string().optional().describe('**实际是什么**。与 expected 成对填。'),
   evidence: z
     .array(z.object(evidenceItemShape))
     .describe('结论所依据的证据。status 非 inconclusive 时必须至少一条，否则这个结论无法被复核。'),

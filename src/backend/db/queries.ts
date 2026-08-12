@@ -101,7 +101,22 @@ export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {
 }
 
 export type ReportSections = {
-  rootCause: { step_id: string; verdict_text: string; confidence: number } | undefined;
+  /**
+   * 根因那一步。**形态声明也从这里取**（`shape`）：形态说的是"这个案子的根因属于哪一类故障"，
+   * 它只能由**报告认定的那条根因**说出来。另起一条选择器（比如"全案最新那条带声明的"）的后果是
+   * 一条误填了 shape 的 impact step 就能决定报告装哪几块，而根因与应然实然仍来自另一步——
+   * 报告的结构与内容自相矛盾，且毫无报错。这与影响面共用 `effectiveStep` 是同一条纪律。
+   */
+  rootCause:
+    | {
+        step_id: string;
+        verdict_text: string;
+        confidence: number;
+        expected: string | null;
+        actual: string | null;
+        shape: string | null;
+      }
+    | undefined;
   impact: { verdict_text: string } | undefined;
   leftovers: { step_id: string; direction: string | null; verdict_text: string }[];
   refuted: { step_id: string; direction: string | null; verdict_text: string; superseded_by: string | null }[];
@@ -136,6 +151,20 @@ export function effectiveStep(db: Db, caseId: string, kind: string): EffectiveSt
     .get(caseId, kind) as EffectiveStep | undefined;
 }
 
+/** 有几条证据落到了事故时间线上 —— 没人声明形态时，它决定时序型装不装得出来。 */
+export function timestampedEvidenceCount(db: Db, caseId: string): number {
+  return (
+    db
+      .prepare(
+        `SELECT COUNT(*) c FROM evidence_refs e
+         JOIN steps s ON s.id = e.step_id
+         JOIN sessions se ON se.id = s.session_id
+         WHERE se.case_id=? AND e.occurred_at_ms IS NOT NULL`,
+      )
+      .get(caseId) as { c: number }
+  ).c;
+}
+
 export function reportSections(db: Db, caseId: string): ReportSections {
   const q = <T>(sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as T[];
   const base = STEP_BASE;
@@ -145,8 +174,9 @@ export function reportSections(db: Db, caseId: string): ReportSections {
   // 印出来就是一栏空白；而结案校验用的是同一个函数，两边不会各说各话
   const impact = effectiveStep(db, caseId, 'impact');
   return {
-    rootCause: q<{ step_id: string; verdict_text: string; confidence: number }>(
-      `SELECT s.id AS step_id, s.verdict_text, s.verdict_confidence AS confidence ${base}
+    rootCause: q<ReportSections['rootCause'] & object>(
+      `SELECT s.id AS step_id, s.verdict_text, s.verdict_confidence AS confidence,
+              s.expected, s.actual, s.shape ${base}
          AND s.status='confirmed' AND s.kind='normal'
        ORDER BY s.verdict_confidence DESC, ${chronoDesc} LIMIT 1`,
       caseId,

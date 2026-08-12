@@ -7,11 +7,16 @@
 import type { Db } from '../db/database.js';
 import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
-import { effectiveStep } from '../db/queries.js';
+import { effectiveStep, reportSections, timestampedEvidenceCount } from '../db/queries.js';
 import { locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
 import type { InvestigationStore } from '../tools/definitions.js';
 import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../tools/schemas.js';
-import type { ClosingStepKind } from '../../shared/ipc.js';
+import {
+  VERDICT_SHAPES,
+  type ClosingStepKind,
+  type ShapeSuggestion,
+  type VerdictShape,
+} from '../../shared/ipc.js';
 
 export type SessionContext = {
   caseId: string;
@@ -111,6 +116,66 @@ export function setCaseStatus(db: Db, ctx: CaseContext, status: CaseStatus): voi
     type: 'case.status_changed',
     payload: { caseId: ctx.caseId, status, at: ctx.now() },
   });
+}
+
+/**
+ * 报告形态落库（D25）。与 `setCaseStatus` 分开发两条事件：形态是「报告长什么样」，
+ * 状态是「案子还能不能动」。收尾时形态先落、状态最后落——
+ * 状态是那道冻结闸，它一落下之后再写别的东西，写的就是一个已经宣告冻结的案子。
+ */
+export function setVerdictShape(db: Db, ctx: CaseContext, shape: VerdictShape): void {
+  if (readVerdictShape(db, ctx.caseId) === shape) return;
+  emitTo(db, ctx, null, {
+    type: 'case.verdict_decided',
+    payload: { caseId: ctx.caseId, shape, at: ctx.now() },
+  });
+}
+
+export function readVerdictShape(db: Db, caseId: string): VerdictShape | null {
+  const row = db.prepare(`SELECT verdict_shape FROM cases WHERE id=?`).get(caseId) as
+    | { verdict_shape: VerdictShape | null }
+    | undefined;
+  return row?.verdict_shape ?? null;
+}
+
+export const isVerdictShape = (v: unknown): v is VerdictShape =>
+  VERDICT_SHAPES.includes(v as VerdictShape);
+
+/**
+ * 结案确认条的预选形态。
+ *
+ * **只认根因那一步的声明**：形态说的是"这个案子的根因属于哪一类故障"，只有报告认定的
+ * 那条根因说得出这句话。别处（比如一条误填了 shape 的 impact step）说了不算，
+ * 否则报告会按 A 步的形态装块、却填 B 步的内容。
+ *
+ * 没声明才推，而推的规则只有一条准绳：**宁可少装一块，也不能装一块空的或不存在的**。
+ *
+ * - 没有已证实的根因 → `open`。这不是猜：没查出来就是没查出来，报告里本就不该有根因栏
+ * - 根因那一步给了应然/实然 → `state`。这对字段正是状态型的主体，它在就说明是这一类
+ * - 事故时间线上有两条以上证据 → `sequence`。少于两条排不出"顺序"，那一块会是一行孤零零的记录
+ * - 其余 → `chain`。它的主体（每环带置信度的因果链 + 最弱一环）能从 step 树直接投影，
+ *   任何案子都装得出来；换成 `open` 会把一条真实结论从报告里抹掉，换成 `sequence` 是一块空的
+ */
+export function suggestVerdictShape(db: Db, caseId: string): ShapeSuggestion {
+  const root = reportSections(db, caseId).rootCause;
+  // 这三项**必须同次算出**：状态型的主体是根因那一步的应然/实然，
+  // 而形态说的也是那一步。分两次取（比如形态问库、能不能填看界面自己的快照）的话，
+  // 两边会指着不同的根因——预选了新根因的 state，却按旧根因判定"这一块填得出来"
+  const from = {
+    rootStepId: root?.step_id ?? null,
+    // trim 是兜底：写入侧已经把纯空白归一掉了，但同一 schema 版本里可能躺着更早写进去的
+    stateFillable: !!(root?.expected?.trim() && root?.actual?.trim()),
+  };
+  if (root && isVerdictShape(root.shape)) return { shape: root.shape, source: 'agent', ...from };
+
+  const shape: VerdictShape = !root
+    ? 'open'
+    : from.stateFillable
+      ? 'state'
+      : timestampedEvidenceCount(db, caseId) >= 2
+        ? 'sequence'
+        : 'chain';
+  return { shape, source: 'inferred', ...from };
 }
 
 export type CaseStatus = 'open' | 'closed' | 'aborted';
@@ -281,12 +346,29 @@ export function createInvestigationSession(
 
     async closeStep(args: CloseStepArgs) {
       const warnings: string[] = [];
-      const step = db.prepare(`SELECT id FROM steps WHERE id=?`).get(args.stepId) as { id: string } | undefined;
+      const step = db
+        .prepare(`SELECT id, kind, expected, actual, shape FROM steps WHERE id=?`)
+        .get(args.stepId) as
+        | { id: string; kind: string; expected: string | null; actual: string | null; shape: string | null }
+        | undefined;
       if (!step) return { warnings: [`未知 stepId ${args.stepId}`] };
+
+      // **投影是 patch 语义（缺省=不动），所以判断一律按合成之后的最终值来。**
+      // 按本次入参判的话，重新 close 那一次会两头错：只补了 evidence 的那次看不见
+      // 库里已经躺着的 `state`（缺主体不报警），只补了 expected 的那次又会被当成
+      // "只给了一半"（其实 actual 上次就填过了）。合成规则要与投影里的 COALESCE 一致
+      const final = {
+        // 纯空白按没填算：`" "` 能过 z.string()，而 truthiness 会把它当成填好了，
+        // 于是既不报"缺主体"、`stateFillable` 也成了 true——报告最后拿到一块视觉上的空白
+        expected: blankToUndefined(args.expected) ?? step.expected ?? undefined,
+        actual: blankToUndefined(args.actual) ?? step.actual ?? undefined,
+        shape: args.shape ?? (step.shape as CloseStepArgs['shape']) ?? undefined,
+      };
 
       if (args.status !== 'inconclusive' && args.evidence.length === 0) {
         warnings.push('这个结论没有任何证据，无法被复核。请补 evidence 后重新 close。');
       }
+      warnings.push(...shapeWarnings(final, args.status, step.kind));
 
       for (const e of args.evidence) {
         const call = resolveCallRef(args.stepId, e.callRef);
@@ -338,11 +420,33 @@ export function createInvestigationSession(
           status: args.status,
           verdict: args.verdict,
           confidence: args.confidence,
+          // 空白已归一成 undefined；三项都保持"缺省=不动"，由投影的 COALESCE 承接
+          expected: blankToUndefined(args.expected),
+          actual: blankToUndefined(args.actual),
+          shape: args.shape,
           at: ctx.now(),
         },
       });
       for (const sid of args.supersedes ?? []) {
         emit({ type: 'step.superseded', payload: { stepId: sid, by: args.stepId } });
+      }
+      // 这一条只有落库之后才判得了：形态取的是**报告认定的那条根因**的声明，
+      // 而谁是根因要等这一步的置信度也进了库才比得出来。
+      //
+      // 只对**够得着根因资格**的那些说（confirmed 的 normal）：影响面、遗留疑点、
+      // 被推翻的结论压根不可能成为根因，它们上面那句"不生效"已经说完了。
+      // 再补一句"现在的根因是谁"只会把 agent 引向一条它不该走的路。
+      //
+      // 而且这里**只陈述事实，不给处置**：写"要让它算数就把那条根因推翻"等于教它去
+      // 推翻一条有效结论、或把置信度往上凑——真该不该推翻，只有查过的它自己判得了。
+      if (final.shape && args.status === 'confirmed' && step.kind === 'normal') {
+        const root = reportSections(db, ctx.caseId).rootCause;
+        if (root && root.step_id !== args.stepId) {
+          warnings.push(
+            `形态取的是报告认定的那条根因的声明——现在那条是 ${root.step_id}` +
+              `（置信度 ${root.confidence}），所以这一条目前不生效。`,
+          );
+        }
       }
       return { warnings };
     },
@@ -430,6 +534,42 @@ export function readIntake(db: Db, caseId: string): CaseIntake | null {
     clues: row.clues,
   };
 }
+/**
+ * 形态与应然实然的当场提醒。三条都是「填了但不生效」那一类——
+ * 不当场说，agent 以为自己已经交代过了，而报告到结案那天才发现那一块是空的。
+ */
+function shapeWarnings(
+  /** **合成之后的最终值**，不是本次入参：投影是 patch 语义，两者在重新 close 时会分叉。 */
+  final: { shape?: string; expected?: string; actual?: string },
+  status: CloseStepArgs['status'],
+  kind: string,
+): string[] {
+  const out: string[] = [];
+  if (final.shape && status !== 'confirmed') {
+    out.push(
+      `形态 ${final.shape} 声明在一个 ${status} 的结论上，不会生效——形态说的是"这是哪一类故障"，` +
+        '只有已证实的结论说得出这句话。',
+    );
+  }
+  // 形态只由根因那一步说得算，而根因一定是 normal。声明在影响面/遗留疑点上不报的话，
+  // 它会被静默忽略——比"错误地采纳"好，但同样是 agent 以为自己交代过了
+  if (final.shape && kind !== 'normal') {
+    out.push(
+      `形态 ${final.shape} 声明在一个 ${kind} step 上，不会生效——它只由根因那一步（kind=normal）说了算。`,
+    );
+  }
+  if (final.shape === 'state' && !(final.expected && final.actual)) {
+    out.push('状态型（state）报告的主体就是 expected / actual 这一对，缺了报告那一栏是空的。');
+  }
+  if (!final.expected !== !final.actual) {
+    out.push('expected 与 actual 要成对给：只有一半的对照说明不了任何事。');
+  }
+  return out;
+}
+
+/** 纯空白等于没填：`" "` 过得了 `z.string()`，却会让所有 truthiness 判断以为它填好了。 */
+const blankToUndefined = (v: string | undefined) => (v?.trim() ? v.trim() : undefined);
+
 function anchorKind(anchor?: string): 'lines' | 'jsonpath' | 'whole' {
   if (!anchor) return 'whole';
   if (anchor.trim().startsWith('$')) return 'jsonpath';

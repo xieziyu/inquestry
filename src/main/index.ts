@@ -24,6 +24,7 @@ import {
   type IntakeResult,
   type OperatorReply,
   type Snapshot,
+  type VerdictShape,
 } from '../shared/ipc.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -304,14 +305,17 @@ app.whenReady().then(async () => {
   ipcMain.handle('case:interrupt', (_e, caseId: string) => cases.currentIf(caseId)?.interrupt());
   // 收尾后两档（D29）。问询与执行是两个入口：合成一个的话，界面就得靠 60ms 前的快照
   // 决定"这一下是问还是执行"，而隔着那一拍点下去的会是不可逆的结案
+  // 对不上就回 null，不回一个「什么都不缺」的空壳：后者会让界面弹出确认条，
+  // 而那个案子根本不在手上——人对着一份已经切走的案子按下不可逆的那一下
   ipcMain.handle(
     'case:requestClosing',
-    (_e, caseId: string) => cases.currentIf(caseId)?.requestClosing() ?? { missing: [], asked: false },
+    (_e, caseId: string) => cases.currentIf(caseId)?.requestClosing() ?? null,
   );
   // 不成立时差的那两步要原样回给界面，不然人只看到按钮没反应
   ipcMain.handle(
     'case:close',
-    (_e, caseId: string) => cases.currentIf(caseId)?.closeCase() ?? { ok: false, missing: [] },
+    (_e, caseId: string, shape: VerdictShape) =>
+      cases.currentIf(caseId)?.closeCase(shape) ?? { ok: false, missing: [] },
   );
   ipcMain.handle('case:archive', (_e, caseId: string) => {
     const runner = cases.currentIf(caseId);

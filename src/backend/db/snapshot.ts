@@ -9,7 +9,13 @@ import type { AgentChoice, CaseMeta, IncidentEntry, Snapshot, StepNode } from '.
 import { readBlobHead } from './blobs.js';
 import type { Db } from './database.js';
 import { reportSections } from './queries.js';
-import { missingClosingSteps, readCaseStatus, readIntake } from '../store/sqlite-store.js';
+import {
+  missingClosingSteps,
+  readCaseStatus,
+  readIntake,
+  readVerdictShape,
+  suggestVerdictShape,
+} from '../store/sqlite-store.js';
 
 const PREVIEW_LINES = 6;
 
@@ -162,6 +168,7 @@ export function buildSnapshot(
     ...extra,
     steps: stepNodes,
     closingGaps: missingClosingSteps(db, ctx.caseId),
+    shapeSuggestion: suggestVerdictShape(db, ctx.caseId),
     incident: incident.map(
       (r): IncidentEntry => ({
         occurredAtMs: r.occurred_at_ms,
@@ -177,6 +184,10 @@ export function buildSnapshot(
     report: {
       rootCause: rep.rootCause?.verdict_text ?? null,
       impact: rep.impact?.verdict_text ?? null,
+      // 应然实然跟着根因那一步走：根因换人了，这对也跟着换，不会留下一段没有出处的对照
+      // 纯空白按没有算，否则报告里那一栏是视觉上的空白，而不是"没有这一栏"
+      expected: rep.rootCause?.expected?.trim() || null,
+      actual: rep.rootCause?.actual?.trim() || null,
       leftovers: rep.leftovers.length,
       refuted: rep.refuted.length,
     },
@@ -189,7 +200,15 @@ export function buildSnapshot(
  */
 function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
   const intake = readIntake(db, caseId);
-  return intake && { id: caseId, ...intake, agent, status: readCaseStatus(db, caseId) ?? 'open' };
+  return (
+    intake && {
+      id: caseId,
+      ...intake,
+      agent,
+      status: readCaseStatus(db, caseId) ?? 'open',
+      verdictShape: readVerdictShape(db, caseId),
+    }
+  );
 }
 
 function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {

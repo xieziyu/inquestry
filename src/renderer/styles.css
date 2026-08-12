@@ -81,6 +81,17 @@ body {
   padding: 3px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
 }
 .banner.confirm button.primary { background: var(--fill); border-color: var(--fill); color: var(--on-fill); }
+/* 形态选择整行另起：它是确认那一下唯一要做的判断，挤在按钮旁边会被当成装饰 */
+.banner.confirm { flex-wrap: wrap; }
+.banner.confirm .shape { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.banner.confirm .shape .lead { color: var(--dim); font-size: 12px; margin-right: 4px; }
+.banner.confirm .shape .lead b { color: var(--text); margin: 0 2px; font-weight: 600; }
+/* 推断值与 agent 判定得分得出来：前者只是个不至于装错块的兜底 */
+.banner.confirm .shape .lead em { color: var(--dim); font-style: normal; margin-left: 6px; opacity: 0.75; }
+.banner.confirm .shape button.on { border-color: var(--fill); color: var(--accent); }
+/* 选得了但会装出一块空的：压暗而不是禁用——人可能确实知道是这一类，而 agent 没填那一对 */
+.banner.confirm .shape button.thin { opacity: 0.55; }
+.banner.confirm .shape .warn { color: var(--warn); margin-left: 8px; }
 /* 已收尾：陈述一个状态，不是坏消息也不是待办——两个语义色都不该动 */
 .banner.frozen { background: var(--panel); color: var(--dim); border-bottom: 1px solid var(--line); }
 
@@ -184,6 +195,8 @@ button.primary small { opacity: .6; font-weight: 400; }
 .report p { margin: 4px 0; }
 .report b { color: var(--accent); margin-right: 8px; font-size: 12px; }
 .report .meta { color: var(--dim); font-size: 12px; }
+/* 状态型的主体：两截并排读才是"对照"，拆成两行就成了两句话 */
+.report .contrast b:last-of-type { margin-left: 16px; }
 
 /* ── 人工回填 ── */
 .pending { background: #211a10; border: 1px solid #45381f; border-radius: 10px; padding: 12px 14px; }

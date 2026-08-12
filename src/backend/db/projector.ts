@@ -57,6 +57,11 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       db.prepare(`UPDATE cases SET status=? WHERE id=?`).run(p.status, p.caseId);
       return;
     }
+    case 'case.verdict_decided': {
+      const p = ev.payload;
+      db.prepare(`UPDATE cases SET verdict_shape=? WHERE id=?`).run(p.shape, p.caseId);
+      return;
+    }
     case 'session.started': {
       const p = ev.payload;
       db.prepare(
@@ -89,9 +94,27 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
     }
     case 'step.closed': {
       const p = ev.payload;
+      // 三个可选字段走 COALESCE：**同一步会被 close 第二次**——我们自己的 warning 就写着
+      // "请补 evidence 后重新 close"，而那一次多半只补证据。把"没再填"解释成"清空"的话，
+      // 第一次填好的形态与应然实然会被静默抹掉，报告主体随之空掉，重放还会一模一样地复现。
+      // 要改就再填一次（填了照旧覆盖）。与 `toolcall.gated` 的 `input_json` 同一个语义。
+      //
+      // 绑值仍一律 `?? null`：better-sqlite3 对 undefined 的处理不能指望，而 COALESCE
+      // 认的是 NULL——漏了这一手，缺字段的老事件会在重放时报错而不是走保留分支
       db.prepare(
-        `UPDATE steps SET status=?, verdict_text=?, verdict_confidence=?, t_end=? WHERE id=?`,
-      ).run(p.status, p.verdict, p.confidence, p.at, p.stepId);
+        `UPDATE steps SET status=?, verdict_text=?, verdict_confidence=?,
+                expected=COALESCE(?,expected), actual=COALESCE(?,actual), shape=COALESCE(?,shape), t_end=?
+         WHERE id=?`,
+      ).run(
+        p.status,
+        p.verdict,
+        p.confidence,
+        p.expected ?? null,
+        p.actual ?? null,
+        p.shape ?? null,
+        p.at,
+        p.stepId,
+      );
       insertNarrative(db, deps.caseId, p.stepId, 'verdict', p.verdict);
       return;
     }

@@ -27,11 +27,12 @@ import {
   missingClosingSteps,
   readCaseStatus,
   readIntake,
+  suggestVerdictShape,
   sweepZombies,
   type InvestigationSession,
 } from '../src/backend/store/sqlite-store.js';
 import { CaseRunner } from '../src/main/case-runner.js';
-import type { Snapshot } from '../src/shared/ipc.js';
+import type { Snapshot, VerdictShape } from '../src/shared/ipc.js';
 
 const ASK = 'mcp__inquestry__ask_operator';
 
@@ -90,22 +91,37 @@ const callStatus = (id: string) =>
 /** 跑一步带证据的排查，用来喂结案前置与"证据不该被销毁"两条。 */
 async function work(
   session: InvestigationSession,
-  opts: { direction: string; kind?: 'normal' | 'impact' | 'leftover'; callId: string; occurredAt: string },
+  opts: {
+    direction: string;
+    kind?: 'normal' | 'impact' | 'leftover';
+    callId: string;
+    occurredAt: string;
+    /** 形态与应然实然只有下根因那一步才给（D25）。 */
+    shape?: VerdictShape;
+    expected?: string;
+    actual?: string;
+  },
 ) {
   const { stepId } = await session.store.openStep({ direction: opts.direction, kind: opts.kind });
   session.recordToolStart({ callId: opts.callId, toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
   session.recordToolEnd({ callId: opts.callId, output: `命中 1 条\n${opts.occurredAt} 502 gateway\n(end)` });
-  await session.store.closeStep({
+  const { warnings } = await session.store.closeStep({
     stepId,
     status: 'confirmed',
     verdict: `${opts.direction} —— 成立`,
     confidence: 0.8,
+    shape: opts.shape,
+    expected: opts.expected,
+    actual: opts.actual,
     evidence: [
       { callRef: '#1', anchor: '2', claim: `${opts.occurredAt} 观察到 502`, occurredAt: opts.occurredAt, actor: 'gateway' },
     ],
   });
-  return stepId;
+  return { stepId, warnings };
 }
+
+const shapeOf = (caseId: string) =>
+  (db.prepare(`SELECT verdict_shape s FROM cases WHERE id=?`).get(caseId) as { s: string | null }).s;
 
 async function main() {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-close-')), 'inquestry.db');
@@ -278,12 +294,25 @@ async function main() {
   cs.close();
 
   // ── ③ 补齐之后结案成立，且状态走的是事件 ────────────────────────────────
+  check(
+    '结案之前不写形态：排查中途的形态还会变，定死一个只会让报告按过期判断装',
+    shapeOf('case_close') === null,
+    `verdict_shape=${shapeOf('case_close')}`,
+  );
   const closed = await c1.closeCase();
   const evidenceBefore = (db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c;
   check(
     '两步走完就能结案，case 落到 closed',
     closed.ok && readCaseStatus(db, 'case_close') === 'closed',
     `status=${readCaseStatus(db, 'case_close')}`,
+  );
+  // 这个案子 agent 一次形态都没声明过，走的是推断那条：有已证实的根因，没有应然实然，
+  // 事故时间线上只有一条证据（影响面那一步的 callRef 落空了，所以排不出"顺序"）→ chain。
+  // 换成 open 会把一条真实结论从报告里抹掉，换成 sequence 是装一块空的
+  check(
+    '没人声明形态时结案也得落一个装得出来的：chain，不是 open 也不是 sequence',
+    shapeOf('case_close') === 'chain',
+    `verdict_shape=${shapeOf('case_close')}（带时间的证据 ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs e JOIN steps s ON s.id=e.step_id JOIN sessions se ON se.id=s.session_id WHERE se.case_id='case_close' AND e.occurred_at_ms IS NOT NULL`).get() as { c: number }).c} 条）`,
   );
   check(
     '结案顺手把会话收了，库里不留永远 live 的 session',
@@ -412,7 +441,13 @@ async function main() {
   const c3 = makeRunner('case_abort', '支付回调丢单');
   const p3 = c3 as unknown as Probe;
   const s3 = p3.beginSession();
-  await work(s3, { direction: '回调签名校验把重放挡了', callId: 'call_x1', occurredAt: '09:12:33' });
+  // agent 在这儿声明过形态：归档要能盖掉它（残报告一律未决型）
+  await work(s3, {
+    direction: '回调签名校验把重放挡了',
+    callId: 'call_x1',
+    occurredAt: '09:12:33',
+    shape: 'sequence',
+  });
   // 正跑着的时候收尾是常态（"不查了"多半就发生在它还在跑的时候）
   p3.busy = true;
   // 一次已经自动放行、还在跑的普通调用：库里只有 started。收尾会 close() 掉查询，
@@ -455,6 +490,11 @@ async function main() {
     `仍差 ${missingClosingSteps(db, 'case_abort').join(',')}`,
   );
   check(
+    '归档一律落未决型，盖掉 agent 声明过的形态（残报告没有根因栏）',
+    shapeOf('case_abort') === 'open',
+    `verdict_shape=${shapeOf('case_abort')}（照 agent 声明的 sequence 装，会得到一份看着完整实则半截的报告）`,
+  );
+  check(
     '收尾把 updated_at 前移到收尾那一刻，切换栏才排得对',
     (db.prepare(`SELECT updated_at u, created_at c FROM cases WHERE id='case_abort'`).get() as {
       u: number;
@@ -465,6 +505,304 @@ async function main() {
         c: number;
       }).c,
     'updated_at ≥ created_at',
+  );
+
+  // ── ⑦.5 报告形态与应然实然（D25 / overview §6.1.1） ─────────────────────
+  //
+  // 这一带的错法全是**静默装错块**：形态填了不生效、被推翻的声明照旧算数、
+  // 推断值把一条真实结论抹掉——三种在界面上都表现为"结案了，然后报告某一栏是空的"
+
+  // 声明生效，且人在确认条上的选择优先于它
+  const cShape = makeRunner('case_shape', '形态由 agent 声明');
+  const sShape = (cShape as unknown as Probe).beginSession();
+  const rootShape = await work(sShape, {
+    direction: '重试风暴按时间顺序放大',
+    callId: 'call_sh1',
+    occurredAt: '12:41:07',
+    shape: 'sequence',
+  });
+  check(
+    'close_step 的形态落在那一步上，不直接写进 cases',
+    (db.prepare(`SELECT shape FROM steps WHERE id=?`).get(rootShape.stepId) as { shape: string | null }).shape ===
+      'sequence' && shapeOf('case_shape') === null,
+    `steps.shape=${(db.prepare(`SELECT shape FROM steps WHERE id=?`).get(rootShape.stepId) as { shape: string | null }).shape} · cases.verdict_shape=${shapeOf('case_shape')}`,
+  );
+  check(
+    '有声明就用声明，并且说得出这是 agent 判定的（推断值只是兜底，不能混为一谈）',
+    suggestVerdictShape(db, 'case_shape').shape === 'sequence' &&
+      suggestVerdictShape(db, 'case_shape').source === 'agent',
+    JSON.stringify(suggestVerdictShape(db, 'case_shape')),
+  );
+  // 形态与「状态型填不填得出来」必须同次算出，且说得出是按哪一步算的：
+  // 界面按 rootStepId 判断手上冻的那份还说不说得上话，认错步就会拿新根因的形态
+  // 配旧根因的判定——预选 state 却一句"这一块会是空的"都没有
+  check(
+    '建议里带着它是按哪一条根因算的，以及那一步填不填得出应然实然',
+    suggestVerdictShape(db, 'case_shape').rootStepId === rootShape.stepId &&
+      suggestVerdictShape(db, 'case_shape').stateFillable === false,
+    JSON.stringify(suggestVerdictShape(db, 'case_shape')),
+  );
+  // 形态声明与报告根因必须共用同一条选择规则。另起一条（比如"全案最新那条带声明的"）的话，
+  // 一条误填了 shape 的 impact step 就能决定报告装哪几块，而根因与应然实然仍来自根因那一步——
+  // 报告的结构与内容自相矛盾，且没有任何报错
+  const strayImpact = await sShape.store.openStep({ direction: '量化影响面', kind: 'impact' });
+  const strayWarn = await sShape.store.closeStep({
+    stepId: strayImpact.stepId,
+    status: 'confirmed',
+    verdict: '12:40–12:47 共 1832 次请求受影响',
+    confidence: 0.99, // 置信度再高也抢不走：它不是根因，形态不归它说
+    shape: 'distribution',
+    evidence: [],
+  });
+  check(
+    '别的 kind 上的形态声明抢不走根因的形态（两边共用同一条根因选择规则）',
+    suggestVerdictShape(db, 'case_shape').shape === 'sequence',
+    `建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape'))}（各算各的话这里是 distribution，而根因仍是那条时序结论）`,
+  );
+  // 抢不走还不够：不生效就得当场说。静默忽略比错误采纳好，但 agent 照样以为自己交代过了
+  check(
+    '非 normal step 上的形态声明当场回警告，不静默忽略',
+    strayWarn.warnings.some((t) => t.includes('impact step 上')),
+    `warnings=${JSON.stringify(strayWarn.warnings)}`,
+  );
+  // 它已经被告知"永远不生效"了，再补一句"现在的根因是谁"只会把 agent 引向
+  // 一条它不该走的路——影响面无论如何成不了根因，而那句话读起来像在教它去推翻有效结论
+  check(
+    '够不着根因资格的 step 不再收到「现在的根因是谁」那句话',
+    !strayWarn.warnings.some((t) => t.includes('报告认定的那条根因的声明')),
+    `warnings=${JSON.stringify(strayWarn.warnings)}`,
+  );
+  const lo = await sShape.store.openStep({ direction: '汇总未查清的疑点', kind: 'leftover' });
+  await sShape.store.closeStep({
+    stepId: lo.stepId,
+    status: 'inconclusive',
+    verdict: '没有遗留',
+    confidence: 0.5,
+    evidence: [],
+  });
+  // 确认条冻的是问询这一下带回来的形态，不是界面自己那份快照上的。
+  // 两者差着一拍：main 按最新状态放行了弹窗，而界面冻的是点击那一帧的值——
+  // agent 刚落定的声明会被一个过期值盖掉，而这一下是不可逆的
+  const askShape = cShape.requestClosing();
+  check(
+    '问询回来的形态与缺口出自同一次库状态',
+    askShape.missing.length === 0 &&
+      JSON.stringify(askShape.suggestion) === JSON.stringify(suggestVerdictShape(db, 'case_shape')),
+    `问询=${JSON.stringify(askShape.suggestion)} · 库里=${JSON.stringify(suggestVerdictShape(db, 'case_shape'))}`,
+  );
+  // 人在确认条上改了形态：报告怎么装是人看着后果按下去的那个选择
+  await cShape.closeCase('state');
+  check(
+    '人在确认条上选的形态优先于建议值',
+    shapeOf('case_shape') === 'state',
+    `verdict_shape=${shapeOf('case_shape')}（回落到建议值的话这里是 sequence，人那一下等于白点）`,
+  );
+
+  // 同一步 close 第二次是**我们自己的 warning 指使的**（"请补 evidence 后重新 close"），
+  // 而那一次多半只带 evidence。把"没再填"解释成"清空"的话，第一次填好的形态与
+  // 应然实然会被静默抹掉——报告主体随之空掉，重放还会一模一样地复现
+  const reState = await sShape.store.openStep({ direction: '连接池上限一直就是错的' });
+  await sShape.store.closeStep({
+    stepId: reState.stepId,
+    status: 'confirmed',
+    verdict: '连接池上限从上线起就写成了 5',
+    confidence: 0.5,
+    shape: 'state',
+    expected: '连接池上限 200',
+    actual: '实际是 5',
+    evidence: [],
+  });
+  await sShape.store.closeStep({
+    stepId: reState.stepId,
+    status: 'confirmed',
+    verdict: '连接池上限从上线起就写成了 5',
+    confidence: 0.5,
+    // 这一次只补证据，三项都没再填
+    evidence: [{ callRef: '#1', claim: '配置文件里就是 5' }],
+  });
+  const reClosed = () =>
+    db.prepare(`SELECT shape, expected, actual FROM steps WHERE id=?`).get(reState.stepId) as {
+      shape: string | null;
+      expected: string | null;
+      actual: string | null;
+    };
+  check(
+    '同一步再 close 一次，没重填的形态与应然实然保持原样，不被清空',
+    reClosed().shape === 'state' && reClosed().expected === '连接池上限 200',
+    `${JSON.stringify(reClosed())}（当成"清空"的话报告主体就没了，而这条路正是我们自己让 agent 走的）`,
+  );
+
+  // 投影是 patch 语义之后，警告也必须按**合成后的最终值**判，否则两头错：
+  // 只补 evidence 那次看不见库里已经躺着的 state，只补一半那次又会被当成"只给了一半"
+  const halfAgain = await sShape.store.closeStep({
+    stepId: reState.stepId,
+    status: 'confirmed',
+    verdict: '连接池上限从上线起就写成了 5',
+    confidence: 0.5,
+    expected: '连接池上限 200（改了个说法）',
+    evidence: [{ callRef: '#1', claim: '再看一眼' }],
+  });
+  check(
+    '只重填一半时不误报"只给了一半"——另一半上次就填过了',
+    !halfAgain.warnings.some((t) => t.includes('成对给')),
+    `warnings=${JSON.stringify(halfAgain.warnings)}`,
+  );
+
+  // 声明跟着它那一步一起失效：形态说的是"结论属于哪一类"，结论作废了这句话也就不成立
+  const cDead = makeRunner('case_shape_dead', '声明被推翻');
+  const sDead = (cDead as unknown as Probe).beginSession();
+  const wrongRoot = await work(sDead, {
+    direction: '只有某一批用户中招',
+    callId: 'call_sd1',
+    occurredAt: '08:00:00',
+    shape: 'distribution',
+  });
+  check(
+    '推翻之前：这条声明算数',
+    suggestVerdictShape(db, 'case_shape_dead').shape === 'distribution',
+    `建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_dead'))}`,
+  );
+  const newRoot = await sDead.store.openStep({ direction: '不是分布问题，是配置一直就错的' });
+  await sDead.store.closeStep({
+    stepId: newRoot.stepId,
+    status: 'confirmed',
+    verdict: '连接池上限从上线起就写成了 5',
+    confidence: 0.95,
+    expected: '连接池上限 200',
+    actual: '实际配置里是 5，且从未改过',
+    supersedes: [wrongRoot.stepId],
+    evidence: [],
+  });
+  check(
+    '被推翻的那一步的形态声明跟着失效，不能拿它去装报告',
+    suggestVerdictShape(db, 'case_shape_dead').shape === 'state',
+    `建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_dead'))}（照旧认 distribution 的话，报告会按一份作废的判断装块）`,
+  );
+  check(
+    '应然实然跟着根因那一步走：换了根因，报告里那一对也跟着换',
+    cDead.snapshot().report.expected === '连接池上限 200' &&
+      cDead.snapshot().report.actual?.startsWith('实际配置里是 5') === true,
+    `本该=${cDead.snapshot().report.expected} · 实际=${cDead.snapshot().report.actual}`,
+  );
+  cDead.close();
+
+  // 填了但不生效的三种，必须当场说——不说的话 agent 以为自己交代过了，
+  // 而报告要到结案那天才发现那一块是空的
+  const cWarn = makeRunner('case_shape_warn', '形态的三条当场提醒');
+  const sWarn = (cWarn as unknown as Probe).beginSession();
+  const halfBaked = await sWarn.store.openStep({ direction: '这个假设不成立' });
+  const w1 = await sWarn.store.closeStep({
+    stepId: halfBaked.stepId,
+    status: 'refuted',
+    verdict: '不是这个原因',
+    confidence: 0.8,
+    shape: 'state',
+    evidence: [],
+  });
+  check(
+    '形态声明在非 confirmed 的结论上要当场提醒，且不生效',
+    w1.warnings.some((t) => t.includes('不会生效')) &&
+      suggestVerdictShape(db, 'case_shape_warn').source === 'inferred',
+    `warnings=${w1.warnings.length} 条 · 建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_warn'))}`,
+  );
+  // 纯空白能过 z.string()，而所有完整性判断都是 truthiness——不归一的话既不报
+  // "缺主体"，stateFillable 也成了 true，报告最后拿到一块视觉上的空白
+  const blankStep = await sWarn.store.openStep({ direction: '看起来填了其实没填' });
+  const wBlank = await sWarn.store.closeStep({
+    stepId: blankStep.stepId,
+    status: 'confirmed',
+    verdict: '空白当没填',
+    confidence: 0.1,
+    shape: 'state',
+    expected: '   ',
+    actual: '\t',
+    evidence: [],
+  });
+  const blankRow = db.prepare(`SELECT expected, actual FROM steps WHERE id=?`).get(blankStep.stepId) as {
+    expected: string | null;
+    actual: string | null;
+  };
+  check(
+    '纯空白的应然实然按没填算：照样报"缺主体"，也不落进库里',
+    wBlank.warnings.some((t) => t.includes('主体')) && blankRow.expected === null && blankRow.actual === null,
+    `warnings=${JSON.stringify(wBlank.warnings)} · 库里=${JSON.stringify(blankRow)}`,
+  );
+
+  const stateStep = await sWarn.store.openStep({ direction: '索引一直就没建上' });
+  const w2 = await sWarn.store.closeStep({
+    stepId: stateStep.stepId,
+    status: 'confirmed',
+    verdict: '缺索引',
+    confidence: 0.9,
+    shape: 'state',
+    expected: '本该有 idx_order_uid',
+    evidence: [],
+  });
+  check(
+    '状态型缺了应然实然、或只给一半，都要当场提醒（那一对就是它的报告主体）',
+    w2.warnings.filter((t) => t.includes('expected')).length === 2,
+    `warnings=${JSON.stringify(w2.warnings)}`,
+  );
+  // kind 对了也可能不生效：报告的根因取的是置信度最高那条 normal，
+  // 声明在一条置信度更低的 normal 上同样会被忽略。这条只有落库之后才判得出来
+  const alsoNormal = await sWarn.store.openStep({ direction: '另一条没那么有把握的结论' });
+  const w3 = await sWarn.store.closeStep({
+    stepId: alsoNormal.stepId,
+    status: 'confirmed',
+    verdict: '也可能是这个',
+    confidence: 0.4,
+    shape: 'chain',
+    evidence: [],
+  });
+  check(
+    '声明在一条当前不是根因的 normal step 上，也要当场说它不生效',
+    w3.warnings.some((t) => t.includes(stateStep.stepId)) &&
+      suggestVerdictShape(db, 'case_shape_warn').shape === 'state',
+    `warnings=${JSON.stringify(w3.warnings)} · 建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_warn'))}`,
+  );
+  // 只陈述事实，不教它怎么让自己那条算数：写"把那条根因推翻"等于诱导它去推翻一条
+  // 有效结论、或把置信度往上凑，而该不该推翻只有查过的它自己判得了
+  check(
+    '这句话只说现状，不给「去推翻它」这类处置',
+    !w3.warnings.some((t) => t.includes('推翻')),
+    `warnings=${JSON.stringify(w3.warnings)}`,
+  );
+  cWarn.close();
+
+  // 没有已证实的根因就是未决型。这不是猜：没查出来就是没查出来，报告本就不该有根因栏
+  const cOpen = makeRunner('case_shape_open', '什么都没查出来');
+  const sOpen = (cOpen as unknown as Probe).beginSession();
+  const nothing = await sOpen.store.openStep({ direction: '怀疑是下游超时' });
+  await sOpen.store.closeStep({
+    stepId: nothing.stepId,
+    status: 'inconclusive',
+    verdict: '日志不全，查不下去',
+    confidence: 0.2,
+    evidence: [],
+  });
+  check(
+    '一条已证实的结论都没有 → 未决型，不硬凑一个有根因栏的形态',
+    suggestVerdictShape(db, 'case_shape_open').shape === 'open',
+    `建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_open'))}`,
+  );
+  // 界面版本对不上、或从别处调进来时会带一个不认识的值。落 NULL 的话报告没有装法，
+  // 而那是结案之后才发现的——必须当场退回建议值
+  const gaps = missingClosingSteps(db, 'case_shape_open');
+  for (const kind of gaps) {
+    const st = await sOpen.store.openStep({ direction: `补 ${kind}`, kind });
+    await sOpen.store.closeStep({
+      stepId: st.stepId,
+      status: 'inconclusive',
+      verdict: `${kind} 收口`,
+      confidence: 0.2,
+      evidence: [],
+    });
+  }
+  await cOpen.closeCase('时序型' as VerdictShape);
+  check(
+    '认不出来的形态退回建议值，绝不落一个 NULL 进去',
+    shapeOf('case_shape_open') === 'open',
+    `verdict_shape=${shapeOf('case_shape_open')}`,
   );
 
   // ── ⑧ 启动清扫上一进程的僵尸行 ─────────────────────────────────────────
@@ -498,6 +836,7 @@ async function main() {
   //
   // 这条是本 spike 的地基：直接 `UPDATE cases` / `UPDATE tool_calls` 的值
   // 在这里会被静默抹掉，而症状要到换 schema 重建投影那天才出现
+  const evidenceBeforeReplay = (db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c;
   const replayed = rebuildProjections(db, { blobDir: blobs });
   check(
     '重放之后收尾状态逐字还原（直接 UPDATE 的话这里会被抹回 open）',
@@ -507,14 +846,35 @@ async function main() {
     `close=${readCaseStatus(db, 'case_close')} · abort=${readCaseStatus(db, 'case_abort')} · stop=${readCaseStatus(db, 'case_stop')}（重放 ${replayed} 条事件）`,
   );
   check(
+    '重放之后形态也逐字还原：它和状态一样只能走事件，直接 UPDATE 会被 case.opened 抹回 NULL',
+    shapeOf('case_shape') === 'state' && shapeOf('case_abort') === 'open' && shapeOf('case_close') === 'chain',
+    `shape=${shapeOf('case_shape')} · abort=${shapeOf('case_abort')} · close=${shapeOf('case_close')}`,
+  );
+  check(
+    '重放之后 close_step 带的形态与应然实然也还在（步一级的三个新字段）',
+    (db.prepare(`SELECT shape FROM steps WHERE id=?`).get(rootShape.stepId) as { shape: string | null }).shape ===
+      'sequence' && cDead.snapshot().report.expected === '连接池上限 200',
+    `steps.shape=${(db.prepare(`SELECT shape FROM steps WHERE id=?`).get(rootShape.stepId) as { shape: string | null }).shape} · 应然=${cDead.snapshot().report.expected}`,
+  );
+  // 重放走的是同一个投影函数，所以"缺省=不动"的语义在这里也必须成立：
+  // 两条 step.closed 依序重放，第二条同样不该把第一条填好的三项抹掉
+  check(
+    '重放之后重新 close 过的那一步也没被抹平（缺省=不动，写路径与重放共用同一条语义）',
+    reClosed().shape === 'state' && reClosed().actual === '实际是 5',
+    JSON.stringify(reClosed()),
+  );
+  check(
     '重放之后放弃的调用也还是放弃：清扫与散场都走了事件',
     callStatus('call_z1') === 'abandoned' && callStatus('call_b') === 'abandoned' && callStatus('call_g') === 'abandoned',
     `call_z1=${callStatus('call_z1')} · call_b=${callStatus('call_b')} · call_g=${callStatus('call_g')}`,
   );
+  // 比的是重放前后而不是一个写死的条数：后者每加一个案子就要跟着改，
+  // 而它真正要验的是「收尾没有销毁事实，重放也没有」
   check(
     '重放之后证据仍在：收尾从来不销毁事实',
-    (db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c === evidenceBefore + 1,
-    `证据 ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c} 条`,
+    (db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c === evidenceBeforeReplay &&
+      evidenceBeforeReplay > evidenceBefore,
+    `证据 ${evidenceBefore}（结案时）→ ${evidenceBeforeReplay}（重放前）→ ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c}`,
   );
 
   console.log('\n===== Spike Close 结果 =====');

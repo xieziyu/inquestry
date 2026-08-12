@@ -27,6 +27,16 @@ export type DomainEvents = {
    * 不带「为什么」——归档理由目前没有列可落，宁可不收也不留个填不进库的字段。
    */
   'case.status_changed': { caseId: string; status: 'open' | 'closed' | 'aborted'; at: number };
+  /**
+   * 报告按哪种形态装（D25）。与状态分成两条事件：形态是「报告长什么样」，
+   * 状态是「案子还能不能动」，归档那一档两者同时发生但含义不同——
+   * 合成一条的话，日后想在冻结之后单独改形态就没有事件表示得出来。
+   */
+  'case.verdict_decided': {
+    caseId: string;
+    shape: 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
+    at: number;
+  };
 
   'session.started': {
     sessionId: string;
@@ -54,6 +64,15 @@ export type DomainEvents = {
     status: 'confirmed' | 'refuted' | 'inconclusive';
     verdict: string;
     confidence: number;
+    /**
+     * 下面三项**缺省表示「不动」，不是「清空」**：同一步会被 close 第二次（补证据那一次
+     * 多半只带 evidence），当成清空的话第一次填好的形态与主体会被静默抹掉。投影用 COALESCE。
+     */
+    /** 状态型故障的报告主体：应然与实然的一对，成对才有意义（D25）。 */
+    expected?: string;
+    actual?: string;
+    /** agent 对报告形态的声明。结案那一下由 harness 取当前生效的那条（overview §6.1.1）。 */
+    shape?: 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
     at: number;
   };
   'step.superseded': { stepId: string; by: string };

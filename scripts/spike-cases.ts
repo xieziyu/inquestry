@@ -26,8 +26,8 @@ import { caseList, reportSections } from '../src/backend/db/queries.js';
 import { readIntake, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
-import { draftKey, pruneDrafts, type CardDrafts } from '../src/renderer/drafts.js';
-import type { Snapshot } from '../src/shared/ipc.js';
+import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
+import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 
 /** 会话准备与运行时读数是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
 type Probe = {
@@ -633,6 +633,34 @@ async function main() {
     '没得清就原样返回，不白白多触发一次渲染',
     pruneDrafts(pruned, 'case_a', ['gate_live']) === pruned,
     '返回的是同一个对象',
+  );
+
+  // ── ⑳ 结案确认条上「状态型填不填得出来」该信哪一份 ────────────────────────
+  //
+  // 确认条冻的是弹出那一刻 main 算出来的整份建议，而快照 60ms 换一次。两边都不能一律信：
+  // 一律用冻住的，agent 补上那一对之后警告永远不消失；一律用实时的，根因**换了人**时
+  // 两者指着不同的步——预选的是新根因声明的 state，却按旧根因判定成"填得出来"，
+  // 一句提醒都没有，人当场确认就冻出一份空主体报告
+  const frozenOn = (rootStepId: string | null, fill: boolean): ShapeSuggestion => ({
+    shape: 'state',
+    source: 'agent',
+    rootStepId,
+    stateFillable: fill,
+  });
+  check(
+    '还是同一条根因：信实时的，agent 补上那一对之后警告自动消失',
+    stateFillable(frozenOn('st_a', false), frozenOn('st_a', true)) === true,
+    '冻住时填不出来 → 实时说填得出来 → 认实时',
+  );
+  check(
+    '根因换了人：用冻住那份，不拿新根因的形态配旧根因的判定',
+    stateFillable(frozenOn('st_b', false), frozenOn('st_a', true)) === false,
+    '冻的是 st_b（填不出来），实时那份说的是 st_a —— 认实时的话这里一句提醒都没有',
+  );
+  check(
+    '还没冻（归档那一档没有确认形态）就用实时的',
+    stateFillable(undefined, frozenOn('st_a', true)) === true,
+    '没有冻住的那一份',
   );
 
   console.log('\n===== Spike Cases 结果 =====');

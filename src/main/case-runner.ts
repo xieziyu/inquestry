@@ -13,10 +13,13 @@ import { locateEvidence, readBlobText } from '../backend/db/blobs.js';
 import { buildSnapshot } from '../backend/db/snapshot.js';
 import {
   createInvestigationSession,
+  isVerdictShape,
   missingClosingSteps,
   openCase,
   readCaseStatus,
   setCaseStatus,
+  setVerdictShape,
+  suggestVerdictShape,
   type CaseIntake,
   type CaseStatus,
   type GateOutcome,
@@ -37,6 +40,7 @@ import {
   type PendingAsk,
   type PendingGate,
   type Snapshot,
+  type VerdictShape,
 } from '../shared/ipc.js';
 
 /** 人工回填的超时兜底（D9）。到点自动作废，节点标注为超时，agent 不会干挂。 */
@@ -486,13 +490,16 @@ export class CaseRunner {
    * 分开之后，执行入口只有确认按钮够得到。
    */
   requestClosing(): ClosingRequest {
-    if (this.caseStatus !== 'open') return { missing: [], asked: false };
+    // 形态与缺口出自同一次库状态：确认条冻的是这一份，而不是界面自己那份快照上的。
+    // 差着一拍的话，main 按最新状态放行了弹窗，界面却冻了点击那一帧的推断值
+    const suggestion = suggestVerdictShape(this.db, this.caseId);
+    if (this.caseStatus !== 'open') return { missing: [], asked: false, suggestion };
     const missing = this.closingGaps;
-    if (!missing.length) return { missing, asked: false };
+    if (!missing.length) return { missing, asked: false, suggestion };
     // 会话还活着就直接派给 agent：这两步的内容只有查过的人给得出来
     const asked = !!this.q;
     if (asked) void this.send(closingMessage(missing));
-    return { missing, asked };
+    return { missing, asked, suggestion };
   }
 
   /**
@@ -504,11 +511,13 @@ export class CaseRunner {
    * **执行入口只回绝、不派活**：派活是问询那条路的事。缺步走到这儿只说明界面那份
    * 快照过期了（或者确认条挂着的时候强制 step 被推翻了），这时该做的是不动手。
    */
-  async closeCase(): Promise<ClosingOutcome> {
+  async closeCase(shape?: VerdictShape): Promise<ClosingOutcome> {
     if (this.caseStatus !== 'open') return { ok: true, status: this.caseStatus };
     const missing = this.closingGaps;
     if (missing.length) return { ok: false, missing };
-    this.freeze('closed', '案子已结案，');
+    // 界面给的形态是人在确认条上按下去的那个选择，认它；认不出来（版本对不上、
+    // 或是从别处调进来的）才退回建议值——报告总得有个装法，不能落个 NULL 进去
+    this.freeze('closed', '案子已结案，', isVerdictShape(shape) ? shape : suggestVerdictShape(this.db, this.caseId).shape);
     return { ok: true, status: 'closed' };
   }
 
@@ -519,14 +528,24 @@ export class CaseRunner {
    */
   archiveCase(): CaseStatus {
     if (this.caseStatus !== 'open') return this.caseStatus;
-    this.freeze('aborted', '案子已归档，');
+    // 残报告的形态**强制 open**，不看 agent 声明过什么（ui.md §8.4）：主体是排除掉的方向
+    // 与遗留疑点，没有根因栏。查到一半的案子照它自己的形态装，装出来的是一份看着完整、
+    // 实则半截的报告——而那正是归档这一档明写要避免的
+    this.freeze('aborted', '案子已归档，', 'open');
     return 'aborted';
   }
 
-  /** 收尾的公共动作：散待办 → 收会话 → 落状态。状态最后落，前两步失败不该留下个冻住的空壳。 */
-  private freeze(status: Exclude<CaseStatus, 'open'>, why: string) {
+  /**
+   * 收尾的公共动作：散待办 → 收会话 → 落形态 → 落状态。
+   *
+   * **状态最后落**：前面几步失败不该留下个冻住的空壳；反过来，状态一落下案子就宣告冻结了，
+   * 那之后再写形态，写的是一个已经冻上的案子。
+   */
+  private freeze(status: Exclude<CaseStatus, 'open'>, why: string, shape: VerdictShape) {
+    const ctx = { caseId: this.caseId, blobDir: this.blobs, now: () => Date.now() };
     this.close(why);
-    setCaseStatus(this.db, { caseId: this.caseId, blobDir: this.blobs, now: () => Date.now() }, status);
+    setVerdictShape(this.db, ctx, shape);
+    setCaseStatus(this.db, ctx, status);
     this.onChange();
   }
 
