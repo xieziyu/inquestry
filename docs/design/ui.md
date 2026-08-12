@@ -480,7 +480,7 @@ renderer 的报错默认只留在它自己的 devtools 里——`console-message
 
 **两条现成命令，别自己拼**：跑全套自检 `npm run spike:all`，跑 app（含无人值守探针）`npm run app`。两者各自把 ABI 切好再跑——`better-sqlite3` 装完 Electron 之后只对一个 ABI 有效，而**忘了切的表现是 app 停在启动失败屏上干等到超时**（`NODE_MODULE_VERSION` 对不上）。这一条同一天栽了两次，所以绑进脚本，不靠记。
 
-harness 侧的记账、状态与投影由 spike 兜底，改哪一带先跑哪一条：`spike:db`（数据模型）· `spike:tools`（工具契约，**唯一起真会话的**）· `spike:wire`（主干接线）· `spike:gate`（闸门与收尾）· `spike:cases`（并发多案子）· `spike:close`（三种收尾）· `spike:track`（轨道布局）· `spike:report`（报告章节组装）· `spike:markdown`（Markdown 导出）· `spike:image`（长图分页）。**后四条是纯函数，不碰库也不用切 ABI。**单跑某一条时若刚跑过 app，先 `npm run rebuild:node`（`spike:all` 自带）。
+harness 侧的记账、状态与投影由 spike 兜底，改哪一带先跑哪一条：`spike:db`（数据模型）· `spike:tools`（工具契约）· `spike:wire`（主干接线）· `spike:lane`（子 agent 泳道）· `spike:gate`（闸门与收尾）· `spike:cases`（并发多案子）· `spike:close`（三种收尾）· `spike:track`（轨道布局）· `spike:report`（报告章节组装）· `spike:markdown`（Markdown 导出）· `spike:image`（长图分页）。**后四条是纯函数，不碰库也不用切 ABI；`tools` / `wire` / `lane` 反过来要起真会话、靠订阅凭据，不在 `spike:all` 里。**单跑某一条时若刚跑过 app，先 `npm run rebuild:node`（`spike:all` 自带）。
 
 renderer 的状态没有 node 侧的回归网。验它用**临时探针**：在 main 里加一段 env 开关的 `executeJavaScript` 脚本，驱动真 app（点按钮 → 读回 DOM），验完把探针删干净。能提成纯函数的（`renderer/drafts.ts`）就提出来进 spike。
 

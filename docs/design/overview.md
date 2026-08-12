@@ -150,8 +150,13 @@ turn 进行中往 stdin 塞 user message（带 uuid），可事后 `cancel_async
 
 ### 3.4 子 agent 泳道的处置
 
-- **不能**单独 kill 一条泳道
-- **能**单独转后台：background-tasks 控制请求带 `tool_use_id` 只针对那一个任务。该工具调用立刻返回"已转后台"的 tool_result，主线继续；支线跑完发 `task_notification` 回来
+已由 Spike A2 实跑（附录 A.1）：
+
+- **支线默认就在后台跑。** `AgentInput.run_in_background` 默认为真，agent 不写这个参数时起的支线是异步的：主线当场收到一条 `async_launched` 的 tool_result，turn 继续往下走，支线跑完再发 `task_notification`。**所以"折叠到后台"不是我们要提供的能力，而是默认形态**——真正要花力气的是反过来：让人看得见一条已经在后台跑的支线，别让它悄悄地查完悄悄地回来
+- **能**把一条前台支线单独转后台：`backgroundTasks(toolUseId)` 只针对那一个调用（不存在的 id 返回 false），转过去之后它与默认异步那条长得一模一样
+- ~~**不能**单独 kill 一条泳道~~ —— **推翻了，实测能停**：`stopTask(taskId)` 当场把支线停掉，回执 `status='stopped'`，没等它自己跑完。这条旧断言是 2026-08-10 翻文档时写下的，一直没人调过
+- 停和转后台认的**不是同一个键**：转后台用 `tool_use_id`，停用 `task_id`，而 **`task_id` 就是那条支线的 `agent_id`**。`agent_id` 在支线第一次工具调用的 hook 里就有了，所以不必等回执、活着的时候就能停
+- ⚠️ **被停掉的支线不发 `SubagentStop`**（回执之后再等 4 秒仍是 start/stop = 1/0）。凡是靠 `SubagentStop` 给泳道收尾的写法，遇到"人手动停了一条"就会让那条永远挂着——收尾要认 `task_notification`（实测见过 `completed` 与 `stopped`；类型上还有 `failed`，没造出来过）
 
 > 三条并发支线里有一条在钻牛角尖，不想等它、也不想丢掉它万一有用的结果 → 折叠到后台，主线往下走。
 
@@ -250,7 +255,11 @@ agent 的增量负担 ≈ 两次极短的 tool call，遵从性高；拿到的�
 
 ### 4.5 子 agent 呈现
 
-- `--forward-subagent-text` 把子 agent 的文本/thinking 带 `parent_tool_use_id` 转发；Task 的 tool_use id 就是天然的 lane key
+lane key 用起子 agent 那次调用的 `tool_use_id`。**但记账口给的是 `agent_id`，两个键天生不同**，所以归属要过一座桥——Spike A2 验的就是这座桥（附录 A.1）：
+
+- **活体桥是内层那次调用的 `tool_use_id`**：hook 侧有它（连同 `agent_id`），转发上来的子 agent 消息里也有它（连同 `parent_tool_use_id` = lane key），按它一 join，`agent_id ↔ lane` 就闭合了。**不要按到达顺序或"最近一次 Task 调用"去猜**——并发时支线的到达顺序会与发起顺序反过来，实测如此
+- 支线**跑完之后**还有两条便宜的路，可用来对账、不能用来实时归属：Agent 的 tool_result（`tool_use_result.agentId`）、以及 `task_notification`（`task_id` 就是 `agent_id`，同一条消息带 `tool_use_id`）
+- **`forwardSubagentText` 只管子 agent 的正文。** 不开这个开关，子 agent 的 `tool_use` 块照样带 `parent_tool_use_id` 转发上来——**泳道归属不依赖它**，它只决定支线里的文本/thinking 渲不渲染
 - Timeline 做成**泳道**：主干一条线，并发时 fan-out 成平行支线，各自收敛回主干节点
 - SDK 有选项开启**子 agent 周期性进度摘要**（约 30s fork 一次子会话生成一句话摘要，前后台都适用，官方说明成本很低）——泳道上"这条支线正在干嘛"不用自己实现
 - 子 agent transcript 落盘：`~/.claude/projects/<dir>/<sessionId>/subagents/agent-<agentId>.jsonl`；SDK 提供 `getSubagentMessages` / `listSubagents`
@@ -433,7 +442,7 @@ agent 的增量负担只是**多填一个枚举**，块的组装由 harness 做�
    理由：数据模型是纯设计工作，随时能做；这个 spike 是**证伪风险**——任何一条不成立，整套设计要改形。分两段：
 
    - **A（裸 Node / tsx）** —— ✅ **已完成，五条全 PASS，见附录 A.0**
-   - **A2（裸 Node）**：子 agent 场景——hook input 的 `agent_id` / `forwardSubagentText` 的 `parent_tool_use_id` / 单条支线转后台（§3.4）。泳道设计依赖这三条
+   - **A2（裸 Node）** —— ✅ **已完成，见附录 A.1**（全 PASS，由 `npm run spike:lane` 兜底）
    - **B（Electron main）**：验运行环境——PATH 补齐后能 spawn · 签名后 entitlements · 「已装但未登录」的环境检查
 
 1. **完整数据模型 + SQLite schema** —— ✅ **已完成**，见 [data-model](data-model.md) 与 `src/backend/db/schema.ts`，由 `npm run spike:db` 实跑验证（重放一致性 / 两条时间线错位 / superseded 链 / FTS 中文 / 报告四栏投影）
@@ -628,7 +637,19 @@ agent 的增量负担只是**多填一个枚举**，块的组装由 harness 做�
 
     - 顺带把 `pageFile()` 挪进了 `shared/paging.ts` 并补了检查——它正是这次出问题的那一带。mutation 又一次报出 MISS：`/tmp/v1.2/report` 这个夹具分不出 `indexOf` 与 `lastIndexOf`（两种写法算出来一样），得有一个"目录里有点、文件也有扩展名"的才兜得住
 
-14. **接下来**：**Spike A2（子 agent 泳道）**。分叉的真实数据来源还没验过——`agent_id` 与 `parent_tool_use_id` 是否够用，决定轨道里的支线怎么归属。轨道这一侧已经备好：`lane` 那一列还没有读它的人
+14. **Spike A2（子 agent 泳道）** —— ✅ **已完成**（`npm run spike:lane`，全 PASS），结论见附录 A.1，§3.4 与 §4.5 已按实测改写。
+
+    两块地基都成立，但各带一条要记住的：
+
+    - **归属**：`agent_id`（hook 侧）与 `parent_tool_use_id`（消息侧）都拿得到，但它们不是同一个键。**桥是内层那次调用的 `tool_use_id`**，两边都有它。**别按到达顺序猜**——并发时支线的到达顺序会与发起顺序反过来（实测拧过来之后，"按顺序配对"这种错写法才被排除掉）
+    - **处置**：`backgroundTasks(toolUseId)` 只针对那一条，成立。但**支线默认就在后台跑**（`run_in_background` 默认为真），所以 §3.4 的重点从"能不能折叠到后台"挪成了"一条已经在后台跑的支线怎么让人看得见"
+    - **顺带推翻了 §3.4 一条从没调过的旧断言**：单条泳道**停得掉**（`stopTask(taskId)`，回执 `stopped`）。代价是它不发 `SubagentStop`——收尾要认 `task_notification`
+
+15. **接下来**：**把泳道接进轨道**。`lane` 那一列到现在还没有读它的人，A2 只证明了数据拿得到。要动的三处：
+
+    - `case-runner` 记账时按 A.1 的桥算出 `lane` 并写进 `open_step` / `tool_calls`
+    - 轨道渲染分叉（D23：主干纵向单调追加、永不重排，分叉只向右生长）
+    - ⚠️ **支线默认异步会戳到会话状态**：现在 `result` 一到就 `busy = false`，而那一刻支线可能还在后台跑。界面会说"空闲"，其实还有一条在查——`task_notification` 与 `background_tasks_changed` 的电平都得接上
 
 ---
 
@@ -650,7 +671,7 @@ agent 的增量负担只是**多填一个枚举**，块的组装由 harness 做�
 
 **两条须留意的观测：**
 
-- **主线调用的 hook input 里没有 `agent_id`**（与 §4.4 "仅在子 agent 内出现"一致）。但**子 agent 侧尚未验证**——泳道归属（§4.5）依赖它，列为 Spike A2
+- **主线调用的 hook input 里没有 `agent_id`**（与 §4.4 "仅在子 agent 内出现"一致）。子 agent 侧由 Spike A2 补齐，见 A.1
 - **`settingSources: []` 不隔离用户环境**：仍加载 48 条 slash command 与用户全部 MCP（观测到 4 个 claude.ai connector，含 `needs-auth` / `pending` 状态）。**§2 "白送用户已有 skill 和 MCP"成立**，但反面是排查无关的工具会一起进来，且工具集变大后模型会先走一跳 `ToolSearch`——正式实现需用 `allowedTools` / `disallowedTools` 收窄
 
 **CLI flags**
@@ -684,3 +705,54 @@ agent 的增量负担只是**多填一个枚举**，块的组装由 harness 做�
 
 **能力探测**
 `system/init` 的 `capabilities` 是开放集合，需 feature-detect 而非版本嗅探。2026-08-10 spike 实测（CLI 2.1.220 与 2.1.226 一致）：`interrupt_receipt_v1`、`interrupt_cancel_queued_v1`、`msg_lifecycle_v1`。
+
+### A.1 Spike A2 结论（`npm run spike:lane`，SDK `0.3.220`）
+
+**全部 PASS。** 泳道的两块地基——归属（§4.5）与处置（§3.4）——都能落地，但**默认形态与原设计相反**：支线默认在后台跑，不是默认在前台等。
+
+每轮各起一次真会话，靠订阅凭据，所以**不进 `spike:all`**：
+
+| 轮次 | 验的是 | 参数 |
+|---|---|---|
+| `lanes` | 并发两条支线的归属能不能闭合、会不会串台 | 两条都钉死 `run_in_background: false` |
+| `background` | 单条前台支线转后台（§3.4） | 两条前台，中途把其中一条推过去 |
+| `async` | 不写 `run_in_background` 时的默认形态 | 一条，什么都不写 |
+| `stop` | 单条支线停得掉吗（§3.4 那条旧断言） | 一条默认异步的，中途 `stopTask` |
+
+**归属这一侧**
+
+| 断言 | 结果 |
+|---|---|
+| 主线起子 agent 那次调用，hook input 里没有 `agent_id` | ✅ 与 A.0 主线侧一致 |
+| 子 agent 内的调用带 `agent_id` + `agent_type` | ✅ 两条支线的 `agent_id` 互不相同 |
+| 子 agent 的 `tool_use` 块带 `parent_tool_use_id` 转发上来 | ✅ 且全部落在主线的 Agent 调用上 |
+| **按内层 `tool_use_id` join，`agent_id ↔ lane` 闭合且不串台** | ✅ ALPHA 归 alpha 那条，两条支线真的重叠在跑 |
+| `SubagentStart` / `SubagentStop` 成对，`agent_id` 对得上 | ✅ `SubagentStop` 还给出 transcript 路径 |
+| 闸门那一侧（`canUseTool`）也拿得到归属 | ✅ `opts.agentID`（注意是驼峰，hook 侧是 `agent_id`） |
+| 不开 `forwardSubagentText`，`tool_use` 块照样转发 | ✅ 只有文本没了——泳道归属不依赖这个开关 |
+
+**处置这一侧**
+
+| 断言 | 结果 |
+|---|---|
+| `backgroundTasks(toolUseId)` 对在跑的那条返回 true | ✅ |
+| 传一个不存在的 `tool_use_id` 返回 false | ✅ "只针对那一个"的反面证据 |
+| 被转后台的那条立刻回 tool_result，主线不被它卡住 | ✅ 探针还在睡的 45s 里主线又发了别的调用 |
+| 另一条没被碰过，照旧阻塞到自己跑完 | ✅ |
+| 支线跑完发 `task_notification`，`tool_use_id` 对回泳道 | ✅ 且 **`task_id` 就是 `agent_id`** |
+| `background_tasks_changed` 给出电平 | ✅ 观测到 `1 → 0`，可直接驱动"这条支线还在后台"的指示 |
+| 不写 `run_in_background` 时默认转后台 | ✅ tool_result 是 `async_launched`，带 `agentId` |
+| **`stopTask(taskId)` 停得掉单条支线** | ✅ 回执 `status='stopped'`，没等它睡醒——**推翻了"不能单独 kill"那条旧断言** |
+| 被停掉的支线还发不发 `SubagentStop` | ❌ **不发**（回执后再等 4 秒仍是 start/stop = 1/0），泳道收尾只能认 `task_notification` |
+
+**几条容易被改回去的**
+
+- **别拿到达顺序当归属依据**：`lanes` 那一轮特意让 alpha 那条支线先睡 6 秒再打探针，于是**主线的 Agent 调用是 alpha 在前，内层探针却是 beta 先到**。不这么拧，"按到达顺序配对"这种错写法算出来的答案与正解一模一样，那一轮的 PASS 就没排除掉它。这条自己就是一条检查（`5b`）：分不开就 FAIL，因为那一轮的 `5` 什么都没排除——**FAIL 了要重跑，不是改代码**
+- **`run_in_background` 的默认值把 §3.4 的重点挪了位**：要花力气的不是"能不能折叠到后台"，而是"一条已经在后台跑的支线怎么让人看得见"
+- **验"主线没被卡住"别写成"turn 在支线睡醒前收尾"**——那验的是模型的选择不是机制。实测它被 prompt 要求"两个都回来再说"，于是自己去 `TaskOutput` 等了一场，turn 反而更晚才收。机制这侧要问的只有：支线还在睡的时候主线动没动
+- **一句断言和一个接口互相打脸时，别去改措辞**：§3.4 写着"不能单独 kill 一条泳道"，而 SDK 上摆着 `stopTask(taskId)`。那条旧断言是翻文档翻出来的、从没调过——加一轮真调一次就结了，代价是十几秒
+- **"没发生"要等一会儿才说得出口**：`stop` 那轮收到回执就收工的话，"被停掉的支线不发 `SubagentStop`"只是**没等到**、不是没有。宽限 4 秒再看，得到的才是一句有界的话
+- **每一轮都先验会话本身**（检查 `0`）：机制那些检查只看事件到没到齐，而事件齐了、`result` 却是 `is_error`（凭据过期、模型报错）照样可能发生。那样的全 PASS 说的是"没验到失败"，不是"验过了"
+- **写进文档的观测得有人兜着**：`background_tasks_changed` 的 `1 → 0` 一度只是打印出来的一行日志，而文档已经把它当既定结论。现在是检查 `14b`
+- **等待要挂自己的定时器，别指望"下一条消息"来推**：`stop` 那轮的宽限期一度写在 `onMessage` 里，而它只在流里再来一条消息时才被调——支线停了、turn 也收了之后往往没有下一条，于是那一轮一直挂到 5 分钟的兜底超时才被关掉，"等了 4 秒"既不是 4 秒也没人发现（评审打出来的；改完 53 秒跑完）。**顺带把"确实等满了"也写进那条检查**，否则关得太早照样是 PASS
+- **`spike:lane` 可以只跑一轮**：`npm run spike:lane -- lanes` / `background` / `async` / `stop`。改归属逻辑时跑 `lanes` 就够（最快），其余几轮各有几十秒的真等待。轮次名拼错会以 2 退出并打出可选值——**"一轮都没跑"不能长得像"全 PASS"**
