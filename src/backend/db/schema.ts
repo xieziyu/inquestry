@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS steps (
   id                 TEXT    PRIMARY KEY,
   session_id         TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   parent_step_id     TEXT REFERENCES steps(id),
-  lane               TEXT,               -- 子 agent 泳道 key = Task 的 tool_use_id，主线为 NULL
+  lane               TEXT,               -- 子 agent 泳道 key = 起它那次调用的 tool_use_id，主线为 NULL
   ordinal            INTEGER NOT NULL,   -- 会话内序号，排查时间线的稳定排序键
   kind               TEXT    NOT NULL CHECK (kind IN ('normal','unclassified','impact','leftover')),
   direction          TEXT,               -- 可证伪的命题；unclassified 兜底节点为 NULL

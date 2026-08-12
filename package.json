@@ -11,6 +11,7 @@
     "spike:db": "tsx scripts/spike-db.ts",
     "spike:tools": "tsx scripts/spike-tools.ts",
     "spike:wire": "tsx scripts/spike-wire.ts",
+    "spike:lane": "tsx scripts/spike-lane.ts",
     "spike:gate": "tsx scripts/spike-gate.ts",
     "spike:cases": "tsx scripts/spike-cases.ts",
     "spike:close": "tsx scripts/spike-close.ts",
