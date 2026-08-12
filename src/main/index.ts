@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants, statSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,13 +11,14 @@ import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { DEMO_INCIDENT_DATE, DEMO_QUESTION } from '../backend/datasource/demo.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
 import { readIntake, sweepZombies } from '../backend/store/sqlite-store.js';
-import { localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
+import { exportStamp, localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
 import { CaseRegistry } from './case-registry.js';
 import { CaseRunner } from './case-runner.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
+  type ExportPayload,
   type ExportResult,
   type GateDecision,
   type IntakeDraft,
@@ -28,6 +29,7 @@ import {
   type VerdictShape,
 } from '../shared/ipc.js';
 import { reportMarkdown } from '../shared/markdown.js';
+import { pageFile } from '../shared/paging.js';
 import { reportInput } from '../shared/report.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -242,6 +244,316 @@ async function exportMarkdown(caseId: string, target?: string): Promise<ExportRe
   }
 }
 
+/** 长图的固定宽度（ui.md §7.2）：1240 CSS px、@2x 输出 2480px，与报告页的 `.paper` 同宽。 */
+const IMG_WIDTH = 1240;
+/**
+ * **@2x 由 CDP 的 `deviceScaleFactor` 给，不靠显示器**（实测）：`capturePage()` 出来的尺寸
+ * 跟着当前屏幕的缩放走，在 1x 机器上会静默产出一张半尺寸的图——而"同一个 case 在谁的机器上
+ * 导出都是同一张图"正是长图这条的前提。`clip.scale` 保持 1，两个一起放大会得到 4x。
+ */
+const IMG_SCALE = 2;
+
+/**
+ * 这次导出要渲染的东西，等离屏视图自己来取（`export:payload`）。
+ *
+ * **现给现收**：token 是随机的、导完就删，正常界面拿不到也就取不走别人的快照。
+ */
+const exportPayloads = new Map<string, ExportPayload>();
+
+/** 离屏视图量完排版后报回来的东西。字段名两侧要对上，改一边等于把图裁错。 */
+type ExportLayout = { width: number; pages: { top: number; height: number }[] };
+
+/**
+ * 导出长图（D26 的后一半 / ui.md §7.2）。
+ *
+ * 与 Markdown 同吃 `reportPlan()`，换的只是渲染目标：另开一个**离屏窗口**载入
+ * `?export=image`，那一屏按真实排版分页并把每页的落点量出来，这里逐页裁图写盘。
+ *
+ * ⚠️ **不用 `capturePage()`**：它拍的是合成器那一帧，尺寸跟着显示器缩放走，
+ * 而且未获焦点时会回过期帧（ui.md §11 实测过）。这里走 CDP 的
+ * `Page.captureScreenshot`，尺寸由 `deviceScaleFactor` 定死，超出视口的部分也拍得到。
+ */
+async function exportImage(caseId: string, target?: string): Promise<ExportResult> {
+  const runner = cases.currentIf(caseId);
+  if (!runner) return { ok: false, reason: 'no-case', error: '这个案子不在手上，可能刚切走了。' };
+  const input = reportInput(runner.snapshot());
+  if (!input) return { ok: false, reason: 'no-case', error: '这个案子还没有立案单，导不出报告。' };
+
+  // **先问落点再渲染**：反过来的话人要对着一个没反应的按钮等上几秒才等到保存框
+  let file = target ?? null;
+  if (!file) {
+    const r = await dialog.showSaveDialog(win!, {
+      title: '导出长图',
+      defaultPath: path.join(app.getPath('downloads'), `${fileStem(input.case.title, caseId)}.png`),
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, reason: 'canceled' };
+    file = r.filePath;
+  }
+
+  const token = randomUUID();
+  exportPayloads.set(token, { input, generatedAt: exportStamp(Date.now()) });
+  let shot: BrowserWindow | null = null;
+  try {
+    shot = new BrowserWindow({
+      show: false,
+      width: IMG_WIDTH,
+      height: 900,
+      // 底色要与报告页同一个：不给的话窗口底是白的，图片边缘会漏出一条白
+      backgroundColor: '#141a1f',
+      webPreferences: {
+        preload: path.join(HERE, '../preload/index.mjs'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    });
+    await loadRenderer(shot, { export: 'image', token });
+    const dbg = shot.webContents.debugger;
+    dbg.attach('1.3');
+    // ⚠️ **这两句必须在载入之后**：对着还没载入文档的窗口发
+    // `Emulation.setDeviceMetricsOverride`，整个进程 SIGSEGV（Electron 43 实测，
+    // 崩在 main 里，表现是"什么都没发生、退出码还是 0"）。
+    //
+    // 放在载入之后不影响分页：这里给的宽度与窗口本来的内容宽度同为 1240，
+    // `deviceScaleFactor` 又只管出图倍率、不参与 CSS 排版，所以那一屏量到的高度不会因它变。
+    // 真变了也兜得住——下面那句宽度核对与逐页的尺寸核对都会当场报错。
+    await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+      width: IMG_WIDTH,
+      height: 900,
+      deviceScaleFactor: IMG_SCALE,
+      mobile: false,
+    });
+
+    const layout = await waitForLayout(shot);
+    // 宽度对不上就是那一屏的样式没按 1240 排（比如挂上了报告屏的外壳）：
+    // 照裁的话会得到一张两边被切掉或留白的图，而它看起来"只是有点怪"
+    if (Math.round(layout.width) !== IMG_WIDTH) {
+      throw new Error(`长图视图排出来是 ${layout.width}px 宽，应为 ${IMG_WIDTH}px`);
+    }
+
+    // **先把每一页都拍完，再动盘上的文件**：边拍边写的话，拍到第三页才失败（尺寸对不上、
+    // 那一屏塌了）会在目录里留下前两页——一组看起来正常、其实是半份的报告，
+    // 而它与一次成功的导出长得一模一样
+    const shots: Buffer[] = [];
+    for (const rect of layout.pages) shots.push(await capturePage(dbg, rect));
+
+    const files = shots.map((_, i) => pageFile(file, i, shots.length));
+    await writeAll(files, shots);
+    // 这次没覆盖到、却顶着同一个名字的旧图要说出来（**只报不删**，见 `staleSiblings`）
+    return { ok: true, path: files[0]!, pages: files.length, stale: staleSiblings(file, files) };
+  } catch (err) {
+    return { ok: false, reason: 'failed', error: String((err as Error).message ?? err) };
+  } finally {
+    exportPayloads.delete(token);
+    // 窗口销毁会带走 debugger；漏掉这一句的话每导一次就留下一个看不见的窗口
+    shot?.destroy();
+  }
+}
+
+/** 两个入口共用一份载入逻辑：dev 走 vite 的地址，打包后走文件。 */
+async function loadRenderer(w: BrowserWindow, query: Record<string, string>) {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL(process.env.ELECTRON_RENDERER_URL);
+    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    await w.loadURL(url.toString());
+  } else {
+    await w.loadFile(path.join(HERE, '../renderer/index.html'), { query });
+  }
+}
+
+/**
+ * 等那一屏把分页量出来。**它自己报 ready，这边不靠固定等一会儿**——
+ * 等短了会按一份还没排完版的矩形去裁（ui.md §11 那条过期帧的同族：安静地产出一张错图）。
+ *
+ * 渲染侧的失败也走这条路报上来：只等超时的话，错误信息只会是"超时"，
+ * 说不出是取不到快照还是量不到某一块。
+ */
+async function waitForLayout(shot: BrowserWindow): Promise<ExportLayout> {
+  for (let i = 0; i < 150; i += 1) {
+    const got: ExportLayout | { error: string } | null = await shot.webContents.executeJavaScript(
+      'window.__inquestryExport ?? null',
+    );
+    if (got && 'error' in got) throw new Error(`长图那一屏没排出来：${got.error}`);
+    if (got && got.pages.length) return got;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('长图那一屏 15s 内没报出分页结果');
+}
+
+/**
+ * 拍一页。**拍完比对像素尺寸**（ui.md §7.2）：这条链路最容易的失效方式不是抛异常，
+ * 而是安静地给出一张高度不对的图——半截报告看起来只是"内容少了点"。
+ * 不符先重拍一次（排版可能刚好在这一刻还没稳），再不符就报错，绝不写一张对不上的图出去。
+ */
+async function capturePage(
+  dbg: Electron.Debugger,
+  rect: { top: number; height: number },
+): Promise<Buffer> {
+  const want = { w: IMG_WIDTH * IMG_SCALE, h: Math.round(rect.height) * IMG_SCALE };
+  let got = { w: 0, h: 0 };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const { data } = await dbg.sendCommand('Page.captureScreenshot', {
+      format: 'png',
+      // 超出视口的部分要拍得到，否则一整页只有第一屏是画面、其余全空
+      captureBeyondViewport: true,
+      // `fromSurface:false` 会忽略 captureBeyondViewport，只给一个视口那么高（实测）
+      fromSurface: true,
+      clip: { x: 0, y: rect.top, width: IMG_WIDTH, height: Math.round(rect.height), scale: 1 },
+    });
+    const buf = Buffer.from(data, 'base64');
+    got = pngSize(buf);
+    if (got.w === want.w && got.h === want.h) return buf;
+  }
+  throw new Error(`拍出来的图是 ${got.w}×${got.h}，应为 ${want.w}×${want.h}`);
+}
+
+/**
+ * 全写成功了才让新图露面：先落到同目录的临时文件，最后逐个 `rename` 换上去
+ * （同目录的 rename 是原子替换）。中途写失败时临时文件全删，用户看得见的那几个名字一个没动。
+ */
+async function writeAll(files: string[], data: Buffer[]) {
+  const temps = files.map((f) => `${f}.inquestry-part`);
+  const backups = files.map((f) => `${f}.inquestry-old`);
+  /** 挪开过旧文件的那几页，和已经换上新图的那几页。**两份要分开记**，见下。 */
+  const backedUp: number[] = [];
+  const swapped: number[] = [];
+  try {
+    for (const [i, t] of temps.entries()) await writeFile(t, data[i]!);
+    for (const [i, t] of temps.entries()) {
+      // **换之前先把旧的挪开**：换到第三页才失败时，前两页已经被新的盖掉了，
+      // 而 rename 之后旧内容就没地方找回来——目录里于是留下"两页新 + 一页旧"的一组，
+      // 它与一次成功的导出长得一模一样。挪开才有得还
+      if (existsSync(files[i]!)) {
+        await rename(files[i]!, backups[i]!);
+        backedUp.push(i);
+      }
+      await rename(t, files[i]!);
+      swapped.push(i);
+    }
+    // 全换上去了才删备份。**这一步失败不算导出失败**：图已经在盘上了，
+    // 留下几个看得出是什么的 `.inquestry-old` 比把成功报成失败强
+    for (const i of backedUp) await rm(backups[i]!, { force: true }).catch(() => {});
+  } catch (err) {
+    // 先撤掉这一轮换上去的，再把挪开的还回来。**还原要认 `backedUp` 而不是 `swapped`**：
+    // 失败正好落在"挪开了旧的、还没换上新的"这中间时，那一页在 `swapped` 里没有记录，
+    // 只按它还原的话，用户原本那张图就停在 `.inquestry-old` 上不见了（实测栽过）
+    for (const i of [...swapped].reverse()) await rm(files[i]!, { force: true }).catch(() => {});
+    for (const i of [...backedUp].reverse()) {
+      if (existsSync(backups[i]!)) await rename(backups[i]!, files[i]!).catch(() => {});
+    }
+    // 收尾失败不该盖过真正的原因（rename 成功的那些临时文件已经不在了）
+    for (const t of temps) await rm(t, { force: true }).catch(() => {});
+
+    // **回滚自己失败了也要说出来**：上面每一步都是 best-effort，全吞掉的话
+    // "失败时整组还原"就成了一句不作数的承诺——原图停在 `.inquestry-old` 上、
+    // 或者某几页还是新的，而人只看到最初那个错误，回头去找自己那张图才发现不见了。
+    //
+    // **按结果核，不按步骤核**：`rm` 失败之后 `rename` 照样可能盖回去（rename 会覆盖），
+    // 按步骤记的话会报一堆其实已经自愈的"失败"；真正要回答的只有一个问题——
+    // 那个名字上现在是不是用户原来那张图。
+    const trouble = [
+      ...backedUp
+        .filter((i) => existsSync(backups[i]!) || !existsSync(files[i]!))
+        .map((i) => `${files[i]} 没还原回来，旧的在 ${backups[i]}`),
+      // 原先没有这个文件、这一轮新写上去又没删掉的：留着就是半新半旧那一组的另一半
+      ...swapped
+        .filter((i) => !backedUp.includes(i) && existsSync(files[i]!))
+        .map((i) => `${files[i]} 是这次写上去的，没能删掉`),
+    ];
+    if (trouble.length) {
+      throw new Error(`${String((err as Error).message ?? err)}；回滚没做干净：${trouble.join('；')}`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * 顶着同一个名字、这次却没被覆盖到的旧图。**只报不删**。
+ *
+ * 单页导出落 `<target>`、多页落 `<target>-1…N`，于是同一个路径先后导出两次、页数又变了的话，
+ * 上一次的产物会原样留在旁边：它看起来就是这次的导出，打开却是一份过期的报告——
+ * 而报告正是要交出去的东西。
+ *
+ * 删掉它们是另一种错：**保存框只问过用户那一个名字**，`<stem>-3.png` 有没有可能是他自己的文件、
+ * 是不是别的案子导的，这儿一概不知道。所以这里只把名字报回界面，删不删由人决定
+ * （同这份代码里"缺席要写出来"的那一条：说出来比替人处置可信）。
+ */
+function staleSiblings(target: string, written: string[]): string[] {
+  const dir = path.dirname(target);
+  const ext = path.extname(target) || '.png';
+  const stem = path.basename(target, ext);
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const like = new RegExp(`^${escape(stem)}(-\\d+)?${escape(ext)}$`);
+  const mine = new Set(written);
+  try {
+    return readdirSync(dir)
+      .filter((name) => like.test(name))
+      .map((name) => path.join(dir, name))
+      .filter((full) => !mine.has(full))
+      .sort();
+  } catch {
+    // 读不了目录只是少一句提示，不该反过来把一次成功的导出报成失败
+    return [];
+  }
+}
+
+/** PNG 头里的真实像素尺寸。**不看解码库**：这里要的正是"盘上那张图到底多大"。 */
+function pngSize(buf: Buffer): { w: number; h: number } {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (buf.length < 24 || !buf.subarray(0, 8).equals(PNG)) return { w: 0, h: 0 };
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+}
+
+/**
+ * 无人值守时"进报告屏、按下那个导出按钮、把回执读回来"的一段脚本（ui.md §11）。
+ *
+ * **两种导出共用一份**：它们在界面上的失效方式一模一样（按了、什么都没发生），
+ * 各写一份的话，补了一边的等待、另一边照旧栽在同一个坑里。
+ *
+ * ⚠️ **每一步都要等界面到位**：`did-finish-load` 比第一份快照还早，那一刻连顶栏都没有。
+ * 不等的话报的是"没有导出按钮"，而按钮只是还没画出来。
+ */
+function exportProbe(button: string): string {
+  return `(async () => {
+    const wait = async (sel) => {
+      for (let i = 0; i < 50; i += 1) {
+        const el = document.querySelector(sel);
+        if (el) return el;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      return null;
+    };
+    if (!document.querySelector(${JSON.stringify(button)})) {
+      // 库里只剩冻结的案子时启动会停在立案面板（启动只恢复 open 的那种），
+      // 那时切换栏上还有它 —— 点进去，这也正是人会做的动作
+      if (!document.querySelector('.toreport')) {
+        const chip = await wait('.casebar .chip:not(.new)');
+        if (!chip) return null;
+        chip.click();
+      }
+      const enter = await wait('.toreport');
+      if (!enter) return null;
+      enter.click();
+    }
+    const btn = await wait(${JSON.stringify(button)});
+    if (!btn) return null;
+    // **先把上一次的回执关掉**：两种导出接连跑时屏上还挂着前一条，不关的话这里会立刻
+    // 读到它并当成本次的回执——两次都"成功"，而后一次可能压根没落地
+    const stale = document.querySelector('.exported');
+    if (stale) {
+      stale.querySelector('button').click();
+      for (let i = 0; i < 25 && document.querySelector('.exported'); i += 1) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      if (document.querySelector('.exported')) return '(上一条回执关不掉)';
+    }
+    btn.click();
+    const line = await wait('.exported');
+    return line ? line.textContent : '';
+  })()`;
+}
+
 /** 文件名取标题，路径分隔符与控制字符一律换掉；带上 caseId 好让同名的两个案子分得开。 */
 function fileStem(title: string, caseId: string): string {
   const safe = title.replace(/[/\\:*?"<>|\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -292,11 +604,7 @@ function createWindow() {
   win.webContents.on('did-fail-load', (_e, code, desc) => console.error('[renderer] load failed', code, desc));
   win.webContents.on('preload-error', (_e, file, err) => console.error('[preload]', file, err));
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  } else {
-    void win.loadFile(path.join(HERE, '../renderer/index.html'));
-  }
+  void loadRenderer(win, {});
 }
 
 app.whenReady().then(async () => {
@@ -380,6 +688,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('case:exportMarkdown', (_e, caseId: string) =>
     exportMarkdown(caseId, process.env.INQUESTRY_EXPORT_MD),
   );
+  // 开发期自检用 `INQUESTRY_EXPORT_IMG` 指定落点，同 Markdown 那条
+  ipcMain.handle('case:exportImage', (_e, caseId: string) =>
+    exportImage(caseId, process.env.INQUESTRY_EXPORT_IMG),
+  );
+  // 只有长图那个离屏视图会调；token 对不上就什么都不给
+  ipcMain.handle('export:payload', (_e, token: string) => exportPayloads.get(token) ?? null);
   ipcMain.handle('case:snapshot', () => snapshot());
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
     current()?.excerpt(callId, anchor) ?? '(没有选中的案子)',
@@ -394,7 +708,12 @@ app.whenReady().then(async () => {
   // 开发期自检：无人值守跑一轮并截图，用于在没有人盯着屏幕时验证 UI
   // 三个开关任一存在就挂这段自检：导出那条兜底不该依赖一个跟它无关的截图变量
   // （只设 `INQUESTRY_EXPORT_MD` 时它压根不会跑，而日志与文档都说它跑了）
-  if (process.env.INQUESTRY_SHOT || process.env.INQUESTRY_SHOT_REPORT || process.env.INQUESTRY_EXPORT_MD) {
+  if (
+    process.env.INQUESTRY_SHOT ||
+    process.env.INQUESTRY_SHOT_REPORT ||
+    process.env.INQUESTRY_EXPORT_MD ||
+    process.env.INQUESTRY_EXPORT_IMG
+  ) {
     const shots = process.env.INQUESTRY_SHOT ? process.env.INQUESTRY_SHOT.split(',') : [];
     win?.webContents.once('did-finish-load', async () => {
      try {
@@ -457,38 +776,54 @@ app.whenReady().then(async () => {
       if (process.env.INQUESTRY_EXPORT_MD) {
         // **等界面到位再点**：`did-finish-load` 比第一份快照早，那一刻连顶栏都还没有。
         // 不等的话表现是"报告屏上没有导出按钮"，而按钮只是还没画出来
-        const receipt: string | null = await win!.webContents.executeJavaScript(`(async () => {
-          const wait = async (sel) => {
-            for (let i = 0; i < 50; i += 1) {
-              const el = document.querySelector(sel);
-              if (el) return el;
-              await new Promise((r) => setTimeout(r, 200));
-            }
-            return null;
-          };
-          if (!document.querySelector('.exportmd')) {
-            // 库里只剩冻结的案子时启动会停在立案面板（启动只恢复 open 的那种），
-            // 那时切换栏上还有它 —— 点进去，这也正是人会做的动作
-            if (!document.querySelector('.toreport')) {
-              const chip = await wait('.casebar .chip:not(.new)');
-              if (!chip) return null;
-              chip.click();
-            }
-            const enter = await wait('.toreport');
-            if (!enter) return null;
-            enter.click();
-          }
-          const btn = await wait('.exportmd');
-          if (!btn) return null;
-          btn.click();
-          const line = await wait('.exported');
-          return line ? line.textContent : '';
-        })()`);
+        const receipt: string | null = await win!.webContents.executeJavaScript(exportProbe('.exportmd'));
         if (receipt === null) throw new Error('[export] 进不去报告屏，或那儿没有导出按钮');
         if (!receipt.startsWith('已导出到')) throw new Error(`[export] 界面没给出成功回执：${receipt}`);
         // 回执说成功、盘上却没有东西，是这条链路唯一还骗得过人的失败方式
         if (!statSync(process.env.INQUESTRY_EXPORT_MD).size) throw new Error('[export] 落盘的是个空文件');
         console.log('[export]', receipt);
+      }
+      // 长图同样**从界面按钮按下去**：renderer → preload → main → 离屏窗口 → 裁图 → 写盘 → 回执。
+      // 纯函数那一侧（分页）由 spike:image 兜着，这里验的是那一条按不下去就没人知道的链路
+      if (process.env.INQUESTRY_EXPORT_IMG) {
+        // **按下之前记一个时刻**：上一轮留在盘上的图会让这一段变成一条空检查——
+        // 文件在、尺寸也对，而这一次导出可能压根没跑（实测：漏掉上面那句"关掉旧回执"时，
+        // 探针读到的是 Markdown 那条回执，随即去核一张旧图，两条断言都过得去）
+        const pressedAt = Date.now();
+        const receipt: string | null = await win!.webContents.executeJavaScript(
+          exportProbe('.exportimg'),
+        );
+        if (receipt === null) throw new Error('[image] 进不去报告屏，或那儿没有导出长图的按钮');
+        if (!receipt.startsWith('已导出到')) throw new Error(`[image] 界面没给出成功回执：${receipt}`);
+        // **回执说成功、图却不对**是这条链路唯一还骗得过人的失败方式。按盘上那张图的
+        // 像素尺寸核，不看回执：@2x 那一条尤其要在真 app 里验——`capturePage()` 的倍率
+        // 跟着显示器走，在 1x 机器上会静默少掉一半分辨率，而图看起来"只是小了点"。
+        //
+        // 高度这一侧不在这儿设阈值：**一份短报告本来就该出一张矮图**（这个库里就有一个
+        // 几乎空的案子，2076px）。"截了半张"由 `capturePage()` 拿量出来的矩形当场核，
+        // 这里只认它是不是一张读得出尺寸的 PNG
+        // 第一张要么是 `<target>`（单页），要么是 `<target>-1`（分了页；**走生产那个命名函数**，
+        // 别在这儿照抄一遍规则）。
+        //
+        // ⚠️ **按"这次导出之后才写的"挑，不能按"哪个文件在"挑**：上一轮导过单页、这一轮分了页时，
+        // 旧的 `<target>` 按设计留在原地，"谁在就挑谁"必然挑中它——于是一次成功的导出被
+        // 报成失败（旧图的 mtime 当然早于按钮按下那一刻），而本轮真正的第一页压根没被核过
+        const target = process.env.INQUESTRY_EXPORT_IMG;
+        const fresh = [target, pageFile(target, 0, 2)].filter(
+          (f) => existsSync(f) && statSync(f).mtimeMs >= pressedAt,
+        );
+        // 一个都没有 = 回执说成功、盘上却没有这次写的东西，是这条链路唯一还骗得过人的失败方式
+        if (!fresh.length) throw new Error(`[image] 这次导出之后写出来的图一张都没有：${target}`);
+        const first = fresh[0]!;
+        const png = await readFile(first);
+        const size = pngSize(png);
+        if (size.w !== IMG_WIDTH * IMG_SCALE) {
+          throw new Error(`[image] 导出的图是 ${size.w}px 宽，应为 ${IMG_WIDTH * IMG_SCALE}px（@2x）`);
+        }
+        if (size.h % IMG_SCALE !== 0 || size.h === 0) {
+          throw new Error(`[image] 导出的图 ${size.h}px 高，不是 @2x 的整数倍`);
+        }
+        console.log('[image]', receipt, `${first} ${size.w}x${size.h}`);
       }
       if (process.env.INQUESTRY_SHOT_QUIT) app.quit();
      } catch (err) {

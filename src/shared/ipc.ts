@@ -5,6 +5,9 @@
  * renderer 不该知道背后跑的是 Claude 还是 codex。
  */
 
+// 只借一个类型：报告要装哪几块由 `shared/report.ts` 定，在这儿照抄一份必然与它长歪
+import type { ReportInput } from './report.js';
+
 /**
  * 立案面板收集的东西（ui.md §8.1）。
  *
@@ -322,9 +325,25 @@ export type Snapshot = {
  * 而后者意味着报告压根没落地，人却以为自己刚刚存下了它。
  */
 export type ExportResult =
-  | { ok: true; path: string }
+  /**
+   * `pages` 只有长图用得上（>1 时界面要说清共几张，否则人只看到第一张的路径）。
+   *
+   * `stale` 是**顶着同一个名字、这次却没被覆盖到的旧文件**：单页落 `<target>`、
+   * 多页落 `<target>-1…N`，页数一变，上一次的产物就原样留在旁边，看起来像是这次导出的。
+   * 只报不删——保存框只问过用户那一个名字，别的那些是不是他自己的文件，main 这儿不知道。
+   */
+  | { ok: true; path: string; pages?: number; stale?: string[] }
   | { ok: false; reason: 'canceled' }
   | { ok: false; reason: 'no-case' | 'failed'; error: string };
+
+/**
+ * 长图渲染视图（`?export=image`）要的东西。**由 main 备好一份交过去**，
+ * 不让那一屏自己去查快照：它是离屏开的，等它开起来时当前案子可能已经切走了，
+ * 而导出的产物与文件名会因此指着两个案子。
+ *
+ * `generatedAt` 同 Markdown 那条由调用方给：渲染侧读时钟的话同一个案子导两次的产物不同。
+ */
+export type ExportPayload = { input: ReportInput; generatedAt: string };
 
 export type OperatorReply = { id: string; statement: string; answer: string; executedAt?: string };
 
@@ -395,6 +414,16 @@ export type InquestryApi = {
    * 章节由 `shared/report.ts` 组装、`shared/markdown.ts` 渲染，与报告屏同一份。
    */
   exportMarkdown(caseId: string): Promise<ExportResult>;
+  /**
+   * 导出长图（D26 的后一半 / ui.md §7.2）。同吃 `reportPlan()`，只是换个渲染目标。
+   * 超长时按顶层小节切成几张，`pages` 会说共几张。
+   */
+  exportImage(caseId: string): Promise<ExportResult>;
+  /**
+   * 长图那个离屏视图取自己要渲染的东西。**只有它会调**：token 由 main 现给现收，
+   * 对不上就是 null——正常界面拿不到 token，也就取不走别人的快照。
+   */
+  exportPayload(token: string): Promise<ExportPayload | null>;
   snapshot(): Promise<Snapshot>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;
 };

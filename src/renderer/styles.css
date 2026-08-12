@@ -379,12 +379,13 @@ button.primary small { opacity: .6; font-weight: 400; }
   padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; margin-right: 4px;
 }
 
-/* 导出与返回并列：报告屏上能做的就这两件事（ui.md §6.1） */
-.anchors .exportmd {
+/* 导出与返回并列：报告屏上能做的就这几件事（ui.md §6.1）。两种导出长一个样：
+   Markdown 与长图并列一等（D26），把其中一个做成次要按钮就等于替人选了一种 */
+.anchors .exportmd, .anchors .exportimg {
   background: var(--panel-2); border: 1px solid var(--fill); color: var(--accent);
   padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; margin-right: 8px;
 }
-.anchors .exportmd:disabled { color: var(--dim); cursor: default; }
+.anchors .exportmd:disabled, .anchors .exportimg:disabled { color: var(--dim); cursor: default; }
 /* 回执留在屏上，不是闪一下就没：路径要能读出来、能复制走 */
 .exported {
   margin: 0; padding: 10px 60px; display: flex; align-items: center; gap: 12px;
@@ -487,4 +488,20 @@ button.primary small { opacity: .6; font-weight: 400; }
 .paper footer {
   margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line);
   font-family: var(--mono); font-size: 12px; color: var(--dim);
+}
+
+/* ── 长图导出视图（`?export=image`，ui.md §7.2）────────────────────────────
+   跑在离屏窗口里，人看不到这一屏。**配色与报告页完全一致**：图片是这个工具的名片，
+   不该长成另一副样子；也不跟随系统主题——同一个 case 在谁的机器上导出都得是同一张图
+   （这套色板本来就不跟随，这里只是别把它破了）。
+
+   ⚠️ 这一带不许出现 `vh`：视口高度是离屏窗口的，不是成图的高度，跟着它排会得到
+   一张下半截空白的图。高度一律由内容撑开。 */
+.imgexport { width: 1240px; background: var(--bg); }
+/* 每页自成一块，main 按量出来的矩形逐页裁。相邻两页要严丝合缝，所以这里不留外边距 */
+.imgpage { width: 1240px; background: var(--bg); overflow: hidden; }
+/* 页眉只在分了页时才有：被转发走的那一页也得说得出自己是谁的第几张 */
+.imgpage .pagehead {
+  display: flex; justify-content: space-between;
+  padding: 20px 60px 0; font-family: var(--mono); font-size: 12px; color: var(--dim);
 }

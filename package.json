@@ -17,9 +17,12 @@
     "spike:track": "tsx scripts/spike-track.ts",
     "spike:report": "tsx scripts/spike-report.ts",
     "spike:markdown": "tsx scripts/spike-markdown.ts",
+    "spike:image": "tsx scripts/spike-image.ts",
+    "spike:all": "npm run rebuild:node && npm run spike:db && npm run spike:gate && npm run spike:cases && npm run spike:close && npm run spike:track && npm run spike:report && npm run spike:markdown && npm run spike:image",
     "start": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "app": "npm run rebuild:electron && electron-vite preview",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "rebuild:node": "cd node_modules/better-sqlite3 && npm run build-release"
   },

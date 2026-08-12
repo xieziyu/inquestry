@@ -27,6 +27,8 @@ const api: InquestryApi = {
     ipcRenderer.invoke('case:answerOperator', caseId, reply),
   decideGate: (caseId: string, d: GateDecision) => ipcRenderer.invoke('case:decideGate', caseId, d),
   exportMarkdown: (caseId: string) => ipcRenderer.invoke('case:exportMarkdown', caseId),
+  exportImage: (caseId: string) => ipcRenderer.invoke('case:exportImage', caseId),
+  exportPayload: (token: string) => ipcRenderer.invoke('export:payload', token),
   snapshot: () => ipcRenderer.invoke('case:snapshot'),
   excerpt: (callId: string, anchor: string | null) => ipcRenderer.invoke('case:excerpt', callId, anchor),
   onSnapshot: (cb: (s: Snapshot) => void) => {

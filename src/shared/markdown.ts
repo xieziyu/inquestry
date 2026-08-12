@@ -14,7 +14,7 @@
  */
 
 import type { CallNode, EvidenceNode, IncidentEntry, ReportStepRef, StepNode } from './ipc.js';
-import { localTzOffset } from './time.js';
+import { exportStamp } from './time.js';
 import {
   SHAPE_COPY,
   reportPlan,
@@ -275,7 +275,7 @@ function contrastMd(
 }
 
 function footer(input: ReportInput, ctx: Ctx, opts: MarkdownOptions): string {
-  return `---\n\nCase \`${input.case.id}\` · 生成于 ${stamp(opts.generatedAt)} · ${ctx.plan.evidenceCount} 条证据可在 Inquestry 溯源`;
+  return `---\n\nCase \`${input.case.id}\` · 生成于 ${exportStamp(opts.generatedAt)} · ${ctx.plan.evidenceCount} 条证据可在 Inquestry 溯源`;
 }
 
 /**
@@ -439,11 +439,3 @@ const mm = (text: string) => {
   const one = inline(text).replace(/["`|[\]{}<>\\]/g, '');
   return one.length > 48 ? `${one.slice(0, 47)}…` : one;
 };
-
-const pad = (n: number) => String(n).padStart(2, '0');
-
-/** 页脚水印上的生成时间。带偏移，否则跨时区转手之后没人知道这是谁的几点。 */
-function stamp(ms: number): string {
-  const at = new Date(ms);
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} ${localTzOffset(at)}`;
-}
