@@ -18,6 +18,7 @@ import { CaseRunner } from './case-runner.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
+  type ExportResult,
   type GateDecision,
   type IntakeDraft,
   type IntakeOptions,
@@ -26,6 +27,8 @@ import {
   type Snapshot,
   type VerdictShape,
 } from '../shared/ipc.js';
+import { reportMarkdown } from '../shared/markdown.js';
+import { reportInput } from '../shared/report.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RECENT_ROOTS_KEY = 'intake.recent_roots';
@@ -202,6 +205,49 @@ function lastAgentChoice(caseId: string): AgentChoice {
   return readCaseUi(caseId).agent ?? { backend: 'claude', model: null, effort: null };
 }
 
+/**
+ * 导出 Markdown（D26 / ui.md §7.1）。
+ *
+ * **带 caseId 核对**（`currentIf`）：切过去之后 current 是新案子，旧界面那一下的点击
+ * 会导出另一个案子的内容，而文件名是按当前案子起的——一份没人会察觉搞错了的交付物。
+ *
+ * `target` 只给无人值守自检用（`INQUESTRY_EXPORT_MD`）：给了就直接写，不弹保存框。
+ */
+async function exportMarkdown(caseId: string, target?: string): Promise<ExportResult> {
+  const runner = cases.currentIf(caseId);
+  if (!runner) return { ok: false, reason: 'no-case', error: '这个案子不在手上，可能刚切走了。' };
+  const input = reportInput(runner.snapshot());
+  // 立案单读不出来就没有报告可导。**说出来**，别写一个只有页脚的空文件
+  if (!input) return { ok: false, reason: 'no-case', error: '这个案子还没有立案单，导不出报告。' };
+
+  const md = reportMarkdown(input, { generatedAt: Date.now() });
+  let file = target ?? null;
+  if (!file) {
+    const r = await dialog.showSaveDialog(win!, {
+      title: '导出 Markdown',
+      defaultPath: path.join(app.getPath('downloads'), `${fileStem(input.case.title, caseId)}.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, reason: 'canceled' };
+    file = r.filePath;
+  }
+
+  try {
+    await writeFile(file, md, 'utf8');
+    return { ok: true, path: file };
+  } catch (err) {
+    // 写盘失败必须回到界面上：静默失败的表现是"按了导出、什么都没发生"，
+    // 而人以为报告已经存下来了
+    return { ok: false, reason: 'failed', error: String((err as Error).message ?? err) };
+  }
+}
+
+/** 文件名取标题，路径分隔符与控制字符一律换掉；带上 caseId 好让同名的两个案子分得开。 */
+function fileStem(title: string, caseId: string): string {
+  const safe = title.replace(/[/\\:*?"<>|\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+  return `${safe.slice(0, 40) || 'inquestry'} ${caseId}`;
+}
+
 /** 切换栏上的短标签：问题的第一行，长了截断。 */
 function titleOf(question: string): string {
   const first = question.split('\n').find((l) => l.trim())?.trim() ?? '未命名案件';
@@ -330,6 +376,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('case:decideGate', (_e, caseId: string, d: GateDecision) =>
     cases.currentIf(caseId)?.decideGate(d) ?? false,
   );
+  // 开发期自检用 `INQUESTRY_EXPORT_MD` 指定落点，好让界面那一下不卡在保存框上
+  ipcMain.handle('case:exportMarkdown', (_e, caseId: string) =>
+    exportMarkdown(caseId, process.env.INQUESTRY_EXPORT_MD),
+  );
   ipcMain.handle('case:snapshot', () => snapshot());
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
     current()?.excerpt(callId, anchor) ?? '(没有选中的案子)',
@@ -342,9 +392,12 @@ app.whenReady().then(async () => {
   app.on('before-quit', () => cases.closeAll());
 
   // 开发期自检：无人值守跑一轮并截图，用于在没有人盯着屏幕时验证 UI
-  if (process.env.INQUESTRY_SHOT) {
-    const shots = process.env.INQUESTRY_SHOT.split(',');
+  // 三个开关任一存在就挂这段自检：导出那条兜底不该依赖一个跟它无关的截图变量
+  // （只设 `INQUESTRY_EXPORT_MD` 时它压根不会跑，而日志与文档都说它跑了）
+  if (process.env.INQUESTRY_SHOT || process.env.INQUESTRY_SHOT_REPORT || process.env.INQUESTRY_EXPORT_MD) {
+    const shots = process.env.INQUESTRY_SHOT ? process.env.INQUESTRY_SHOT.split(',') : [];
     win?.webContents.once('did-finish-load', async () => {
+     try {
       if (process.env.INQUESTRY_AUTOSTART) {
         // 无人值守时替人立一次案，好让整条链路能自己跑完
         createCase({
@@ -367,15 +420,85 @@ app.whenReady().then(async () => {
       // **点不到入口要出声**：`?.click()` 静默跳过的话，拍出来的是调查台，
       // 而文件名与日志都说这是报告——一张认错了的截图比没有更糟
       if (process.env.INQUESTRY_SHOT_REPORT) {
-        const opened = await win!.webContents.executeJavaScript(
-          `!!document.querySelector('.toreport') && (document.querySelector('.toreport').click(), true)`,
-        );
-        if (!opened) throw new Error('[shot] 进不去报告屏：没找到 .toreport');
-        await new Promise((r) => setTimeout(r, 400));
-        await writeFile(process.env.INQUESTRY_SHOT_REPORT, (await win!.webContents.capturePage()).toPNG());
+        // **先等界面到位再摸它**：单独设这个变量时（不带 INQUESTRY_SHOT）这里是
+        // `did-finish-load` 后第一件事，比第一份快照还早——报告屏与 .toreport
+        // 谁都还没画出来。不等的话表现是"进不去报告屏"，而两者只是还没渲染出来
+        const ready: string = await win!.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 50; i += 1) {
+            if (document.querySelector('.reportscreen')) return 'here';
+            if (document.querySelector('.toreport')) return 'toreport';
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          return 'none';
+        })()`);
+        if (ready === 'none') throw new Error('[shot] 进不去报告屏：等了 10s，既没有报告屏也没找到 .toreport');
+        // 先留一帧点击前的：**固定等一会儿再拍是不够的**——实测点进报告屏后 400ms 拍到的
+        // 与点击前那一张字节完全相同（§11 的过期帧）。等到画面真的变了才算拍到，
+        // 等不到就抛；否则文件名和日志都说这是报告，而里面是调查台
+        const before = (await win!.webContents.capturePage()).toPNG();
+        // 收尾之后界面会自己翻到报告屏（§9.11），那时不用点
+        if (ready === 'toreport') {
+          await win!.webContents.executeJavaScript(`document.querySelector('.toreport').click()`);
+        }
+        let after: Buffer | null = ready === 'here' ? before : null;
+        for (let i = 0; i < 10 && !after; i += 1) {
+          await new Promise((r) => setTimeout(r, 400));
+          const png = (await win!.webContents.capturePage()).toPNG();
+          if (!png.equals(before)) after = png;
+        }
+        if (!after) throw new Error('[shot] 报告屏拍到的还是点击前那一帧（capturePage 过期帧，见 ui.md §11）');
+        await writeFile(process.env.INQUESTRY_SHOT_REPORT, after);
         console.log('[shot] report');
       }
+      // 导出这条链路在真 app 里才跑得到，且**要从界面按钮按下去**：
+      // renderer → preload → main → 写盘 → 回执。直接调 main 那个函数验不到回执，
+      // 而"按了导出、什么都没发生"正是这条路最容易的失效方式。
+      // 纯函数那一侧（章节与渲染）由 spike:markdown 兜着。**失败要抛**
+      if (process.env.INQUESTRY_EXPORT_MD) {
+        // **等界面到位再点**：`did-finish-load` 比第一份快照早，那一刻连顶栏都还没有。
+        // 不等的话表现是"报告屏上没有导出按钮"，而按钮只是还没画出来
+        const receipt: string | null = await win!.webContents.executeJavaScript(`(async () => {
+          const wait = async (sel) => {
+            for (let i = 0; i < 50; i += 1) {
+              const el = document.querySelector(sel);
+              if (el) return el;
+              await new Promise((r) => setTimeout(r, 200));
+            }
+            return null;
+          };
+          if (!document.querySelector('.exportmd')) {
+            // 库里只剩冻结的案子时启动会停在立案面板（启动只恢复 open 的那种），
+            // 那时切换栏上还有它 —— 点进去，这也正是人会做的动作
+            if (!document.querySelector('.toreport')) {
+              const chip = await wait('.casebar .chip:not(.new)');
+              if (!chip) return null;
+              chip.click();
+            }
+            const enter = await wait('.toreport');
+            if (!enter) return null;
+            enter.click();
+          }
+          const btn = await wait('.exportmd');
+          if (!btn) return null;
+          btn.click();
+          const line = await wait('.exported');
+          return line ? line.textContent : '';
+        })()`);
+        if (receipt === null) throw new Error('[export] 进不去报告屏，或那儿没有导出按钮');
+        if (!receipt.startsWith('已导出到')) throw new Error(`[export] 界面没给出成功回执：${receipt}`);
+        // 回执说成功、盘上却没有东西，是这条链路唯一还骗得过人的失败方式
+        if (!statSync(process.env.INQUESTRY_EXPORT_MD).size) throw new Error('[export] 落盘的是个空文件');
+        console.log('[export]', receipt);
+      }
       if (process.env.INQUESTRY_SHOT_QUIT) app.quit();
+     } catch (err) {
+       // 这个 handler 里抛出去的异常没人接：表现是无人值守跑干等到超时，一行日志都没有。
+       // **失败必须无条件非零退出**——INQUESTRY_SHOT_QUIT 只管"成功之后要不要自动退出"，
+       // 不该顺带决定"失败要不要退出"，否则单独设 INQUESTRY_EXPORT_MD 跑失败时进程会
+       // 一直挂着，调用方拿不到能判定失败的退出码
+       console.error('[shot] 自检失败', err);
+       app.exit(1);
+     }
     });
 
     // 无人值守时代替操作员回填。闸门也要一起放行：否则跑到第一个 ②档就停在那儿，

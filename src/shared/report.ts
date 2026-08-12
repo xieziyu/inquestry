@@ -34,7 +34,12 @@ export type ChainLink = {
   isRoot: boolean;
 };
 
-export type SplitGroup = { actor: string; count: number; claims: string[] };
+/** `claims` 连证据 id 一起带：导出要给每一条挂脚注（ui.md §7.1），只有文本就对不上索引。 */
+export type SplitGroup = {
+  actor: string;
+  count: number;
+  claims: { evidenceId: string; claim: string }[];
+};
 
 export type ReportBody =
   | { kind: 'verdict'; text: string; confidence: number | null }
@@ -249,7 +254,7 @@ function splitGroups(steps: StepNode[]): SplitGroup[] {
       const actor = e.actor?.trim() || '未标注';
       const g = by.get(actor) ?? { actor, count: 0, claims: [] };
       g.count += 1;
-      if (g.claims.length < 6) g.claims.push(e.claim);
+      if (g.claims.length < 6) g.claims.push({ evidenceId: e.id, claim: e.claim });
       by.set(actor, g);
     }
   }

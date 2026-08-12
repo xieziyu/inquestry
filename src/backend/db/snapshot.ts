@@ -151,7 +151,7 @@ export function buildSnapshot(
 
   const incident = db
     .prepare(
-      `SELECT e.occurred_at_ms, e.occurred_at_raw, e.actor, e.claim, e.step_id,
+      `SELECT e.id, e.occurred_at_ms, e.occurred_at_raw, e.actor, e.claim, e.step_id,
               st.status AS step_status, e.tool_call_id, COALESCE(e.anchor_resolved, e.anchor) AS anchor
        FROM evidence_refs e
        JOIN steps st ON st.id = e.step_id
@@ -160,6 +160,7 @@ export function buildSnapshot(
        ORDER BY e.occurred_at_ms`,
     )
     .all(ctx.caseId) as {
+    id: string;
     occurred_at_ms: number;
     occurred_at_raw: string | null;
     actor: string | null;
@@ -180,6 +181,7 @@ export function buildSnapshot(
     shapeSuggestion: suggestVerdictShape(db, ctx.caseId),
     incident: incident.map(
       (r): IncidentEntry => ({
+        evidenceId: r.id,
         occurredAtMs: r.occurred_at_ms,
         occurredAtRaw: r.occurred_at_raw,
         actor: r.actor,

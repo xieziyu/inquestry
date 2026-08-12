@@ -379,6 +379,24 @@ button.primary small { opacity: .6; font-weight: 400; }
   padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; margin-right: 4px;
 }
 
+/* 导出与返回并列：报告屏上能做的就这两件事（ui.md §6.1） */
+.anchors .exportmd {
+  background: var(--panel-2); border: 1px solid var(--fill); color: var(--accent);
+  padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; margin-right: 8px;
+}
+.anchors .exportmd:disabled { color: var(--dim); cursor: default; }
+/* 回执留在屏上，不是闪一下就没：路径要能读出来、能复制走 */
+.exported {
+  margin: 0; padding: 10px 60px; display: flex; align-items: center; gap: 12px;
+  background: var(--panel-2); border-bottom: 1px solid var(--line);
+  font-size: 12.5px; font-family: var(--mono); color: var(--dim);
+}
+.exported.bad { color: var(--bad); }
+.exported button {
+  margin-left: auto; background: none; border: 1px solid var(--line); color: var(--dim);
+  padding: 2px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; font-family: inherit;
+}
+
 /* 宽度对齐长图导出的 1240px：所见即所得，同一份内容在屏幕上和图片里断行一致 */
 .paper { max-width: 1240px; margin: 0 auto; padding: 44px 60px 96px; font-size: 15.5px; line-height: 1.72; }
 .paper p { max-width: 76ch; }

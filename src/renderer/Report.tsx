@@ -12,7 +12,7 @@
  * 章节怎么组装不在这儿：`shared/report.ts` 是那一份，两种导出共用它。
  */
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { IncidentEntry, Snapshot, StepNode } from '../shared/ipc.js';
 import {
   SHAPE_COPY,
@@ -25,6 +25,12 @@ import {
 export function Report({ snap, onBack }: { snap: Snapshot; onBack: () => void }) {
   const page = useRef<HTMLDivElement>(null);
   const nav = useRef<HTMLElement>(null);
+  /**
+   * 导出的回执。**成功与失败都要说出来**：写盘失败与人自己按取消在界面上长得一样
+   * （都是"按了导出、什么都没发生"），而前者意味着报告压根没落地。
+   */
+  const [exported, setExported] = useState<{ ok: boolean; text: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
   /**
    * 跳到某一节：落点要让开 sticky 导航自己那么高的一条，否则标题正好被压在导航底下，
    * 读者落在正文中间却看不见自己跳到了哪一节。
@@ -42,6 +48,28 @@ export function Report({ snap, onBack }: { snap: Snapshot; onBack: () => void })
     host.scrollTop += el.getBoundingClientRect().top - host.getBoundingClientRect().top - gap;
   };
 
+  /**
+   * 导出走 main：那边才有库与文件系统，且**由 main 拿它自己那份快照渲染**——
+   * 界面这份最多晚 60ms，导出的是一份要交出去的文档，不该差着一拍。
+   */
+  const exportMd = async () => {
+    const caseId = snap.case?.id;
+    if (!caseId) return;
+    setExporting(true);
+    try {
+      const r = await window.inquestry.exportMarkdown(caseId);
+      if (r.ok) setExported({ ok: true, text: `已导出到 ${r.path}` });
+      else if (r.reason === 'canceled') setExported(null);
+      else setExported({ ok: false, text: `导出失败：${r.error}` });
+    } catch (err) {
+      // invoke 自己也会 reject（main 抛了、通道关了）。**不接的话回执这条路就白搭**：
+      // 按钮恢复、文件没有、屏上什么都不说，与"人按了取消"长得一模一样
+      setExported({ ok: false, text: `导出失败：${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const input = reportInput(snap);
   if (!input) return null;
   const plan = reportPlan(input);
@@ -54,6 +82,9 @@ export function Report({ snap, onBack }: { snap: Snapshot; onBack: () => void })
       <nav className="anchors" ref={nav}>
         <button className="back" onClick={onBack}>
           ← 调查台
+        </button>
+        <button className="exportmd" onClick={exportMd} disabled={exporting}>
+          {exporting ? '导出中…' : '导出 Markdown'}
         </button>
         {plan.sections.map((s) => (
           <a
@@ -68,6 +99,14 @@ export function Report({ snap, onBack }: { snap: Snapshot; onBack: () => void })
           </a>
         ))}
       </nav>
+
+      {/* 回执贴在导航下面而不是弹一下就没：路径要能被读出来、被复制走 */}
+      {exported && (
+        <p className={exported.ok ? 'exported' : 'exported bad'}>
+          {exported.text}
+          <button onClick={() => setExported(null)}>知道了</button>
+        </p>
+      )}
 
       <article className="paper">
         <header>
@@ -156,7 +195,7 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
                 <li key={g.actor}>
                   <span className="who">{g.actor}</span>
                   <span className="n">{g.count} 条证据</span>
-                  <span className="claims">{g.claims.join(' · ')}</span>
+                  <span className="claims">{g.claims.map((c) => c.claim).join(' · ')}</span>
                 </li>
               ))}
             </ul>

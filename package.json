@@ -16,6 +16,7 @@
     "spike:close": "tsx scripts/spike-close.ts",
     "spike:track": "tsx scripts/spike-track.ts",
     "spike:report": "tsx scripts/spike-report.ts",
+    "spike:markdown": "tsx scripts/spike-markdown.ts",
     "start": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

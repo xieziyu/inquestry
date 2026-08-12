@@ -119,6 +119,12 @@ export type StepNode = {
 };
 
 export type IncidentEntry = {
+  /**
+   * 这一行出自哪一条证据。**导出的脚注靠它对上文末索引**（ui.md §7.1）：
+   * 正文只留 `[^e3]`，工具 / 锚点 / 时间戳来源统一落在索引里。
+   * 没有它就只能按 `claim` + `callId` 反猜，而同一次调用里两条同文的证据分不开。
+   */
+  evidenceId: string;
   occurredAtRaw: string | null;
   occurredAtMs: number;
   actor: string | null;
@@ -308,6 +314,18 @@ export type Snapshot = {
   };
 };
 
+/**
+ * Markdown 导出的结果（D26 / ui.md §7.1）。
+ *
+ * **失败必须分得出是哪一种**：取消是人自己按的，其余两种是这次导出没成——
+ * 只回一个 boolean 的话，界面对"取消"和"写盘失败"只能给同一句话，
+ * 而后者意味着报告压根没落地，人却以为自己刚刚存下了它。
+ */
+export type ExportResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: 'canceled' }
+  | { ok: false; reason: 'no-case' | 'failed'; error: string };
+
 export type OperatorReply = { id: string; statement: string; answer: string; executedAt?: string };
 
 export const EMPTY_SNAPSHOT: Snapshot = {
@@ -370,6 +388,13 @@ export type InquestryApi = {
   answerOperator(caseId: string, reply: OperatorReply): Promise<boolean>;
   decideGate(caseId: string, decision: GateDecision): Promise<boolean>;
   excerpt(callId: string, anchor: string | null): Promise<string>;
+  /**
+   * 导出 Markdown（D26）。**带 caseId 同上**：导出的是一份要交出去的文档，
+   * 落到别的案子头上会得到一个文件名与内容对不上、且没人会察觉的产物。
+   *
+   * 章节由 `shared/report.ts` 组装、`shared/markdown.ts` 渲染，与报告屏同一份。
+   */
+  exportMarkdown(caseId: string): Promise<ExportResult>;
   snapshot(): Promise<Snapshot>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;
 };

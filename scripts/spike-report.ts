@@ -12,95 +12,18 @@
  * 另一个形状是**自己再挑一次根因**：报告的结构（装哪几块）与内容（印哪条结论）
  * 就此指着两条不同的步，同样毫无报错。所以夹具里投影给的根因**故意不是置信度最高的那条**。
  *
- * 夹具的每一条都要能让某个错法算错：应然/实然是填了的，事故时间线是有两条的，
- * 未决型那份是**带着一条已证实根因**的——否则"不装"的检查全是空的。
+ * 夹具在 `fixtures/report-case.ts`，与 `spike:markdown` 共用：它的每一条都是为了让某个错法
+ * 算错（应然/实然填着、时间线有两条、未决型那份带着一条已证实根因），否则"不装"的检查全是空的。
  */
 
-import type { IncidentEntry, Snapshot, StepNode } from '../src/shared/ipc.js';
-import { EMPTY_SNAPSHOT, VERDICT_SHAPES } from '../src/shared/ipc.js';
+import { EMPTY_SNAPSHOT, VERDICT_SHAPES, type Snapshot } from '../src/shared/ipc.js';
 import { reportInput, reportPlan, type ReportInput } from '../src/shared/report.js';
+// 夹具与 spike:markdown 共用一份（`fixtures/report-case.ts`）：章节的取舍与它的渲染是
+// 同一条链路的前后两段，各自造一份的话，一边补了字段另一边没补，那边的检查就变成空的
+import { base, incident, report, steps } from './fixtures/report-case.js';
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
-
-let seq = 0;
-function step(p: Partial<StepNode> & { id: string }): StepNode {
-  return {
-    ordinal: ++seq,
-    sessionId: 'se1',
-    sessionIndex: 1,
-    parentStepId: null,
-    kind: 'normal',
-    status: 'open',
-    direction: p.id,
-    verdict: `${p.id} 的判定`,
-    confidence: null,
-    supersededBy: null,
-    calls: [],
-    evidence: [],
-    ...p,
-  };
-}
-
-const ev = (id: string, actor: string | null, raw: string | null) => ({
-  id,
-  claim: `${id} 说的事`,
-  anchor: null,
-  occurredAtRaw: raw,
-  actor,
-  callId: 'tc1',
-});
-
-/**
- * 一个"什么都有"的案子：已证实的链条、被推翻的分支、影响面、遗留疑点，
- * 应然/实然填着，事故时间线上有两条。**每一种形态的「不投影」都因此有东西可以误装。**
- */
-const steps: StepNode[] = [
-  step({ id: 'st1', status: 'confirmed', confidence: 0.9, evidence: [ev('e1', 'svc-a', '10:02:11')] }),
-  step({ id: 'st2', status: 'superseded', supersededBy: 'st4' }),
-  step({ id: 'st3', kind: 'impact', status: 'confirmed', confidence: 0.8 }),
-  // 投影认定的根因。**置信度不是最高的**——报告若自己再挑一次，挑中的会是 st1
-  step({ id: 'st4', status: 'confirmed', confidence: 0.4, evidence: [ev('e2', 'svc-a', '10:04:00')] }),
-  // 没标置信度的一环，不该参与"最弱一环"的比较
-  step({ id: 'st5', status: 'confirmed', evidence: [ev('e3', 'svc-b', null)] }),
-  step({ id: 'st6', kind: 'leftover', status: 'inconclusive' }),
-];
-
-/** 只有带时间戳的两条。svc-b 那条**不在这里**——归因切分若按它算就会凭空少一组。 */
-const incident: IncidentEntry[] = [
-  { occurredAtMs: 1, occurredAtRaw: '10:02:11', actor: 'svc-a', claim: 'e1 说的事', stepId: 'st1', stepStatus: 'confirmed', callId: 'tc1', anchor: null },
-  { occurredAtMs: 2, occurredAtRaw: '10:04:00', actor: 'svc-a', claim: 'e2 说的事', stepId: 'st4', stepStatus: 'confirmed', callId: 'tc1', anchor: null },
-];
-
-const report: Snapshot['report'] = {
-  rootCause: { stepId: 'st4', text: '连接池在扩容时被复用了旧配置', confidence: 0.4 },
-  impact: '受影响的是 37 个租户',
-  expected: '扩容后每个实例各自建池',
-  actual: '扩容后仍共用扩容前那一个',
-  leftovers: [{ stepId: 'st6', direction: '重试为什么没兜住', text: '没查清', supersededBy: null }],
-  refuted: [{ stepId: 'st2', direction: '是不是上游超时', text: '上游全程正常', supersededBy: 'st4' }],
-};
-
-const base = (over: Partial<ReportInput> = {}): ReportInput => ({
-  case: {
-    id: 'case_1',
-    title: '订单查不到',
-    question: '为什么部分租户查不到订单',
-    projectRoot: null,
-    incidentDate: '2026-08-01',
-    tzOffset: '+08:00',
-    clues: null,
-    agent: { backend: 'claude', model: null, effort: null },
-    status: 'closed',
-    verdictShape: null,
-  },
-  shape: 'sequence',
-  frozen: true,
-  steps,
-  incident,
-  report,
-  ...over,
-});
 
 const ids = (over: Partial<ReportInput>) => reportPlan(base(over)).sections.map((s) => s.id);
 const bodyOf = (over: Partial<ReportInput>, id: string) =>
