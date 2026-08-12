@@ -123,7 +123,7 @@ duetlens 的三层直接沿用，**但 Inquestry 多一类**：
 
 ### Pending 为什么必须在 main
 
-它们不是数据，是活着的 Promise。两条硬要求：
+它们不是数据，是活着的 Promise。硬要求：
 
 1. **超时兜底（D9）的计时器在 main**。放 renderer 的话，用户关个窗口 agent 就永久挂死
 2. **registry 在 main 单例**，renderer 只是只读投影 + 操作入口。overview §5.1⑤ 的重连 re-arm、`request_id` 的 live/replay 双帧去重全在这层做，UI 看到的永远是干净的列表

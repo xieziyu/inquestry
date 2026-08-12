@@ -17,7 +17,7 @@
 
 大 payload 不进库：`blobs` 只存 `sha256 / size / mime / line_count`，原始输出内容寻址落盘。`line_count` 是给 `lineRange` 锚点做边界校验的——锚点指向不存在的行是"看起来溯源了其实没有"的典型形态。
 
-## 2. 五个不显眼但省不掉的字段
+## 2. 不显眼但省不掉的字段
 
 ### `sessions.backend` + `native_session_ref` + `model` / `effort`
 
@@ -51,7 +51,7 @@ D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接
 
 第一次接线时这条 0/17 全错（还叠加了 blob 存成 JSON 的 bug）；修好后 17/17 全部能回到真实那一行。
 
-### `cases` 上的立案单（schema v2 已落库）
+### `cases` 上的立案单（schema v2 起已落库）
 
 日志时间串大多**既无日期也无时区**（`12:03:01.220`）。没有基准日与时区，`occurred_at_ms` 落不成绝对时刻，事故时间线就排不出来。所以它们**在立案时收**，不能等结案（overview D27）。
 
@@ -60,10 +60,24 @@ D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接
 | `incident_date` / `tz_offset` | 上述基准，`NOT NULL`。基准日由立案面板收，**时区不收**——取立案机器的本机偏移落库。重开旧案时一律以库里那份为准：重算或改动都会让新证据与老证据错开 |
 | `project_root` | agent 的运行目录（`Options.cwd`），决定它继承哪套 skill / MCP，也决定会话记录落盘位置。为空即演示模式，玩具数据源只在这时挂上去 |
 | `question` / `clues` | 立案时写的完整问题与已知线索。新开 session 时由它们拼出首轮提问，基准日也一并写进正文——harness 与 agent 两边补齐时间串的基准必须一致 |
-| `verdict_shape ∈ (sequence \| state \| chain \| distribution \| open)` | 决定报告装哪几块（overview §6.1.1）。列已加、**尚无写入方**，等报告那一步 |
-| `status ∈ (open \| closed \| aborted)` | 区分"停下来还能接着查"（`open`）与"放弃了"（`aborted`）。后者仍可导出残报告，形态强制 `open`（overview D29）。收尾三档尚未实现 |
+| `verdict_shape ∈ (sequence \| state \| chain \| distribution \| open)` | 决定报告装哪几块（overview §6.1.1）。**收尾那一下才写**，在那之前是 NULL，见下 |
+| `status ∈ (open \| closed \| aborted)` | 区分"停下来还能接着查"（`open`）与"放弃了"（`aborted`）。后者仍可导出残报告，形态强制 `open`（overview D29） |
 
-状态型报告还需要一对 `expected` / `actual`，挂在那个 `confirmed` step 上而非 case 上——它是某一步的判定内容，不是案件属性。列已加，同样等报告那一步。
+### 形态是两层的：`steps.shape` 声明，`cases.verdict_shape` 定案
+
+agent 在 `close_step` 里填的 `shape` 落**那一步**，不直接写进 `cases`。理由与 `expected` / `actual` 挂 step 完全同源：**它是某一步的判定内容，不是案件属性**——形态说的是"这个结论属于哪一类故障"，那条结论被推翻时，这句话跟着一起不成立。写进 `cases` 的话它不会跟着失效，报告就会按一份已经作废的判断装块。
+
+`cases.verdict_shape` 是收尾那一下定下来的终值，来源三选一：
+
+| 来源 | 什么时候 |
+| --- | --- |
+| agent 声明 | **报告认定的那条根因**上的 `shape`。只认它一条：形态说的是"这个案子的根因属于哪一类故障"，别处（比如一条误填了 `shape` 的 impact step）说了不算，否则报告会按 A 步的形态装块、却填 B 步的内容，且毫无报错。与影响面共用 `effectiveStep` 是同一条纪律 |
+| harness 推断 | 没人声明过。规则只有一条准绳：**宁可少装一块，也不装一块空的**——没有已证实的根因 → `open`；根因带应然实然 → `state`；事故时间线上有两条以上证据 → `sequence`；其余 → `chain`（它的主体能从 step 树直接投影，任何案子都装得出来） |
+| 人选的 | 结案确认条上的五选一，预选值就是上面那个。它优先——报告怎么装是人看着后果按下去的那个选择 |
+
+**归档一律 `open`，盖掉一切声明**：残报告的主体是排除掉的方向与遗留疑点，没有根因栏（ui.md §8.4）。查到一半的案子照它自己的形态装，装出来的正是那份"看着完整实则半截"的报告。
+
+`expected` / `actual` 同样挂 `confirmed` step，成对才有意义；报告取的是根因那一步的那一对，所以根因换了人，它跟着换。
 
 ### 开发期不做跨版本迁移：版本对不上就重建库
 
@@ -73,7 +87,7 @@ D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接
 
 开发阶段的数据本来就是随手造的，重新补一份远比维护一条没人验过的迁移路径便宜。所以：旧库改名留在原地（连 `-wal` / `-shm` 一起挪，留一个都会让新库读到半截旧状态），不删——事故记录哪怕格式过时也不该被工具自己抹掉。发版后要换成真迁移时，`openDatabase` 里那个判断就是决策点。
 
-> `user_version` 的默认值就是 `0`，所以 0 有两种含义：空文件，或者一个没打过版本号的老库。**靠有没有应用表来分**——有表的 0 号库必须按不兼容处理。放过它的话 `CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，却照样把它标成 v2，等第一次查 `incident_date` 才炸，而那时错误已经离原因很远了。
+> `user_version` 的默认值就是 `0`，所以 0 有两种含义：空文件，或者一个没打过版本号的老库。**靠有没有应用表来分**——有表的 0 号库必须按不兼容处理。放过它的话 `CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，却照样把它标成当前版本，等第一次查新列才炸，而那时错误已经离原因很远了。
 
 > 这不否定 §1「events 是唯一真相」：**同一个 schema 版本内**投影随时可从 events 重建，`rebuildProjections` 仍是排障与自检工具（`spike:wire` 就靠它比对重建前后的全表指纹）。重放时 `caseId` 必须取**每条事件自己的**——传单个 caseId 会把所有案子的 FTS 行标成同一个 case，检索时静默串台。
 
@@ -116,7 +130,7 @@ spike 用 overview §1.4 那个"两条重复记录"的样例跑通，事故线�
 
 **但 `pending` 跨不过进程重启**：resolve 靠的是 main 进程里活着的 Promise，进程没了就永远 resolve 不了。启动时必须把上一进程遗留的 `pending` 一律改判 `abandoned`，否则库里会攒下永不落地的僵尸节点。
 
-已落成 `sweepZombies()`（`store/sqlite-store.ts`），随 D29 的收尾三档一起接上，同批也把上次遗留的 `live` 会话收成 `crashed`。两条落地时才看清的约束：
+已落成 `sweepZombies()`（`store/sqlite-store.ts`），随 D29 的收尾三档一起接上，同批也把上次遗留的 `live` 会话收成 `crashed`。落地时才看清的约束：
 
 - **清扫必须赶在任何 runner 建起来之前**（`main/index.ts` 里紧跟 `openDatabase`）。那一刻库里的 `pending` 与 `live` 才必然全是上次残留的；建完 runner 再扫会把这一轮自己的活计一起判成放弃
 - **清扫走事件**，与收尾同理：直接 `UPDATE tool_calls` 的值一重放就被 `toolcall.started` 抹回 `pending`
