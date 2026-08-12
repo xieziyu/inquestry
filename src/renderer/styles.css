@@ -132,6 +132,28 @@ button.primary {
 button.primary:disabled { opacity: .35; cursor: default; }
 button.primary small { opacity: .6; font-weight: 400; }
 
+/* ── 轨道：主干 + 分叉（D23 / ui.md §3）── */
+.track {
+  position: relative; display: flex; flex-direction: column; gap: 10px;
+  /* 最左边留一条空槽给推翻回指线：曲线整条走在这里，不压任何一个字 */
+  --track-gutter: 26px;
+  --track-indent: 26px;
+  padding-left: var(--track-gutter);
+}
+/* 分叉靠缩进认，不靠连线：连线要从父一路拉下来，中间隔着的主干卡会被压住 */
+.lane { position: relative; }
+.lane.branch::before {
+  content: ''; position: absolute; left: -13px; top: 14px; bottom: 14px; width: 1px;
+  background: var(--line);
+}
+.step .branch { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+.step .refuter { color: var(--bad); font-size: 11.5px; }
+
+/* 全屏只有这一种曲线，它只表示推翻——一出现就不用读字也知道发生了什么 */
+.refutes { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.refutes path { fill: none; stroke: var(--bad); stroke-width: 1.5; opacity: .75; }
+.refutes marker path { fill: var(--bad); stroke: none; }
+
 /* ── step 卡 ── */
 .step {
   background: var(--panel); border: 1px solid var(--line);
@@ -150,7 +172,9 @@ button.primary small { opacity: .6; font-weight: 400; }
 .state.confirmed { color: var(--ok); }
 .state.refuted, .state.superseded { color: var(--bad); }
 .state.inconclusive { color: var(--warn); }
-.superseded { color: var(--bad); }
+/* 限定在 head 里：`superseded` 同时是卡片自己的状态类，不限定的话整张卡的正文都会跟着变红，
+   而同样被推翻的 refuted 卡不会——两种推翻看起来成了两回事 */
+.step .head .superseded { color: var(--bad); }
 .step .direction { margin: 8px 0 0; }
 .step.refuted .direction, .step.superseded .direction { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 50%, transparent); }
 .step .verdict { margin: 6px 0 0; color: var(--dim); border-left: 2px solid var(--line); padding-left: 10px; }

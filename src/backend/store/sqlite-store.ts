@@ -327,6 +327,25 @@ export function createInvestigationSession(
 
   const store: InvestigationStore = {
     async openStep(args: OpenStepArgs) {
+      const warnings: string[] = [];
+      // **`parent_step_id` 上有开着的外键**，照原样发出去的话，一个手写错的 id 不是"退回主干"
+      // 而是 `FOREIGN KEY constraint failed` —— 整个事务回滚，这一步压根开不出来。
+      // 按 case 认而不是只认存在：别的案子的 step 能过外键，却不在这条轨道上，
+      // 落库之后照样只能当主干显示，而 agent 以为自己分叉了
+      let parentStepId = args.parentStepId;
+      if (parentStepId) {
+        const known = db
+          .prepare(
+            `SELECT 1 FROM steps s JOIN sessions se ON se.id=s.session_id
+             WHERE s.id=? AND se.case_id=?`,
+          )
+          .get(parentStepId, ctx.caseId);
+        if (!known) {
+          // 静默丢掉不算修好：agent 会以为分叉已经记下了（§9.9 同一条）
+          warnings.push(`parentStepId ${parentStepId} 不是本案子里的 step，这一步按主干记。`);
+          parentStepId = undefined;
+        }
+      }
       const stepId = ctx.newId('st');
       const ordinal = nextOrdinal();
       emit({
@@ -337,11 +356,11 @@ export function createInvestigationSession(
           ordinal,
           kind: args.kind ?? 'normal',
           direction: args.direction,
-          parentStepId: args.parentStepId,
+          parentStepId,
           at: ctx.now(),
         },
       });
-      return { stepId, ordinal };
+      return { stepId, ordinal, warnings };
     },
 
     async closeStep(args: CloseStepArgs) {

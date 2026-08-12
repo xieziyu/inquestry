@@ -44,7 +44,7 @@ export function buildSnapshot(
 
   const steps = db
     .prepare(
-      `SELECT s.id, s.session_id, s.ordinal, s.kind, s.status, s.direction, s.verdict_text,
+      `SELECT s.id, s.session_id, s.parent_step_id, s.ordinal, s.kind, s.status, s.direction, s.verdict_text,
               s.verdict_confidence, s.superseded_by
        FROM steps s JOIN sessions se ON se.id = s.session_id
        WHERE se.case_id=? ORDER BY se.started_at, se.rowid, s.ordinal`,
@@ -52,6 +52,7 @@ export function buildSnapshot(
     .all(ctx.caseId) as {
     id: string;
     session_id: string;
+    parent_step_id: string | null;
     ordinal: number;
     kind: StepNode['kind'];
     status: StepNode['status'];
@@ -113,6 +114,7 @@ export function buildSnapshot(
     ordinal: s.ordinal,
     sessionId: s.session_id,
     sessionIndex: sessionIndex.get(s.session_id) ?? 1,
+    parentStepId: s.parent_step_id,
     kind: s.kind,
     status: s.status,
     direction: s.direction,

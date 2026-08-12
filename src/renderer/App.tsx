@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
   VERDICT_SHAPES,
@@ -14,6 +14,7 @@ import {
   type VerdictShape,
 } from '../shared/ipc.js';
 import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
+import { trackLayout, type TrackRow } from './track.js';
 import { GateCard } from './GateCard.js';
 import { Intake } from './Intake.js';
 import { isPlainKey, isTyping } from './keys.js';
@@ -603,6 +604,10 @@ function caseStateLabel(c: CaseBrief) {
 /**
  * 排查时间线**按 case 取而非按 session 取**：一个案子跨多会话，按 session 取的话
  * 重开旧案主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
+ *
+ * 轨道的形状是主干 + 分叉（D23 / ui.md §3）：顺序逐字是到达顺序，分叉只往右缩进。
+ * x 由 `trackLayout` 算，y 交给文档流——绝对定位的 y 得先量高度，而卡片展开工具调用时
+ * 高度会变；走文档流则不重排的保证照旧（顺序不动、新节点只在末尾），还白得一个自适应。
  */
 function InvestigationTimeline({
   steps,
@@ -611,19 +616,87 @@ function InvestigationTimeline({
   steps: StepNode[];
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
 }) {
-  // 只有一次会话时不标：那条分隔线什么都没说明，纯噪声
-  const multi = new Set(steps.map((s) => s.sessionIndex)).size > 1;
+  const layout = useMemo(() => trackLayout(steps), [steps]);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const nodes = useRef(new Map<string, HTMLElement>());
+  const [curves, setCurves] = useState<{ id: string; d: string }[]>([]);
+  const drawn = useRef('');
+
+  /**
+   * 推翻回指线要量出来才画得了：卡片高度随证据条数和"展开工具调用"变，算不出来。
+   *
+   * 曲线整条走在最左边的槽里（`--track-gutter`），两头贴着卡片左沿——那一带在各自那一行
+   * 都是空的，所以它不会盖住任何字。多条并排时把槽位错开，否则两条推翻会叠成一条。
+   */
+  const measure = useCallback(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const b = box.getBoundingClientRect();
+    const next: { id: string; d: string }[] = [];
+    layout.edges.forEach((e, i) => {
+      const from = nodes.current.get(e.fromId);
+      const to = nodes.current.get(e.toId);
+      if (!from || !to) return;
+      const f = from.getBoundingClientRect();
+      const t = to.getBoundingClientRect();
+      const g = 7 + (i % 3) * 6;
+      const fy = f.top - b.top + 15;
+      const ty = t.top - b.top + 15;
+      next.push({
+        id: `${e.fromId}->${e.toId}`,
+        d: `M${f.left - b.left} ${fy}C${g} ${fy},${g} ${ty},${t.left - b.left - 3} ${ty}`,
+      });
+    });
+    // 量出来一样就别 setState：ResizeObserver 每次滚动惯性都可能回调，白刷新一遍整条轨道
+    const sig = `${b.width}x${b.height}|${next.map((n) => n.d).join('|')}`;
+    if (sig === drawn.current) return;
+    drawn.current = sig;
+    setCurves(next);
+  }, [layout]);
+
+  useLayoutEffect(() => {
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (boxRef.current) ro.observe(boxRef.current);
+    // 卡片自己展开时轨道总高度也变，但按每张卡各观察一份才盖得住"高度没变、位置变了"
+    for (const el of nodes.current.values()) ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure]);
+
   return (
-    <>
-      {steps.map((s, i) => (
-        <Fragment key={s.id}>
-          {multi && s.sessionIndex !== steps[i - 1]?.sessionIndex && (
-            <div className="sessionmark">第 {s.sessionIndex} 次会话</div>
-          )}
-          <StepCard step={s} onExcerpt={onExcerpt} />
+    <div className="track" ref={boxRef}>
+      {layout.rows.map((row) => (
+        <Fragment key={row.step.id}>
+          {row.sessionBreak && <div className="sessionmark">第 {row.step.sessionIndex} 次会话</div>}
+          <div
+            className={row.depth ? 'lane branch' : 'lane'}
+            style={{ marginLeft: `calc(${row.depth} * var(--track-indent))` }}
+          >
+            <StepCard
+              row={row}
+              onExcerpt={onExcerpt}
+              nodeRef={(el) => {
+                if (el) nodes.current.set(row.step.id, el);
+                else nodes.current.delete(row.step.id);
+              }}
+            />
+          </div>
         </Fragment>
       ))}
-    </>
+      {curves.length > 0 && (
+        <svg className="refutes" aria-hidden>
+          <defs>
+            {/* 箭头指向被推翻的那一步：没有它，曲线两头一样，得读字才知道谁推翻了谁 */}
+            <marker id="refute-tip" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M0 0 L6 3 L0 6 z" />
+            </marker>
+          </defs>
+          {curves.map((c) => (
+            <path key={c.id} d={c.d} markerEnd="url(#refute-tip)" />
+          ))}
+        </svg>
+      )}
+    </div>
   );
 }
 
@@ -645,20 +718,34 @@ function CaseMetaStrip({ meta }: { meta: CaseMeta }) {
 }
 
 function StepCard({
-  step,
+  row,
   onExcerpt,
+  nodeRef,
 }: {
-  step: StepNode;
+  row: TrackRow;
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
+  nodeRef: (el: HTMLElement | null) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const step = row.step;
   return (
-    <section className={`step ${step.status} ${step.kind}`}>
+    <section className={`step ${step.status} ${step.kind}`} ref={nodeRef}>
       <div className="head">
-        <span className="ord">#{step.ordinal}</span>
+        <span className="ord">{row.label}</span>
         <span className={`kind ${step.kind}`}>{kindLabel(step.kind)}</span>
         <span className={`state ${step.status}`}>{statusLabel(step.status)}</span>
-        {step.supersededBy && <span className="superseded">已被 {step.supersededBy} 推翻</span>}
+        {row.parentLabel && (
+          <span className="branch" title={row.depthCapped ? '缩进已到头，父子关系仍在' : undefined}>
+            ↳ 接 {row.parentLabel}
+            {row.depthCapped && ' ⇥'}
+          </span>
+        )}
+        {/* 推翻者不在这条轨道上时曲线画不出来，划线和这句话照旧——
+            少一道划线就是把一个已经作废的结论显示成仍然成立的 */}
+        {row.refutedBy !== null && (
+          <span className="superseded">← {row.refutedBy ? `被 ${row.refutedBy} 推翻` : '已被推翻'}</span>
+        )}
+        {row.refutes.length > 0 && <span className="refuter">推翻了 {row.refutes.join('、')}</span>}
       </div>
       <p className="direction">{step.direction ?? '（未归类：agent 在声明方向之前就先查了一次）'}</p>
       {step.verdict && <p className="verdict">{step.verdict}</p>}

@@ -162,7 +162,7 @@ const store: InvestigationStore = {
     };
     steps.push(rec);
     current = rec;
-    return { stepId: rec.id, ordinal: rec.ordinal };
+    return { stepId: rec.id, ordinal: rec.ordinal, warnings: [] };
   },
 
   async closeStep(args: CloseStepArgs) {

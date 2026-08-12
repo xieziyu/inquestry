@@ -14,6 +14,7 @@
     "spike:gate": "tsx scripts/spike-gate.ts",
     "spike:cases": "tsx scripts/spike-cases.ts",
     "spike:close": "tsx scripts/spike-close.ts",
+    "spike:track": "tsx scripts/spike-track.ts",
     "start": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

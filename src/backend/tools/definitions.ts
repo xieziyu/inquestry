@@ -16,7 +16,7 @@ import {
 } from './schemas.js';
 
 export interface InvestigationStore {
-  openStep(args: OpenStepArgs): Promise<{ stepId: string; ordinal: number }>;
+  openStep(args: OpenStepArgs): Promise<{ stepId: string; ordinal: number; warnings: string[] }>;
   /** warnings 会原样回给 agent —— 缺证据、缺 occurredAt 这类问题要当场说，事后补不回来。 */
   closeStep(args: CloseStepArgs): Promise<{ warnings: string[] }>;
   askOperator(args: AskOperatorArgs): Promise<{
@@ -44,7 +44,8 @@ export const TOOL_DEFS: ToolDef[] = [
     shape: openStepShape,
     async run(store, args) {
       const r = await store.openStep(args as unknown as OpenStepArgs);
-      return `step #${r.ordinal} 已开启，stepId=${r.stepId}。接下来的工具调用会自动归属到它下面。`;
+      const head = `step #${r.ordinal} 已开启，stepId=${r.stepId}。接下来的工具调用会自动归属到它下面。`;
+      return r.warnings.length ? `${head}\n\n注意：\n${r.warnings.map((w) => `- ${w}`).join('\n')}` : head;
     },
   },
   {

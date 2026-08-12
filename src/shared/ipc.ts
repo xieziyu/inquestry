@@ -102,6 +102,12 @@ export type StepNode = {
   sessionId: string;
   /** 这是本案子的第几次会话，从 1 起。 */
   sessionIndex: number;
+  /**
+   * 在哪一步之下细分（`open_step` 的可选入参）。轨道靠它把分叉往右缩进。
+   * 认不得的父 id 在写入侧就归一成了 null 并回一条 warning（`parent_step_id` 上有外键，
+   * 原样落库会直接炸），所以这里到手的要么是本案子里的真 step，要么就是 null。
+   */
+  parentStepId: string | null;
   kind: 'normal' | 'unclassified' | 'impact' | 'leftover';
   status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded';
   direction: string | null;
