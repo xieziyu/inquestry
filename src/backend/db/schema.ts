@@ -165,6 +165,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS payload_fts USING fts5(
   tokenize = 'unicode61'
 );
 
+-- 对话带。**它是投影，不是聊天记录的原始存储**——真相同样在 \`events\` 里（\`chat.appended\`）。
+--
+-- 落库的理由与别处不同：证据、步骤、判定都重建得出来，而**"人当时怎么纠偏的"重建不出来**。
+-- 只存内存的话，关掉 app 就只剩 agent 的结论，看不到那句"别查网关了，先看从库"。
+-- 报告不印它（正文只认 step 与证据），但排查过程的完整性靠它。
+CREATE TABLE IF NOT EXISTS chat_lines (
+  id         TEXT    PRIMARY KEY,
+  case_id    TEXT    NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  -- 立完案还没开会话时也会有系统提示，所以可空——不是每一句都属于某一轮会话
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  role       TEXT    NOT NULL CHECK (role IN ('user','assistant','system')),
+  text       TEXT    NOT NULL,
+  at         INTEGER NOT NULL
+);
+-- 不能把 rowid 写进索引定义（SQLite 直接报 no such column），查询里按它兜底排序照旧
+CREATE INDEX IF NOT EXISTS idx_chat_case ON chat_lines(case_id, at);
+
 -- ─────────────────────────────── UI 状态 ───────────────────────────────
 -- 一律进后端库，不用 renderer localStorage（architecture.md）
 

@@ -141,6 +141,15 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       db.prepare(`UPDATE steps SET status='superseded', superseded_by=? WHERE id=?`).run(p.by, p.stepId);
       return;
     }
+    case 'chat.appended': {
+      const p = ev.payload;
+      db.prepare(
+        `INSERT OR IGNORE INTO chat_lines (id,case_id,session_id,role,text,at) VALUES (?,?,?,?,?,?)`,
+      ).run(p.lineId, deps.caseId, p.sessionId, p.role, p.text, p.at);
+      // 进检索：跨案找"上次那个从库延迟的"时，人自己说过的话往往比结论更好记
+      insertNarrative(db, deps.caseId, p.lineId, `chat:${p.role}`, p.text);
+      return;
+    }
     case 'blob.stored': {
       const p = ev.payload;
       db.prepare(
@@ -240,6 +249,7 @@ function insertNarrative(db: Db, caseId: string, refId: string, kind: string, te
 export const PROJECTION_TABLES = [
   'evidence_refs',
   'tool_calls',
+  'chat_lines',
   'steps',
   'sessions',
   'cases',

@@ -94,6 +94,20 @@ export type DomainEvents = {
     at: number;
   };
 
+  /**
+   * 对话带上的一句话（人说的 / agent 说的 / harness 的系统提示）。
+   *
+   * **只有它是重建不出来的**：步骤、证据、判定都能从别的事件投影出来，而"人当时怎么纠偏的"
+   * 不留就永远没了。`sessionId` 可空——立完案还没开会话时也会有系统提示。
+   */
+  'chat.appended': {
+    lineId: string;
+    sessionId: string | null;
+    role: 'user' | 'assistant' | 'system';
+    text: string;
+    at: number;
+  };
+
   'blob.stored': { sha256: string; size: number; mime: string; lineCount: number; at: number };
 
   'toolcall.started': {

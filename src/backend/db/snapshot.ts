@@ -8,6 +8,7 @@
 import type {
   AgentChoice,
   CaseMeta,
+  ChatLine,
   IncidentEntry,
   ReportStepRef,
   Snapshot,
@@ -25,6 +26,8 @@ import {
 } from '../store/sqlite-store.js';
 
 const PREVIEW_LINES = 6;
+/** 对话带一次推多少句。全量推的话，一个跨了几轮会话的案子每 60ms 就要搬一遍整段对话。 */
+const CHAT_TAIL = 200;
 
 export function buildSnapshot(
   db: Db,
@@ -186,6 +189,10 @@ export function buildSnapshot(
   return {
     case: meta,
     ...extra,
+    // **对话带按 case 取，不按会话取**（同两条时间线）：重开旧案时按会话取只能看到空的，
+    // 而人上一轮说过什么正是重开时最该看见的东西。`extra.chat` 是还没落库的那几句
+    // （会话没开时没有 session 可挂），接在后面
+    chat: [...chatLines(db, ctx.caseId), ...extra.chat],
     steps: stepNodes,
     closingGaps: missingClosingSteps(db, ctx.caseId),
     shapeSuggestion: suggestVerdictShape(db, ctx.caseId),
@@ -222,6 +229,19 @@ export function buildSnapshot(
       refuted: rep.refuted.map(stepRef),
     },
   };
+}
+
+/**
+ * 对话带。**取最近 `CHAT_TAIL` 句而不是全部**：一个跨了几轮会话的案子能攒出很长一条，
+ * 而每 60ms 推一次全量快照。取的是**末尾**——底部那条带本来就只滚动展示最近的。
+ */
+function chatLines(db: Db, caseId: string): ChatLine[] {
+  const rows = db
+    .prepare(
+      `SELECT role, text, at FROM chat_lines WHERE case_id=? ORDER BY at DESC, rowid DESC LIMIT ?`,
+    )
+    .all(caseId, CHAT_TAIL) as ChatLine[];
+  return rows.reverse();
 }
 
 /**

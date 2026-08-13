@@ -55,7 +55,7 @@ export type TimeBase = Pick<CaseIntake, 'incidentDate' | 'tzOffset'>;
 
 /** 闸门给出的处置。`input` 只有 rewrite 用得上，`message` 只有 deny 用得上。 */
 export type GateOutcome = {
-  decision: 'allow' | 'rewrite' | 'deny' | 'timeout';
+  decision: 'auto_deny' | 'allow' | 'rewrite' | 'deny' | 'timeout';
   input?: string;
   message?: string;
 };
@@ -88,6 +88,8 @@ export type InvestigationSession = {
   }): void;
   /** 这个 callId 有没有落过库 —— 闸门用它判断该补记还是该等 started 带上判决。 */
   hasToolCall(callId: string): boolean;
+  /** 对话带上添一句。**agent 的结论重建得出来，人当时说的话重建不出来**（`chat.appended`）。 */
+  appendChat(input: { role: 'user' | 'assistant' | 'system'; text: string }): void;
   /**
    * 一条支线跑完，收口它的兜底步（§9.16）。返回收的是哪一步，没有开着的步就返回 null。
    *
@@ -592,6 +594,13 @@ export function createInvestigationSession(
 
     hasToolCall(callId) {
       return !!db.prepare(`SELECT 1 FROM tool_calls WHERE id=?`).get(callId);
+    },
+
+    appendChat({ role, text }) {
+      emit({
+        type: 'chat.appended',
+        payload: { lineId: ctx.newId('ch'), sessionId: ctx.sessionId, role, text, at: ctx.now() },
+      });
     },
 
     recordToolEnd({ callId, output, status }) {

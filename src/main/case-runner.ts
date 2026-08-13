@@ -965,10 +965,23 @@ export class CaseRunner {
     )?.status;
   }
 
+  /**
+   * 对话带上添一句。**落库而不是只存内存**：agent 的结论重建得出来，
+   * 人当时那句"别查网关了，先看从库"重建不出来，关掉 app 就没了。
+   *
+   * 会话还没开时（立完案先放着、或收尾之后的系统提示）没有 session 可挂，
+   * 那几句只好留在内存里——为了一句提示把会话提前开出来，库里就多一个空会话。
+   */
   private pushChat(role: ChatLine['role'], text: string) {
-    this.chat.push({ role, text, at: Date.now() });
+    if (this.session) this.session.appendChat({ role, text });
+    else this.chat.push({ role, text, at: Date.now() });
     this.onChange();
   }
+}
+
+/** 两种拒：`deny` 是人在闸门上按的，`auto_deny` 是 backend 那侧（分类器 / 规则）自己定的。 */
+function isDeny(decision: GateOutcome['decision']) {
+  return decision === 'deny' || decision === 'auto_deny';
 }
 
 function hookDecision(permissionDecision: 'allow' | 'deny' | 'ask', permissionDecisionReason?: string) {
