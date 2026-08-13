@@ -1,3 +1,4 @@
+import { LogoMark } from './LogoMark';
 import { useEffect, useState } from 'react';
 import type { AgentChoice, IntakeDraft, IntakeOptions, IntakeResult } from '../shared/ipc.js';
 import { tzOffsetOn } from '../shared/time.js';
@@ -87,7 +88,10 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
 
   return (
     <div className="intake">
-      <h1>新建排查</h1>
+      <div className="brand">
+        <LogoMark size={30} />
+        <h1>新建排查</h1>
+      </div>
       <p className="lede">
         一个问题一次排查。一次排查可以跨多个会话，中途换模型是常态——所以 agent 三项记在会话上，
         项目起点与基准日期记在排查上。

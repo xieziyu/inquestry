@@ -1,0 +1,9 @@
+<!-- Inquestry 16px 标记：结只留一个可辨认的环，证据点减到一个。
+     ⚠️ 乱麻末端与直线必须真的接上（这里靠最后那段过渡曲线）——
+     断开一截在大图上看不出来，缩到 16px 就是两个不相干的碎片。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <path d="M20 78 C0 64 4 20 30 20 C52 20 54 50 30 50 C18 50 22 38 42 42 C50 44 52 49 52 54"
+        fill="none" stroke="#7E8C99" stroke-width="12" stroke-linecap="round"/>
+  <path d="M52 54 H68" fill="none" stroke="#9AA7B3" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="80" cy="54" r="12" fill="#E0A94A"/>
+</svg>

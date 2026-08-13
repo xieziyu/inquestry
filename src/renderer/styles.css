@@ -18,6 +18,9 @@
   --on-fill: #f2f8fd;
   --on-warn: #1a1206;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 标记专用：乱麻与理直那一段。语义色三个直接复用上面的 ok / bad / warn */
+  --mk-tangle: #6f7c89;
+  --mk-line: #93a0ac;
 }
 
 * { box-sizing: border-box; }
@@ -349,6 +352,12 @@ button.primary small { opacity: .6; font-weight: 400; }
 
 /* ── 新建排查面板 ── */
 .intake { max-width: 720px; margin: 0 auto; padding: 28px 8px 60px; display: flex; flex-direction: column; gap: 18px; }
+.intake .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .intake h1 { margin: 0; font-size: 20px; font-weight: 600; }
 .intake .lede { margin: -8px 0 0; color: var(--dim); font-size: 12.5px; }
 .intake .field { display: flex; flex-direction: column; gap: 6px; }
