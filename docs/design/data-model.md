@@ -39,6 +39,16 @@ D20 纪律 1。Claude 的 sessionId 与 codex 的 threadId 收进同一列，接
 - `impact` —— §6.2 的强制影响面节点，结案前必经
 - `leftover` —— §6.2 的遗留疑点，"哪怕是空的也要出现"
 
+### `steps.status` 里的 `converged`（schema v4 起）
+
+前五档说的都是**对一个命题的判定**（`open` 还在验 · `confirmed` / `refuted` / `inconclusive` 是三种结果 · `superseded` 被顶掉了）。子 agent 泳道的兜底步没有命题——它是 harness 替一条支线开的账本，`direction` 恒为 NULL——所以那五档没有一档说得出"这条支线跑完了"。
+
+- 借 `inconclusive` 的代价是**每条跑完的支线都会变成报告里的一条「遗留疑点」**：那一栏按 `status` 取，不看 `kind`（`queries.ts`）。而它谁都没落下，只是没有人替它下判断
+- 留在 `open` 的代价是轨道上永远有一条"还在查"的支线，而它早就结束了
+- 报告那几栏都按具体 status 取，`converged` 因此哪一栏都不进——**这正是它该有的样子**，也是"它与那五档正交"的证据：加这一档没有改动任何一条报告查询
+
+写入方**只有 harness**（`lane.converged` 事件）：支线自己开不了步也收不了步，主线拿不到那一步的 id。内容是**支线自己的话**（`SubagentStop` 的 `last_assistant_message`，退回 `task_notification.summary`），不是 harness 编的判定。三处发它：支线跑完（通知到达）· 会话收尾时还开着的（`close()`）· 上一个进程留下的（启动清扫）。后两种记 `outcome='orphaned'` 并在正文里明写"没有收尾"。
+
 ### `tool_calls.gate_decision` + `input_rewritten`
 
 `canUseTool` 的决策要留痕：哪些是自动放行、哪些是人改写过参数、哪些被拒。§5.1① 要求**改写后的语句一起回传给 agent**（让它学到真实 schema），这个字段是那条回传的依据，也是回看"我当时拦了什么"的唯一记录。
