@@ -50,20 +50,20 @@ const OPERATOR_TIMEOUT_MS = 15 * 60 * 1000;
 /** ②档闸门的倒计时。归零按预设放行并标记"自动放行"（ui.md §4）——人不在时排查不该停。 */
 const GATE_TIMEOUT_MS = 3 * 60 * 1000;
 
+/**
+ * 下面三组是**直接放行**的那一档：账本自己、只读三件套、agent 自理的杂务。
+ * 其余一切交给 backend 的分类器按后果判（`permissionMode: 'auto'`，实测见 overview 附录 A.2）。
+ *
+ * 这里一度还有第四组"一律不给"（Bash 与写盘那几个，配套 `disallowedTools`）。
+ * 它挡住的不只是危险动作，还有**本机那些只读的查询 CLI**——而排查恰恰全靠它们，
+ * 于是每条查询都要退成 ask_operator 让人贴结果。**别把它加回来。**
+ */
 const STRUCTURAL = new Set([toolName('open_step'), toolName('close_step')]);
 /** 有项目起点时给的只读三件套：读代码是排查的地基，不值得每次拦一下。 */
 const READONLY_BUILTINS = ['Read', 'Grep', 'Glob'];
 /** agent 自理的杂务：记事本与工具检索。它们取不到任何证据，拦下来只会把待办栏刷满。 */
 const CHORES = ['TodoWrite', 'ToolSearch'];
-/**
- * 排查现场自己就能跑的事一律放行，**按后果分档的判定交给 backend 的分类器**
- * （`permissionMode: 'auto'`，实测见 overview 附录 A.2）：删构建产物、写个临时脚本
- * 这类不惊动人；碰到看起来是凭据 / 生产配置的目标当场拒掉。
- *
- * 原先这里是一张"一律不给"的名单（Bash / 写盘那几个），配套 `disallowedTools`。
- * 它挡住的不只是危险动作，还有**本机那些只读的查询 CLI**——而排查恰恰全靠它们，
- * 于是每一条查询都要退成 ask_operator 让人贴结果。
- */
+
 /** 支线想自己开步/收步时回的话。得说清替代做法，否则它只会换个姿势再试一次。 */
 const LANE_STRUCTURAL_DENY =
   '支线不记账：open_step / close_step 只有主线用得了。把你查到的东西和结论写进给主线的回复里，' +
@@ -747,7 +747,9 @@ export class CaseRunner {
    * 留话原样落 blob —— 它就是 agent 收到的那份工具结果，节点上要看得见被拒的理由。
    */
   private closeIfDenied(callId: string, outcome: GateOutcome) {
-    if (outcome.decision !== 'deny') return;
+    // 两种拒都要收尾。**只认 `deny` 的话，分类器拒掉的那些会永远挂在 `pending` 上**
+    // ——而它现在是常态路径，人拒才是稀客
+    if (!isDeny(outcome.decision)) return;
     this.session?.recordToolEnd({ callId, output: `(被拒) ${outcome.message ?? ''}`, status: 'denied' });
   }
 
@@ -861,7 +863,7 @@ export class CaseRunner {
     if (gate) this.closeIfDenied(toolUseID, gate);
     this.onChange();
 
-    if (gate) return hookDecision(gate.decision === 'deny' ? 'deny' : 'allow', gate.message);
+    if (gate) return hookDecision(isDeny(gate.decision) ? 'deny' : 'allow', gate.message);
     // 该不该拦由分类器判，这里不表态——回 `ask` 会把每一次调用都推成一张卡片，
     // 而"临时脚本别烦我"正是这一档要给的东西
     return {};
@@ -934,7 +936,10 @@ export class CaseRunner {
     // `denied` 的留话不能被规则理由顶掉；`abandoned` 更不是一次权限判断，
     // 而中断散闸门时**照样会回一个 deny**，所以这条 hook 一定会追着 abandoned 来一趟
     if (status && status !== 'pending' && status !== 'failed') return {};
-    const gate: GateOutcome = { decision: 'deny', message: i.reason ?? '(权限规则拒绝，未给出原因)' };
+    // **`auto_deny` 而不是 `deny`**：这一条是 backend 那侧拒的（分类器按后果判，或项目自己的
+    // 规则），人根本没被问到。记成 `deny` 的话，轨道上读起来像"我当时拦过它"——
+    // 而人现在压根不参与判定（§3.5），那句话没有任何人说过
+    const gate: GateOutcome = { decision: 'auto_deny', message: i.reason ?? '(被拒，未给出原因)' };
 
     // 规则若抢在 PreToolUse 之前短路，调用行还不存在，UPDATE 会静默命中 0 行
     if (!this.session?.hasToolCall(toolUseID)) {

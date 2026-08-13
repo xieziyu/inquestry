@@ -105,7 +105,7 @@ export type DomainEvents = {
     origin: 'agent' | 'operator';
     input: string;
     inputRewritten: boolean;
-    gateDecision: 'auto' | 'allow' | 'rewrite' | 'deny' | 'timeout';
+    gateDecision: 'auto' | 'auto_deny' | 'allow' | 'rewrite' | 'deny' | 'timeout';
     at: number;
   };
   /**
@@ -116,7 +116,7 @@ export type DomainEvents = {
    */
   'toolcall.gated': {
     callId: string;
-    decision: 'allow' | 'rewrite' | 'deny' | 'timeout';
+    decision: 'auto_deny' | 'allow' | 'rewrite' | 'deny' | 'timeout';
     /** 改写后的参数，rewrite 才有。 */
     input?: string;
     at: number;

@@ -886,11 +886,22 @@ function callStatusLabel(status: string) {
   return ({ pending: '进行中', failed: '失败', abandoned: '已放弃' } as Record<string, string>)[status];
 }
 
-/** 自动放行的是多数，标出来只会成噪声；过过闸门的四种才要在节点上留痕。 */
+/**
+ * 自动放行的是多数（`auto`），标出来只会成噪声；其余都要在节点上留痕。
+ *
+ * **两种拒必须分得开**：`auto_deny` 是 backend 那侧按后果判的，人根本没被问到——
+ * 写成同一个「被拒」的话，读轨道的人会以为那是自己当时拦的（§8.1）。
+ */
 function gateLabel(gate: CallNode['gate']) {
-  return ({ allow: '已放行', rewrite: '参数被改写', deny: '被拒', timeout: '自动放行' } as Record<string, string>)[
-    gate ?? ''
-  ];
+  return (
+    {
+      allow: '已放行',
+      rewrite: '参数被改写',
+      deny: '被你拒了',
+      auto_deny: '被自动拒了',
+      timeout: '自动放行',
+    } as Record<string, string>
+  )[gate ?? ''];
 }
 
 function kindLabel(k: StepNode['kind']) {

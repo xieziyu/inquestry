@@ -198,6 +198,19 @@ async function main() {
     `status=${rf?.status} blob 内容=${blob(rf)?.slice(0, 30)}`,
   );
   check(
+    // 人现在压根不参与判定（分类器按后果判，ui.md §8.1），**两种拒必须在库里分得开**：
+    // 都记 `deny` 的话，读轨道的人会把分类器拒的当成自己当时拦下的
+    '两种拒分得开：人按的是 deny，backend 那侧（分类器/规则）拒的是 auto_deny',
+    rb?.gate_decision === 'deny' && rf?.gate_decision === 'auto_deny',
+    `人拒=${rb?.gate_decision} / 规则与分类器拒=${rf?.gate_decision}`,
+  );
+  check(
+    // 只认 `deny` 的话，分类器拒掉的那些永远挂在 pending 上——而它现在是常态路径
+    'auto_deny 照样把调用收尾（不是只有人拒才收）',
+    rf?.status === 'denied' && rg?.status === 'denied',
+    `call_f=${rf?.status} call_g=${rg?.status}`,
+  );
+  check(
     '反序：失败先到也要被纠正回 denied',
     rg?.status === 'denied',
     `status=${rg?.status} blob 内容=${blob(rg)?.slice(0, 30)}`,

@@ -118,7 +118,10 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   origin          TEXT    NOT NULL CHECK (origin IN ('agent','operator')),
   input_json      TEXT    NOT NULL,
   input_rewritten INTEGER NOT NULL DEFAULT 0,  -- canUseTool 改过参数；语句要回传给 agent（§5.1①）
-  gate_decision   TEXT CHECK (gate_decision IN ('auto','allow','rewrite','deny','timeout')),
+  -- 判决 + 谁判的：\`auto\`/\`auto_deny\` 是 backend 那侧（分类器或项目自己的规则）自己定的，
+  -- 其余四种都是人在闸门上按的。**分不开的话，读轨道的人会把分类器拒的当成自己拒过**
+  -- ——而人现在压根不参与判定（overview §3.5）。细到"是分类器还是规则"看留话
+  gate_decision   TEXT CHECK (gate_decision IN ('auto','auto_deny','allow','rewrite','deny','timeout')),
   output_sha256   TEXT REFERENCES blobs(sha256),
   status          TEXT    NOT NULL CHECK (status IN ('pending','done','failed','denied','abandoned')),
   started_at      INTEGER NOT NULL,
