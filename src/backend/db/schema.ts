@@ -5,6 +5,15 @@
  * 而 schema 是启动必需品，这类失败只会在装机后才暴露。
  */
 
+/**
+ * 两条连接级设置，**与建表分开**：`journal_mode` 改不进事务里，而迁移那条路要把
+ * 建表与 DDL 一起包进一个事务（`database.ts`）。合在一起的话，整条迁移都进不了事务。
+ */
+export const PRAGMA_SQL = `
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+`;
+
 export const SCHEMA_SQL = `
 -- Inquestry schema v1
 -- 设计依据见 docs/design/data-model.md；决策来源见 docs/design/overview.md §4。
@@ -12,9 +21,6 @@ export const SCHEMA_SQL = `
 -- 两条铁律：
 --   1. \`events\` 是唯一真相，其余表都是它的物化投影，可 truncate 后重放重建
 --   2. 大 payload 不进库，只存 sha256 引用；库里存的是可检索文本
-
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
 
 -- ─────────────────────────────── 真相层 ───────────────────────────────
 

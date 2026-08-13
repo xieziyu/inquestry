@@ -15,13 +15,14 @@
  * 跑：npm run rebuild:node && npm run spike:cases
  */
 
-import { mkdtempSync } from 'node:fs';
+import DatabaseCtor from 'better-sqlite3';
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { readBlobHead, storeBlob } from '../src/backend/db/blobs.js';
-import { blobDir, openDatabase, type Db } from '../src/backend/db/database.js';
-import { rebuildProjections } from '../src/backend/db/projector.js';
+import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../src/backend/db/database.js';
+import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, reportSections } from '../src/backend/db/queries.js';
 import { readIntake, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
@@ -32,6 +33,7 @@ import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 /** 会话准备与运行时读数是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
 type Probe = {
   beginSession(): InvestigationSession;
+  pushChat(role: 'user' | 'assistant' | 'system', text: string): void;
   askOperator(args: {
     engine: string;
     statement: string;
@@ -104,6 +106,11 @@ async function main() {
   // ── ① 一个案子跨两次会话 ──────────────────────────────────────────────
   const first = makeRunner('case_x', '订单查不到');
   await work(first, '主从延迟导致读不到刚写入的记录', 'call_x1', '12:41:07');
+  // 人在第一次会话里说的话。**趁这个会话还开着写**——收尾之后再 beginSession 会另起一个，
+  // 那就不是"跨会话看得见"而是"多了一次会话"（这一条正是写检查时自己踩到的）
+  // **走 runner 自己的 pushChat**，不直接调 store：要验的正是"运行时决定把它落库还是留内存"，
+  // 直接调 store 的话，把 pushChat 改回只存内存也照样全绿
+  (first as unknown as Probe).pushChat('user', '别查网关了，先看从库');
   const createdAt = (db.prepare(`SELECT created_at c FROM cases WHERE id='case_x'`).get() as { c: number }).c;
   first.close();
 
@@ -131,6 +138,213 @@ async function main() {
     '事故时间线仍是全案汇总，两次会话的证据排在一条线上',
     snapX.incident.length === 2 && snapX.incident[0]!.occurredAtRaw === '12:41:07',
     snapX.incident.map((r) => r.occurredAtRaw).join(' → '),
+  );
+
+  // ── 对话带：**唯一重建不出来的东西**（步骤、证据、判定都投影得出来） ──────────
+  //
+  // 只存内存的话，关掉 app 就只剩 agent 的结论，看不到人当时那句"别查网关了，先看从库"。
+  // 所以它按 case 取、跨会话留——按会话取的话重开旧案只能看到空的。
+  (second as unknown as Probe).pushChat('assistant', '好，我去看复制延迟');
+  const chat = second.snapshot().chat;
+  check(
+    '对话带落库并按 case 取：重开旧案还看得见上一次会话里人说过的话',
+    chat.length === 2 && !!chat[0]?.text.includes('别查网关') && chat[1]?.role === 'assistant',
+    chat.map((c) => `${c.role}:${c.text.slice(0, 10)}`).join(' | ') || '（空的）',
+  );
+  check(
+    '对话带按时间排，不按会话分段（读的人要的是一条连续的带）',
+    chat.length === 2 && chat[0]!.at <= chat[1]!.at,
+    chat.map((c) => c.at).join(' → ') || '（空的）',
+  );
+
+  // ── 重放前的载荷体检：迁移这条路的地基（data-model.md §2） ────────────────
+  //
+  // `better-sqlite3` 把 `undefined` 绑成 NULL，所以一条形状变过的老事件重放时
+  // **不报错，只静静落一批 NULL**——看起来像迁移成功，其实是一批半残的案子。
+  // 曾经就是这么"跑通"过一次的，所以这道闸自己必须有一条会红的检查。
+  //
+  // ⚠️ 验它必须在**真事件**上：`spike:db` 那份夹具用的是它自己的事件词汇
+  // （`step.opened` 里是 `id` 不是 `stepId`），拿它当场地只会验出夹具与生产不同源
+  const eventCount = (db.prepare(`SELECT COUNT(*) c FROM events`).get() as { c: number }).c;
+  let healthy = '';
+  try {
+    checkEventShapes(db);
+  } catch (e) {
+    healthy = (e as Error).message;
+  }
+  check(
+    '载荷体检：真跑出来的事件全部通过（形状没变过）',
+    !healthy && eventCount > 0,
+    healthy || `${eventCount} 条事件全部通过`,
+  );
+
+  // 造一条缺字段的老事件（模拟"载荷形状变过"）。**不能只验它抛错**——抛错的原因可能是别的，
+  // 要认那句话里缺的是哪几个键，否则把"没见过的事件类型"也当成通过了
+  db.prepare(`INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`).run(
+    'case_x',
+    null,
+    'step.closed',
+    JSON.stringify({ stepId: 'st_old', status: 'confirmed', at: 1 }),
+    1,
+  );
+  let caught = '';
+  try {
+    checkEventShapes(db);
+  } catch (e) {
+    caught = (e as Error).message;
+  }
+  check(
+    '载荷缺字段时体检当场拦下，并说清缺的是哪几个键',
+    caught.includes('verdict') && caught.includes('confidence') && caught.includes('step.closed'),
+    caught || '（没抛错——那意味着形状变过的老库会静默落一批 NULL）',
+  );
+
+  // **必填集要覆盖投影真正要用的每一个键，不是手挑一个子集。**
+  // `anchorKind` 落进一个 NOT NULL 列，而它一度不在名单里：体检判健康 → 重放才因约束失败
+  // 抛出来 → 正好绕过"退回挪库"那条兜底，app 直接起不来。现在这张表由编译器盯着
+  // （映射类型，漏一个键就编译不过），这条检查守的是"它确实盖住了投影用得着的字段"
+  // 上一条坏事件已经验完了，让开——**体检遇到第一个问题就停**，
+  // 不让开的话这条检查看到的是它，而 anchorKind 那一条压根没被检到（第一版就是这么绿的）
+  db.prepare(`DELETE FROM events WHERE json_extract(payload,'$.stepId')='st_old'`).run();
+  db.prepare(`INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`).run(
+    'case_x',
+    null,
+    'evidence.attached',
+    JSON.stringify({ evidenceId: 'ev_old', stepId: 'st_old', callId: 'tc_old', claim: 'x', observedAt: 1 }),
+    1,
+  );
+  let anchorCaught = '';
+  try {
+    checkEventShapes(db);
+  } catch (e) {
+    anchorCaught = (e as Error).message;
+  }
+  check(
+    '缺 anchorKind 这种"投影要用、名单里易漏"的键也拦得下',
+    anchorCaught.includes('anchorKind'),
+    anchorCaught || '（放过去了——重放会撞 NOT NULL 约束，而那时兜底已经来不及）',
+  );
+
+  // **重放这条路自己也得体检**：只验裸函数的话，把 `rebuildProjections` 里那一行删掉
+  // 照样全绿——而真正会被调用的是它，不是那个函数
+  let refused = '';
+  try {
+    rebuildProjections(db, { blobDir: blobs });
+  } catch (e) {
+    refused = (e as Error).message;
+  }
+  check(
+    '重放本身拒绝形状变过的库（体检是它的第一步，不是调用方的自觉）',
+    refused.includes('载荷形状变过了'),
+    refused || '（重放照跑了——静默落 NULL 的老路又通了）',
+  );
+
+  // 那条造出来的坏事件到此为止：**下面要复制这个库**，留着它迁移那一段会被体检拦下
+  db.prepare(`DELETE FROM events WHERE json_extract(payload,'$.evidenceId')='ev_old'`).run();
+
+  // ── 迁移这条路本身：**要在真库真数据上走一遍** ──────────────────────────
+  //
+  // 体检只是那道闸，路在 `openDatabase` 里。启动路径不分岔的话，
+  // 哪怕只加一个 nullable 列，现有案子照样会从 app 里消失（文件留成 .bak，界面上没了）。
+  //
+  // 手法：把这份**真跑出来的库**的 user_version 调低一格假装它是旧的，再给一级假步骤。
+  // 不能靠改 SCHEMA_VERSION——那是个常量，而且改了整套自检都会跟着漂
+  const migrated = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-migrate-')), 'inquestry.db');
+  db.prepare(`VACUUM INTO ?`).run(migrated);
+  const oldDb = new DatabaseCtor(migrated);
+  oldDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  oldDb.close();
+
+  const casesBefore = (db.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c;
+  const stepsBefore = (db.prepare(`SELECT COUNT(*) c FROM steps`).get() as { c: number }).c;
+  const upgraded = openDatabase(migrated, {
+    steps: [
+      {
+        to: SCHEMA_VERSION,
+        apply: (d) => {
+          d.exec(`ALTER TABLE cases ADD COLUMN probe_col TEXT`);
+          // **顺序探针**：这张表由幂等 `SCHEMA_SQL` 建。步骤跑在它之前的话，
+          // 这里删掉之后它会被重新建出来；反过来（schema 先跑）它就永远没了。
+          // 顺序反了的真实后果是"加列 + 给它建索引"那类升级当场炸在 SCHEMA_SQL 上，
+          // 而那个场景没法用固定的 SCHEMA_SQL 造出来——这条是它的替身
+          d.exec(`DROP TABLE IF EXISTS ui_settings`);
+        },
+      },
+    ],
+  });
+  const schemaAfterSteps = !!(
+    upgraded.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_settings'`).get()
+  );
+  const post = {
+    cases: (upgraded.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c,
+    steps: (upgraded.prepare(`SELECT COUNT(*) c FROM steps`).get() as { c: number }).c,
+    version: Number(upgraded.pragma('user_version', { simple: true })),
+    hasCol: (upgraded.prepare(`PRAGMA table_info(cases)`).all() as { name: string }[]).some(
+      (c) => c.name === 'probe_col',
+    ),
+  };
+  upgraded.close();
+  check(
+    '每一级 DDL 跑在幂等 schema 之前（否则依赖新列的索引会先炸在 SCHEMA_SQL 上）',
+    schemaAfterSteps,
+    schemaAfterSteps ? '步骤删掉的表被 SCHEMA_SQL 重新建了出来' : '步骤删掉的表没回来，说明 schema 先跑了',
+  );
+  check(
+    '可重放的升级真的走迁移：案子留在原地，新列补上，版本跟着提',
+    post.cases === casesBefore && post.cases > 0 && post.steps === stepsBefore && post.hasCol && post.version === SCHEMA_VERSION,
+    `案子 ${casesBefore} → ${post.cases}，步骤 ${stepsBefore} → ${post.steps}，新列=${post.hasCol}，版本=${post.version}`,
+  );
+  check(
+    // 挪库那条路会留下 .bak；走迁移就**不该**留——留了说明它其实走的是老路，
+    // 而"案子还在"只是因为这一轮恰好又造了一份
+    '走迁移不留 .bak（留了就说明它其实挪了库，只是看起来像迁移）',
+    !existsSync(`${migrated}.v${SCHEMA_VERSION - 1}`) &&
+      readdirSync(path.dirname(migrated)).every((f) => !f.includes('.bak')),
+    readdirSync(path.dirname(migrated)).join(' '),
+  );
+  // 缺一级就整条走不通：跳过那一级等于把它那几列悄悄留空
+  const staleFile = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-stale-')), 'inquestry.db');
+  db.prepare(`VACUUM INTO ?`).run(staleFile);
+  const staleDb = new DatabaseCtor(staleFile);
+  staleDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  staleDb.close();
+  // 有人把一级"其实改了载荷形状"的升级声明成可重放时该怎么办：**退回挪库**。
+  // 硬迁的话会落出一批半残的案子，而它与一次成功的迁移长得一模一样；
+  // 直接抛错则是让 app 起不来——声明错的代价不该是"今天用不了这个工具"
+  const broken = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-broken-')), 'inquestry.db');
+  db.prepare(`VACUUM INTO ?`).run(broken);
+  const brokenDb = new DatabaseCtor(broken);
+  brokenDb
+    .prepare(`INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`)
+    .run('case_x', null, 'step.closed', JSON.stringify({ stepId: 'st_old', status: 'confirmed', at: 1 }), 1);
+  brokenDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  brokenDb.close();
+  // ⚠️ **这里必须接住异常**：抛出去的话整个脚本当场死，一条检查都跑不到，
+  // 而退出码看着与"抓住了"一模一样（今天第三次踩这个形状）。"没抛错"本身就是要验的一半
+  let salvagedCases = -1;
+  let threw = '';
+  try {
+    const salvaged = openDatabase(broken, {
+      steps: [{ to: SCHEMA_VERSION, apply: (d) => d.exec(`ALTER TABLE cases ADD COLUMN probe_col TEXT`) }],
+    });
+    salvagedCases = (salvaged.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c;
+    salvaged.close();
+  } catch (e) {
+    threw = (e as Error).message;
+  }
+  check(
+    '载荷形状变过却被声明成可重放时，退回挪库（不硬迁一半，也不让 app 起不来）',
+    !threw && salvagedCases === 0 && readdirSync(path.dirname(broken)).some((f) => f.includes('.bak')),
+    threw
+      ? `抛了：${threw.slice(0, 60)}（app 会起不来）`
+      : `新库里 ${salvagedCases} 个案子，目录里 ${readdirSync(path.dirname(broken)).join(' ')}`,
+  );
+
+  check(
+    '阶梯缺一级时退回挪库，不硬着头皮迁一半',
+    planUpgrade(staleFile, []).kind === 'archive' &&
+      planUpgrade(staleFile, [{ to: SCHEMA_VERSION, apply: () => {} }]).kind === 'replay',
+    `空阶梯=${planUpgrade(staleFile, []).kind} / 补齐后=${planUpgrade(staleFile, [{ to: SCHEMA_VERSION, apply: () => {} }]).kind}`,
   );
 
   const sessions = db

@@ -6,7 +6,7 @@
  */
 
 import type { Db } from './database.js';
-import type { DomainEvent, EventName } from './events.js';
+import type { DomainEvent, DomainEvents, EventName } from './events.js';
 import { readBlobText } from './blobs.js';
 
 export type ProjectorDeps = {
@@ -259,12 +259,110 @@ export const PROJECTION_TABLES = [
 ];
 
 /**
- * schema 迁移与排障用：清空投影后按 seq 重放。blob 目录不动，它是真相的另一半。
+ * 每种事件"缺了就不能重放"的那几个键。
+ *
+ * **这张表是迁移的地基**（data-model.md §2）：`better-sqlite3` 把 `undefined` 绑成 NULL，
+ * 所以一条形状变过的老事件重放时**不会报错，只会静静落一批 NULL**——看起来像迁移成功，
+ * 实际是一批半残的案子。曾经就是这么"跑通"过一次的。
+ *
+ * 只列必填的：可选字段（`expected` / `shape` / `lane` 这些）缺省本来就有意义，
+ * 投影侧走 COALESCE 或显式默认。**加新事件类型时要在这里补一行**，漏了会在重放时报"没见过的事件"。
+ */
+/** 载荷里**没带 `?` 的那些键**。可以是 null（`direction` 本来就允许），但不能缺。 */
+type RequiredKeys<T> = { [K in keyof T]-?: undefined extends T[K] ? never : K }[keyof T];
+
+/**
+ * **写成映射类型而不是手写数组**：漏一个键、多一个键、漏一整种事件，都是编译期错误。
+ *
+ * 手写子集出过一次事：`evidence.attached` 漏了 `anchorKind`，而它落进一个 NOT NULL 列——
+ * 体检判它健康，重放才因约束失败抛出来，**正好绕过了"退回挪库"那条兜底**，app 直接起不来。
+ * 补全一次不算解决，得让类型系统盯着，否则下一次加字段照样漏。
+ */
+const REQUIRED_KEYS: { [N in EventName]: { [K in RequiredKeys<DomainEvents[N]>]: true } } = {
+  'case.opened': {
+    caseId: true,
+    title: true,
+    question: true,
+    projectRoot: true,
+    incidentDate: true,
+    tzOffset: true,
+    clues: true,
+    at: true,
+  },
+  'case.status_changed': { caseId: true, status: true, at: true },
+  'case.verdict_decided': { caseId: true, shape: true, at: true },
+  'session.started': { sessionId: true, caseId: true, backend: true, at: true },
+  'session.ended': { sessionId: true, status: true, at: true },
+  'step.opened': { stepId: true, sessionId: true, ordinal: true, kind: true, direction: true, at: true },
+  'step.closed': { stepId: true, status: true, verdict: true, confidence: true, at: true },
+  'step.superseded': { stepId: true, by: true },
+  'lane.converged': { stepId: true, lane: true, outcome: true, summary: true, at: true },
+  'chat.appended': { lineId: true, sessionId: true, role: true, text: true, at: true },
+  'blob.stored': { sha256: true, size: true, mime: true, lineCount: true, at: true },
+  'toolcall.started': {
+    callId: true,
+    sessionId: true,
+    stepId: true,
+    toolName: true,
+    origin: true,
+    input: true,
+    inputRewritten: true,
+    gateDecision: true,
+    at: true,
+  },
+  'toolcall.gated': { callId: true, decision: true, at: true },
+  'toolcall.completed': { callId: true, outputSha256: true, status: true, at: true },
+  'evidence.attached': {
+    evidenceId: true,
+    stepId: true,
+    callId: true,
+    anchorKind: true,
+    anchor: true,
+    anchorResolved: true,
+    claim: true,
+    observedAt: true,
+    occurredAtMs: true,
+    occurredAtRaw: true,
+    occurredSource: true,
+    actor: true,
+  },
+};
+
+/** 重放前的体检。**报错停下，好过静默落一批 NULL**——后者与一次成功的迁移长得一模一样。 */
+export function checkEventShapes(db: Db): { checked: number } {
+  const rows = db.prepare(`SELECT seq,type,payload FROM events ORDER BY seq`).all() as {
+    seq: number;
+    type: string;
+    payload: string;
+  }[];
+  for (const r of rows) {
+    const spec = REQUIRED_KEYS[r.type as EventName] as Record<string, true> | undefined;
+    if (!spec) throw new Error(`事件 #${r.seq} 是没见过的类型 ${r.type}：REQUIRED_KEYS 里补一行再重放`);
+    const required = Object.keys(spec);
+    const payload = JSON.parse(r.payload) as Record<string, unknown>;
+    // `null` 算填了（`direction` / `sessionId` 本来就可以是 null），`undefined` 与缺键才是没填
+    const missing = required.filter((k) => payload[k] === undefined);
+    if (missing.length) {
+      throw new Error(
+        `事件 #${r.seq}（${r.type}）缺 ${missing.join(' / ')}——载荷形状变过了。` +
+          `重放只在形状没变时成立，要跨形状升级得先写 upcaster（data-model.md §2）`,
+      );
+    }
+  }
+  return { checked: rows.length };
+}
+
+/**
+ * 清空投影后按 seq 重放。blob 目录不动，它是真相的另一半。
+ *
+ * **同一个 schema 版本内**这是正式的迁移手段（改列、改索引、加投影表都靠它）；
+ * 跨事件载荷形状的升级不算，那要 upcaster。所以第一件事是体检，不是重放。
  *
  * caseId 取每条事件自己的，不由调用方给——重放是全库的事，用单个 caseId 会把
  * 别的案子的 FTS 行全标成同一个 case，检索时静默串台。
  */
 export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>): number {
+  checkEventShapes(db);
   const rows = db.prepare(`SELECT case_id,type,payload FROM events ORDER BY seq`).all() as {
     case_id: string;
     type: string;
