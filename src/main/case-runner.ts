@@ -56,13 +56,14 @@ const READONLY_BUILTINS = ['Read', 'Grep', 'Glob'];
 /** agent 自理的杂务：记事本与工具检索。它们取不到任何证据，拦下来只会把待办栏刷满。 */
 const CHORES = ['TodoWrite', 'ToolSearch'];
 /**
- * 写盘与跑命令一律不给，**闸门也放行不了**：要动这些东西就走 ask_operator 由人执行，
- * 这是有意的权限边界（overview §5.1）。
+ * 排查现场自己就能跑的事一律放行，**按后果分档的判定交给 backend 的分类器**
+ * （`permissionMode: 'auto'`，实测见 overview 附录 A.2）：删构建产物、写个临时脚本
+ * 这类不惊动人；碰到看起来是凭据 / 生产配置的目标当场拒掉。
  *
- * 同时进 `disallowedTools`——真项目模式会加载该项目自己的 settings，
- * 里面若有 allow 规则，canUseTool 根本不会被问到，只靠这里的判断守不住。
+ * 原先这里是一张"一律不给"的名单（Bash / 写盘那几个），配套 `disallowedTools`。
+ * 它挡住的不只是危险动作，还有**本机那些只读的查询 CLI**——而排查恰恰全靠它们，
+ * 于是每一条查询都要退成 ask_operator 让人贴结果。
  */
-const NEVER_ALLOWED = ['Bash', 'BashOutput', 'KillShell', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 /** 支线想自己开步/收步时回的话。得说清替代做法，否则它只会换个姿势再试一次。 */
 const LANE_STRUCTURAL_DENY =
   '支线不记账：open_step / close_step 只有主线用得了。把你查到的东西和结论写进给主线的回复里，' +
@@ -289,21 +290,24 @@ export class CaseRunner {
         effort: (this.init.agent.effort as never) ?? undefined,
         systemPrompt: { type: 'preset', preset: 'claude_code', append: this.init.promptText },
         includeHookEvents: true,
-        // 硬边界不靠 canUseTool 一个人守：项目自己的 settings 里有 allow 规则时它不会被问到
-        disallowedTools: NEVER_ALLOWED,
+        /**
+         * 判定交给 backend 的分类器（附录 A.2 实测：删构建产物不惊动人，碰凭据当场拒）。
+         *
+         * ⚠️ **它只有放行与拒绝两种输出，从不推给人**——②档卡片在这条路上不会出现，
+         * 被拒的调用是事后在轨道上看见的。要"人当场放行"就得回到自己判（§3.5 接管模式）。
+         *
+         * ⚠️ **别传 `allowedTools`**：裸工具名会在权限流之前整体放行，分类器与 `canUseTool`
+         * 都不会被问到（SDK 自己会警告 `CAN_USE_TOOL_SHADOWED`）——A.2 头一轮就栽在这上面。
+         */
+        permissionMode: 'auto',
         mcpServers: {
           inquestry: createInquestryMcpServer(session.store),
           ...(this.demoMode ? { datasource: createDemoDataSource() } : {}),
         },
+        // 分类器模式下 backend 基本不会走到这儿（A.2 实测零次）。**留着不是死代码**：
+        // 它是"人当场处置"唯一的入口，接管模式（§3.5）一开就从这条路进来
         canUseTool: async (name, input, opts) => {
-          const verdict = this.classify(name);
-          if (verdict === 'allow') return { behavior: 'allow' as const };
-          if (verdict === 'deny') {
-            const message = hardDenyMessage(name);
-            this.applyGate(opts.toolUseID, { decision: 'deny', message });
-            // deny + message 不中断 turn（D6）：agent 就地换个手段接着查
-            return { behavior: 'deny' as const, message };
-          }
+          if (this.allowed.has(name)) return { behavior: 'allow' as const };
           const outcome = await this.gate(name, input, opts);
           return outcome.decision === 'deny'
             ? { behavior: 'deny' as const, message: outcome.message! }
@@ -812,26 +816,19 @@ export class CaseRunner {
     return this.askCalls.splice(at, 1)[0]?.callId;
   }
 
-  private classify(toolName: string): 'allow' | 'deny' | 'gate' {
-    if (this.allowed.has(toolName)) return 'allow';
-    if (NEVER_ALLOWED.includes(toolName)) return 'deny';
-    return 'gate';
-  }
-
   /**
-   * PreToolUse 既是记账口，也是**闸门真正的入口**。
+   * PreToolUse 是**记账口**。
    *
-   * 实跑打出来的：`canUseTool` 只在 backend 自己决定要问的时候才被调用——只读工具按默认模式
-   * 直接放行，白名单根本轮不到发言（第一次跑出来 Read 是 `gate_decision='auto'` 就是这么来的）。
-   * 而 PreToolUse 每次调用都到，所以要拦谁得在这里说：回 `ask` 才会把它推到 `canUseTool` 上去。
+   * 每次调用都到（`canUseTool` 不是——backend 觉得不用问就不问），所以账只能记在这一侧。
+   * 它一度还是闸门的入口：回 `ask` 把工具推到 `canUseTool` 上去。**现在不推了**——
+   * 该不该拦由 backend 的分类器判（§3.5 / 附录 A.2），这里只回空。
    *
-   * 放行一档回空而不是回 `allow`：项目自己的 settings 里若有 deny 规则（比如不许读 .env），
-   * 明写 allow 会把那条规则盖掉——这里要的是别多管，不是抢权。
+   * 回空而不是回 `allow`：明写 allow 会盖掉项目自己 settings 里的 deny 规则（比如不许读 .env），
+   * 也会盖掉分类器的判断。这里要的是别多管，不是抢权。
    */
   private onToolStart(input: unknown, toolUseID: string | undefined) {
     const i = input as { tool_name?: string; tool_input?: unknown; agent_id?: string };
     if (!i.tool_name || !toolUseID) return {};
-    const verdict = this.classify(i.tool_name);
     // 结构工具就是账本本身，不给自己记一笔
     if (STRUCTURAL.has(i.tool_name)) {
       // **支线不记账**（§4.5：泳道各自收敛回主干节点）。放它开步的话，那一步落在主干上
@@ -842,11 +839,8 @@ export class CaseRunner {
     }
     const lane = this.lanes.laneOf(toolUseID, i.agent_id);
 
-    // hook 的 deny 会绕过 canUseTool（SDK 契约），所以硬边界的记账只能落在这一侧
-    const gate: GateOutcome | undefined =
-      verdict === 'deny'
-        ? { decision: 'deny', message: hardDenyMessage(i.tool_name) }
-        : this.preGated.get(toolUseID);
+    // 闸门赶在 PreToolUse 之前落定时，判决先搁在 preGated 里，由这条 started 带上
+    const gate: GateOutcome | undefined = this.preGated.get(toolUseID);
     this.preGated.delete(toolUseID);
 
     this.session?.recordToolStart({
@@ -868,7 +862,9 @@ export class CaseRunner {
     this.onChange();
 
     if (gate) return hookDecision(gate.decision === 'deny' ? 'deny' : 'allow', gate.message);
-    return verdict === 'gate' ? hookDecision('ask', '这次排查里它要过一道人工闸门。') : {};
+    // 该不该拦由分类器判，这里不表态——回 `ask` 会把每一次调用都推成一张卡片，
+    // 而"临时脚本别烦我"正是这一档要给的东西
+    return {};
   }
 
   private onToolEnd(input: unknown, toolUseID: string | undefined) {
@@ -984,10 +980,6 @@ function laneEndLabel(status: string): string {
 /** 通知里的 status 只有这三种（SDK 类型），认不出的一律当跑完——收口不该卡在一个新枚举上。 */
 function laneOutcome(status: string): LaneOutcome {
   return status === 'stopped' || status === 'failed' ? status : 'completed';
-}
-
-function hardDenyMessage(name: string) {
-  return `本次排查不给 ${name}。跑命令、写盘、动生产数据一律用 ask_operator 交给人执行——把要跑的语句、为什么跑、预期看到什么写进去。`;
 }
 
 /**
