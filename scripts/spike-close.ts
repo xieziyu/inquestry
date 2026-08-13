@@ -31,7 +31,7 @@ import {
   sweepZombies,
   type InvestigationSession,
 } from '../src/backend/store/sqlite-store.js';
-import { CaseRunner } from '../src/main/case-runner.js';
+import { CaseRunner, closingMessage } from '../src/main/case-runner.js';
 import type { Snapshot, VerdictShape } from '../src/shared/ipc.js';
 
 const ASK = 'mcp__inquestry__ask_operator';
@@ -100,6 +100,7 @@ async function work(
     shape?: VerdictShape;
     expected?: string;
     actual?: string;
+    remediation?: string;
   },
 ) {
   const { stepId } = await session.store.openStep({ direction: opts.direction, kind: opts.kind });
@@ -111,6 +112,7 @@ async function work(
     verdict: `${opts.direction} —— 成立`,
     confidence: 0.8,
     shape: opts.shape,
+    remediation: opts.remediation,
     expected: opts.expected,
     actual: opts.actual,
     evidence: [
@@ -768,6 +770,140 @@ async function main() {
     `warnings=${JSON.stringify(w3.warnings)}`,
   );
   cWarn.close();
+
+  // ── ⑦.6 修复建议：报告四栏里唯一由 agent 生成的那一块（overview §6.1） ────
+  //
+  // 它一度**没有写入方**，报告上恒为「无」。补上之后这一带的错法有两个形状：
+  // ① 跟着根因取 —— 未决型与归档的残报告会永远少一栏，而那种案子最该留下"下一步怎么查"
+  // ② 不跟着判定失效 —— 报告里躺一条基于作废判断的修复方案，且没有任何地方看得出来
+  const cFix = makeRunner('case_fix', '修复建议');
+  const sFix = (cFix as unknown as Probe).beginSession();
+  const fixRoot = await work(sFix, {
+    direction: '扩容时复用了旧连接池配置',
+    callId: 'call_fx1',
+    occurredAt: '09:10:00',
+    remediation: '把 pool_size 改成按实例算，并给扩容流程补一条校验',
+  });
+  check(
+    '修复建议落在那一步上，报告那一栏取得到',
+    (db.prepare(`SELECT remediation r FROM steps WHERE id=?`).get(fixRoot.stepId) as { r: string | null }).r ===
+      '把 pool_size 改成按实例算，并给扩容流程补一条校验' &&
+      cFix.snapshot().report.remediation?.startsWith('把 pool_size') === true,
+    `库里=${(db.prepare(`SELECT remediation r FROM steps WHERE id=?`).get(fixRoot.stepId) as { r: string | null }).r} · 快照=${cFix.snapshot().report.remediation}`,
+  );
+  // 与形态、应然实然同一个 patch 语义：补证据那一次不带它，不能当成"清空"
+  await sFix.store.closeStep({
+    stepId: fixRoot.stepId,
+    status: 'confirmed',
+    verdict: '扩容时复用了旧连接池配置 —— 成立',
+    confidence: 0.8,
+    evidence: [{ callRef: '#1', claim: '再补一条证据' }],
+  });
+  check(
+    '同一步再 close 一次没重填时，修复建议保持原样',
+    cFix.snapshot().report.remediation?.startsWith('把 pool_size') === true,
+    `快照=${cFix.snapshot().report.remediation}（当成清空的话，补一次证据就把报告那一栏抹了）`,
+  );
+  // 只补这一项也要能改得掉——提醒里写的正是"重新 close 只填 remediation 即可"
+  await sFix.store.closeStep({
+    stepId: fixRoot.stepId,
+    status: 'confirmed',
+    verdict: '扩容时复用了旧连接池配置 —— 成立',
+    confidence: 0.8,
+    remediation: '改口：先回滚那次扩容，再按实例算 pool_size',
+    evidence: [{ callRef: '#1', claim: '又想了想' }],
+  });
+  check(
+    '重新填就覆盖，不是只写得进去一次',
+    cFix.snapshot().report.remediation?.startsWith('改口：') === true,
+    `快照=${cFix.snapshot().report.remediation}`,
+  );
+  // 建议是基于那一步的判断给的：判断被顶掉，建议跟着失效
+  const fixNewRoot = await sFix.store.openStep({ direction: '不是扩容，是限流配置写反了' });
+  await sFix.store.closeStep({
+    stepId: fixNewRoot.stepId,
+    status: 'confirmed',
+    verdict: '限流阈值把分子分母写反了',
+    confidence: 0.95,
+    supersedes: [fixRoot.stepId],
+    evidence: [],
+  });
+  check(
+    '被推翻的那一步上的修复建议跟着失效，报告那一栏回到「无」',
+    cFix.snapshot().report.remediation === null,
+    `快照=${cFix.snapshot().report.remediation}（照旧印的话，报告里躺的是一条基于作废判断的修复方案）`,
+  );
+  // 根因成型而全案一条建议都没有时，close_step 要当场说一句——不说的话
+  // agent 交代完就走了，那一栏要到结案那天才发现是空的
+  const fixWarn = await sFix.store.closeStep({
+    stepId: fixNewRoot.stepId,
+    status: 'confirmed',
+    verdict: '限流阈值把分子分母写反了',
+    confidence: 0.95,
+    evidence: [],
+  });
+  check(
+    '根因已成型而修复建议还空着时，close_step 当场提醒',
+    fixWarn.warnings.some((t) => t.includes('修复建议')),
+    `warnings=${JSON.stringify(fixWarn.warnings)}`,
+  );
+  const fixDone = await sFix.store.closeStep({
+    stepId: fixNewRoot.stepId,
+    status: 'confirmed',
+    verdict: '限流阈值把分子分母写反了',
+    confidence: 0.95,
+    remediation: '把 rate_limit 的分子分母换回来，并加一条单测',
+    evidence: [],
+  });
+  check(
+    '补上之后就不再提醒（否则每次 close 都要挨一句）',
+    !fixDone.warnings.some((t) => t.includes('修复建议')) &&
+      cFix.snapshot().report.remediation?.startsWith('把 rate_limit') === true,
+    `warnings=${JSON.stringify(fixDone.warnings)} · 快照=${cFix.snapshot().report.remediation}`,
+  );
+  cFix.close();
+
+  // **不跟着根因走**：一条已证实的结论都没有时，"下一步该怎么查"照样进得了报告
+  const cFixOpen = makeRunner('case_fix_open', '没查出来但有下一步');
+  const sFixOpen = (cFixOpen as unknown as Probe).beginSession();
+  const openLeft = await sFixOpen.store.openStep({ direction: '汇总未查清的疑点', kind: 'leftover' });
+  await sFixOpen.store.closeStep({
+    stepId: openLeft.stepId,
+    status: 'inconclusive',
+    verdict: '网关日志只留了 3 天，查不到事发当天',
+    confidence: 0.2,
+    remediation: '先把网关日志留存改成 30 天，下次再出就有原始记录可查',
+    evidence: [],
+  });
+  check(
+    '没有根因时修复建议照旧装得出来（它不跟着根因走）',
+    cFixOpen.snapshot().report.rootCause === null &&
+      cFixOpen.snapshot().report.remediation?.startsWith('先把网关日志') === true,
+    `根因=${cFixOpen.snapshot().report.rootCause} · 建议=${cFixOpen.snapshot().report.remediation}`,
+  );
+  // 假设自己被否掉的那一步同样不算数：那条建议也失去了出处
+  const refutedFix = await sFixOpen.store.openStep({ direction: '怀疑是 CDN 缓存' });
+  await sFixOpen.store.closeStep({
+    stepId: refutedFix.stepId,
+    status: 'refuted',
+    verdict: 'CDN 全程正常',
+    confidence: 0.9,
+    remediation: '把 CDN 缓存时间调短',
+    evidence: [],
+  });
+  check(
+    'refuted 那一步上的修复建议不算数，报告仍取上一条仍然成立的',
+    cFixOpen.snapshot().report.remediation?.startsWith('先把网关日志') === true,
+    `建议=${cFixOpen.snapshot().report.remediation}（只排 superseded 不排 refuted 的话，这里会印一条被自己否掉的方案）`,
+  );
+  // 派回去补的那条消息：**缺建议时才捎上**。它不是强制 step，不该为它单发一条
+  check(
+    '缺修复建议时，派活的消息里捎上它；不缺就不提',
+    closingMessage(['impact'], true).includes('remediation') &&
+      !closingMessage(['impact'], false).includes('remediation'),
+    closingMessage(['impact'], true),
+  );
+  cFixOpen.close();
 
   // 没有已证实的根因就是未决型。这不是猜：没查出来就是没查出来，报告本就不该有根因栏
   const cOpen = makeRunner('case_shape_open', '什么都没查出来');

@@ -14,7 +14,7 @@ import { readIntake, sweepZombies } from '../backend/store/sqlite-store.js';
 import { exportStamp, localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
 import { CaseRegistry } from './case-registry.js';
-import { CaseRunner } from './case-runner.js';
+import { applyTakeover, CaseRunner } from './case-runner.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
@@ -26,6 +26,7 @@ import {
   type IntakeResult,
   type OperatorReply,
   type Snapshot,
+  type TakeoverResult,
   type VerdictShape,
 } from '../shared/ipc.js';
 import { reportMarkdown } from '../shared/markdown.js';
@@ -92,7 +93,7 @@ function recentRoots(): string[] {
  * 但立完案不开跑就退出是常事，不存的话重开会静默换成默认模型，
  * 顶栏和之后真正建的 session 都不再是人选的那套。
  */
-function readCaseUi(caseId: string): { agent?: AgentChoice } {
+function readCaseUi(caseId: string): { agent?: AgentChoice; takeover?: boolean } {
   try {
     const row = db.prepare(`SELECT value FROM case_ui_state WHERE case_id=?`).get(caseId) as
       | { value: string }
@@ -103,7 +104,7 @@ function readCaseUi(caseId: string): { agent?: AgentChoice } {
   }
 }
 
-function writeCaseUi(caseId: string, patch: { agent?: AgentChoice }) {
+function writeCaseUi(caseId: string, patch: { agent?: AgentChoice; takeover?: boolean }) {
   const next = JSON.stringify({ ...readCaseUi(caseId), ...patch });
   db.prepare(
     `INSERT INTO case_ui_state (case_id,value) VALUES (?,?)
@@ -165,6 +166,7 @@ function loadCase(caseId: string): CaseRunner | null {
     caseId,
     intake,
     agent: lastAgentChoice(caseId),
+    takeover: readCaseUi(caseId).takeover ?? false,
     onChange: schedulePush,
   });
 }
@@ -641,6 +643,8 @@ app.whenReady().then(async () => {
     cases.toIntake();
     schedulePush();
   });
+  // 检索不进快照：它由人打字驱动，塞进 60ms 一轮的全量推送里等于每次都跑一遍全库检索
+  ipcMain.handle('case:search', (_e, term: string) => cases.search(term));
   // 下面这些都依赖「当前案子」，一律判空不用 `!`：点「＋ 新案件」的那一刻 currentId 就是
   // null 了，而 renderer 要等下一次快照（最多 60ms）才换屏——这中间旧界面照样发得出调用。
   // 用非空断言的话那一下是个 TypeError，invoke 变成未处理的 rejection，
@@ -651,6 +655,19 @@ app.whenReady().then(async () => {
     cases.currentIf(caseId)?.start(question),
   );
   ipcMain.handle('case:restart', (_e, caseId: string) => cases.currentIf(caseId)?.restart());
+  // 接管模式（overview §3.5）。**要落 `case_ui_state`**：只存运行时里的话，限流把这个
+  // runner 降级一次、或关一次 app，"我要自己判"就被静默取消了——而那正是它要防的
+  // **落库要等 runner 那边真切成**：切不动却先写进去的话，下次启动会照着一个从没生效过的
+  // 「已接管」把界面点亮，而 backend 那侧仍是分类器在判。反过来那半（切成了却落不了库）
+  // 由 `applyTakeover` 兜着——两头都是同一种"说了谎的状态"
+  ipcMain.handle('case:takeover', async (_e, caseId: string, on: boolean): Promise<TakeoverResult> => {
+    const runner = cases.currentIf(caseId);
+    if (!runner) return 'gone';
+    const r = await applyTakeover(runner, caseId, on, () => writeCaseUi(caseId, { takeover: on }));
+    // 回滚那条路也要推一次：界面上的开关这会儿画的是人按下的那一下，得让它跟回实际状态
+    schedulePush();
+    return r;
+  });
   // 唯一要回执的一个：送没送出去，renderer 据此决定草稿该不该清
   ipcMain.handle('case:send', async (_e, caseId: string, text: string) => {
     const runner = cases.currentIf(caseId);

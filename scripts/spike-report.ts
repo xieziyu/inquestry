@@ -20,7 +20,7 @@ import { EMPTY_SNAPSHOT, VERDICT_SHAPES, type Snapshot } from '../src/shared/ipc
 import { reportInput, reportPlan, type ReportInput } from '../src/shared/report.js';
 // 夹具与 spike:markdown 共用一份（`fixtures/report-case.ts`）：章节的取舍与它的渲染是
 // 同一条链路的前后两段，各自造一份的话，一边补了字段另一边没补，那边的检查就变成空的
-import { base, incident, report, steps } from './fixtures/report-case.js';
+import { base, FIX_TEXT, incident, report, steps } from './fixtures/report-case.js';
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -80,6 +80,24 @@ check(
     return ['impact', 'path', 'leftover', 'fix'].every((k) => l.includes(k));
   }),
   '影响面 / 排查路径 / 遗留疑点 / 修复建议不跟形态走（overview §6.1.1）',
+);
+
+check(
+  '修复建议装的是 report.remediation，不是恒空',
+  VERDICT_SHAPES.every((sh) => {
+    const b = bodyOf({ shape: sh }, 'fix');
+    return b?.kind === 'prose' && b.text === FIX_TEXT;
+  }),
+  '这一栏一度写死 text:null，于是五种形态下都印「无」——四栏缺一栏，而且没有任何检查会红',
+);
+
+check(
+  '修复建议不跟着根因走：未决型与没有根因时照旧装得出来',
+  (() => {
+    const b = bodyOf({ shape: 'open', report: { ...report, rootCause: null } }, 'fix');
+    return b?.kind === 'prose' && b.text === FIX_TEXT;
+  })(),
+  '跟着根因取的话，归档的残报告与整个未决型会永远少一栏——而"没查出来，下一步先加哪些观测"正是那种案子最该留下的',
 );
 
 check(

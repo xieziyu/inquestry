@@ -10,6 +10,7 @@
  * - 应然/实然**填着**、事故时间线**有两条**（每种形态的「不投影」都因此有东西可以误装）
  * - `e3` 没有时间戳（不进事故时间线：拿时间线当证据总数就会报少）
  * - `e2` 没有锚点、`e3` 的调用**在本案里找不到**（导出的索引要出声，不是留空）
+ * - 修复建议**非空且带 markdown 元字符**（它恒为「无」时，那一节的检查全是空的）
  */
 
 import type { CallNode, IncidentEntry, Snapshot, StepNode } from '../../src/shared/ipc.js';
@@ -79,10 +80,17 @@ export const incident: IncidentEntry[] = [
 ];
 
 export const ROOT_TEXT = '连接池在扩容时被复用了旧配置';
+/**
+ * 修复建议**必须非空**：它是四栏里唯一由 agent 生成的一块，一度恒为「无」，
+ * 于是"整节留白"这个错法在所有检查下都照旧通过（overview §9.12 那条 mutation 记的正是它）。
+ * 带上 markdown 元字符：这一栏与别处一样要过转义那道门。
+ */
+export const FIX_TEXT = '把 pool_size 从 *继承* 改成按实例算，并给 [扩容流程] 补一条校验';
 
 export const report: Snapshot['report'] = {
   rootCause: { stepId: 'st4', text: ROOT_TEXT, confidence: 0.4 },
   impact: '受影响的是 37 个租户',
+  remediation: FIX_TEXT,
   expected: '扩容后每个实例各自建池',
   actual: '扩容后仍共用扩容前那一个',
   leftovers: [{ stepId: 'st6', direction: '重试为什么没兜住', text: '没查清', supersededBy: null }],

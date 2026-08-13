@@ -153,7 +153,8 @@ export function reportPlan(input: ReportInput): ReportPlan {
     sec('impact', '投影 · 影响面 step 的判定', { kind: 'prose', text: report.impact }),
     sec('path', '投影 · step 树，含走错的分支', { kind: 'path', rows: input.steps }),
     sec('leftover', '投影 · 未查清的 step', { kind: 'notes', rows: report.leftovers }),
-    sec('fix', 'agent 生成', { kind: 'prose', text: null }),
+    // 四栏里唯一没有投影来源的一块：`close_step` 的 `remediation`，取最新一条仍然成立的声明
+    sec('fix', 'agent 生成 · 挂在给出判断的那一步上', { kind: 'prose', text: report.remediation }),
   );
 
   return {

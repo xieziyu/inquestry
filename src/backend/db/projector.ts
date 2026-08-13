@@ -50,6 +50,10 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
         p.at,
         p.at,
       );
+      // 立案单进检索：找旧案子的心智是"上次那个从库延迟的"，而人记得的多半是自己写的问题，
+      // 不是 agent 后来下的判定。**只在这里进一次**——标题就是问题的前 40 字（ui.md §12），
+      // 两条都索引等于同一段文字在 trigram 表里躺两份，命中一次翻出两条
+      insertNarrative(db, deps.caseId, p.caseId, 'case', p.question || p.title);
       return;
     }
     case 'case.status_changed': {
@@ -94,16 +98,17 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
     }
     case 'step.closed': {
       const p = ev.payload;
-      // 三个可选字段走 COALESCE：**同一步会被 close 第二次**——我们自己的 warning 就写着
+      // 四个可选字段走 COALESCE：**同一步会被 close 第二次**——我们自己的 warning 就写着
       // "请补 evidence 后重新 close"，而那一次多半只补证据。把"没再填"解释成"清空"的话，
-      // 第一次填好的形态与应然实然会被静默抹掉，报告主体随之空掉，重放还会一模一样地复现。
+      // 第一次填好的形态、应然实然与修复建议会被静默抹掉，报告主体随之空掉，重放还会一模一样地复现。
       // 要改就再填一次（填了照旧覆盖）。与 `toolcall.gated` 的 `input_json` 同一个语义。
       //
       // 绑值仍一律 `?? null`：better-sqlite3 对 undefined 的处理不能指望，而 COALESCE
       // 认的是 NULL——漏了这一手，缺字段的老事件会在重放时报错而不是走保留分支
       db.prepare(
         `UPDATE steps SET status=?, verdict_text=?, verdict_confidence=?,
-                expected=COALESCE(?,expected), actual=COALESCE(?,actual), shape=COALESCE(?,shape), t_end=?
+                expected=COALESCE(?,expected), actual=COALESCE(?,actual), shape=COALESCE(?,shape),
+                remediation=COALESCE(?,remediation), t_end=?
          WHERE id=?`,
       ).run(
         p.status,
@@ -112,6 +117,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
         p.expected ?? null,
         p.actual ?? null,
         p.shape ?? null,
+        p.remediation ?? null,
         p.at,
         p.stepId,
       );
@@ -368,6 +374,21 @@ export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>):
     type: string;
     payload: string;
   }[];
+  /**
+   * 🔴 **`case_ui_state` 不是投影，但会被投影的清空**：它对 `cases(id)` 带
+   * `ON DELETE CASCADE`，而 `DELETE FROM cases` 一跑就把它整表带走了。
+   *
+   * 里面装的是**重建不出来的东西**——立案时选的 agent（会话还没开，别处没有第二份）、
+   * 以及接管模式那个开关。丢了不报错、案子还在，表现是"升级完模型悄悄换回默认、
+   * 接管自己关掉了"，与迁移失败长得完全不一样。
+   *
+   * 先存后放，都在同一个事务里；只放回**重建之后还存在**的那些案子（重放本就该把它们
+   * 全部建回来，这一手是防重放漏了某个案子时外键当场炸掉整条迁移）。
+   */
+  const uiState = db.prepare(`SELECT case_id, value FROM case_ui_state`).all() as {
+    case_id: string;
+    value: string;
+  }[];
   db.transaction(() => {
     for (const t of PROJECTION_TABLES) db.prepare(`DELETE FROM ${t}`).run();
     for (const r of rows) {
@@ -376,6 +397,11 @@ export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>):
         caseId: r.case_id,
       });
     }
+    const put = db.prepare(
+      `INSERT INTO case_ui_state (case_id,value) SELECT ?,? WHERE EXISTS (SELECT 1 FROM cases WHERE id=?)
+       ON CONFLICT(case_id) DO UPDATE SET value=excluded.value`,
+    );
+    for (const u of uiState) put.run(u.case_id, u.value, u.case_id);
   })();
   return rows.length;
 }

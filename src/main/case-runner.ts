@@ -9,6 +9,7 @@ import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-age
 import { randomUUID } from 'node:crypto';
 
 import type { Db } from '../backend/db/database.js';
+import { effectiveRemediation } from '../backend/db/queries.js';
 import { LaneBridge, type LaneFinish } from './lane-bridge.js';
 import { locateEvidence, readBlobText } from '../backend/db/blobs.js';
 import { buildSnapshot } from '../backend/db/snapshot.js';
@@ -42,6 +43,7 @@ import {
   type PendingAsk,
   type PendingGate,
   type Snapshot,
+  type TakeoverResult,
   type VerdictShape,
 } from '../shared/ipc.js';
 
@@ -95,6 +97,11 @@ export type CaseRunnerInit = {
   caseId: string;
   intake: CaseIntake;
   agent: AgentChoice;
+  /**
+   * 接管模式的初值（overview §3.5）。由 main 从 `case_ui_state` 读来——
+   * 只存在运行时里的话，限流把这个 runner 降级一次，"我要自己判"就被静默取消了。
+   */
+  takeover?: boolean;
   onChange: () => void;
 };
 
@@ -128,9 +135,12 @@ export class CaseRunner {
   private q: Query | null = null;
   private inbox = createInbox();
   private allowed: Set<string>;
+  /** 接管模式：每一次非放行档的调用都推到闸门上，由人当场处置（overview §3.5）。 */
+  private takeover: boolean;
   private onChange: () => void;
 
   constructor(private init: CaseRunnerInit) {
+    this.takeover = init.takeover ?? false;
     this.onChange = init.onChange;
     this.db = init.db;
     this.blobs = init.blobDir;
@@ -146,6 +156,85 @@ export class CaseRunner {
       ...CHORES,
       ...(this.demoMode ? [DEMO_TOOL] : READONLY_BUILTINS),
     ]);
+  }
+
+  get isTakeover() {
+    return this.takeover;
+  }
+
+  /**
+   * backend 那侧该跑在哪个权限模式下。**建会话与运行时切换共用这一个**：
+   * 两处各写一份的话，`setPermissionMode` 与 `query()` 的初值迟早说的是两回事，
+   * 而失败方式是"开关翻过去了、调用照旧不到闸门上来"——界面上什么都看不出。
+   */
+  private get permissionMode(): 'auto' | 'default' {
+    return this.takeover ? 'default' : 'auto';
+  }
+
+  /**
+   * 切权限模式的串行队列。**两次快速点击不能并发发出去**：控制请求的回执顺序不保证，
+   * 后发的先回时，最终生效的会是先按的那一下，而界面显示的是后按的那一下。
+   */
+  private modeSwitch: Promise<unknown> = Promise.resolve();
+
+  /**
+   * 开 / 关接管模式（overview §3.5 的那个开关）。
+   *
+   * 两侧一起切，缺一不可：
+   *
+   * - **我们自己的 PreToolUse** 回 `ask`，把调用推到 `canUseTool` 上去。这是闸门唯一的入口
+   *   （实测：`canUseTool` 只在 backend 觉得要问时才到，PreToolUse 才是每次都到的那个）
+   * - **backend 的 permissionMode** 从 `auto` 切回 `default`。不切的话分类器仍在判，
+   *   而它只有放行与拒绝两种输出、从不推给人（附录 A.2）——那正是接管要绕开的东西
+   *
+   * 已经挂在闸门上的那些**不动**：关掉接管不等于"刚才那条就放行吧"，
+   * 人正要按拒绝的那一条不该因为切了个开关就自己过去。
+   *
+   * 🔴 **先等 backend 那侧切成，再落自己这边的状态。** 把控制请求 fire-and-forget 出去、
+   * 当场就把开关翻过去并落库，失败方式正是这个开关唯一要防的那一种：屏幕上写着「已接管」，
+   * 而分类器仍在判、敏感调用照旧被直接放行，**没有任何地方看得出来**。宁可按下去没反应
+   * （回 false，界面说一句"没切成"），也不要一个说了谎的开关。
+   *
+   * 会话还没起来时没有什么可等的（下一轮 `start()` 按同一个 getter 建），这时直接落。
+   *
+   * 回执是切没切成：冻结的案子没有会话可切，静默 return 的话开关会在界面上翻过去，
+   * 而它其实什么都没做。**两种没切成要分开报**（`TakeoverResult`）：状态冲突再点一次就行，
+   * 而 backend 切不动是这个权限入口整个失效——两者说成同一句的话，人会照着"案子切走了"
+   * 切回来再按一次，然后继续在没有接管的情况下往下查。
+   */
+  async setTakeover(on: boolean): Promise<TakeoverResult> {
+    if (this.caseStatus !== 'open') return 'gone';
+    // 串行化：两次快速点击并发发出去的话，回执顺序不保证，最终生效的可能是先按的那一下
+    const run = this.modeSwitch.then(async () => {
+      if (this.caseStatus !== 'open') return 'gone';
+      // ⚠️ **"已经是这个状态了"必须在排到队之后才判。** 在入口处判的话读的是**此刻**的状态，
+      // 而前一次切换可能还在飞——连点两下时第二下会被当成无事发生直接回 true，
+      // 于是最终生效的是第一下，界面显示的是第二下
+      if (this.takeover === on) return 'ok';
+      const q = this.q as unknown as { setPermissionMode?: (m: string) => Promise<void> } | null;
+      if (q?.setPermissionMode) {
+        try {
+          await q.setPermissionMode(on ? 'default' : 'auto');
+        } catch (err) {
+          // 切不动就什么都不改：留一个"没接管上"的界面，好过一个假的「已接管」。
+          // 原因只有这里知道（SDK 控制请求 / 会话状态 / backend 故障），吞掉的话这个权限入口
+          // 失效之后两头都没有线索——界面只说得出"没切成"
+          console.error(`[takeover] ${this.caseId} 切 permissionMode → ${on ? 'default' : 'auto'} 失败`, err);
+          return 'failed';
+        }
+      }
+      this.takeover = on;
+      this.pushChat(
+        'system',
+        on
+          ? '已接管：接下来除只读与杂务外，每次工具调用都要你放行。'
+          : '已交回：工具调用重新由分类器按后果判。',
+      );
+      this.onChange();
+      return 'ok';
+    });
+    this.modeSwitch = run.catch(() => undefined);
+    return run;
   }
 
   /** 没有项目起点 = 演示事故：只有这种情况才把玩具数据源塞进去。 */
@@ -227,6 +316,7 @@ export class CaseRunner {
           pending: [...this.pending.values()].map((p) => p.ask),
           gates: [...this.gates.values()].map((g) => g.ask),
           sessionStatus: this.status,
+          takeover: this.takeover,
           lastError: this.lastError,
           cases,
         },
@@ -299,7 +389,9 @@ export class CaseRunner {
          * ⚠️ **别传 `allowedTools`**：裸工具名会在权限流之前整体放行，分类器与 `canUseTool`
          * 都不会被问到（SDK 自己会警告 `CAN_USE_TOOL_SHADOWED`）——A.2 头一轮就栽在这上面。
          */
-        permissionMode: 'auto',
+        // 接管模式下切回 `default`：分类器只有放行与拒绝两种输出、从不推给人（附录 A.2），
+        // 留着它判的话，人明明按了「接管」，多数调用照旧不会到闸门上来
+        permissionMode: this.permissionMode,
         mcpServers: {
           inquestry: createInquestryMcpServer(session.store),
           ...(this.demoMode ? { datasource: createDemoDataSource() } : {}),
@@ -596,7 +688,7 @@ export class CaseRunner {
     if (!missing.length) return { missing, asked: false, suggestion };
     // 会话还活着就直接派给 agent：这两步的内容只有查过的人给得出来
     const asked = !!this.q;
-    if (asked) void this.send(closingMessage(missing));
+    if (asked) void this.send(closingMessage(missing, !effectiveRemediation(this.db, this.caseId)));
     return { missing, asked, suggestion };
   }
 
@@ -705,7 +797,18 @@ export class CaseRunner {
       // agent 那侧只有 allow / deny 两种收法，所以中断也得回 deny；账上记的却不能是「被拒」
       const abandon = (why: string) =>
         settle({ decision: 'deny', message: why }, () => this.abandonCall(id, why));
-      const timer = setTimeout(() => finish({ decision: 'timeout' }), GATE_TIMEOUT_MS);
+      /**
+       * **接管模式下不设超时**（overview §3.5 / ui.md §12 那条"闸门只有三分钟一档"）。
+       *
+       * 到点按预设放行的前提是"人不在时排查不该停"，而接管模式里人刚刚明说了
+       * 每一条自己判——三分钟后替他放行，等于把那句话作废，且挂在闸门上的多半正是敏感写。
+       * 不设超时不等于会永久挂死：停止 / 关案 / 中断都会 `abandon` 它。
+       *
+       * 判的是**这次调用挂上来的那一刻**在不在接管模式，不是处置那一刻：
+       * 中途关掉开关不该让一条正等着人的调用突然长出一个倒计时。
+       */
+      const deadline = this.takeover ? undefined : askedAt + GATE_TIMEOUT_MS;
+      const timer = deadline ? setTimeout(() => finish({ decision: 'timeout' }), GATE_TIMEOUT_MS) : undefined;
 
       this.gates.set(id, {
         ask: {
@@ -715,7 +818,7 @@ export class CaseRunner {
           agentId: opts.agentID,
           reason: opts.title ?? opts.decisionReason,
           askedAt,
-          deadline: askedAt + GATE_TIMEOUT_MS,
+          deadline,
         },
         finish,
         abandon,
@@ -864,6 +967,17 @@ export class CaseRunner {
     this.onChange();
 
     if (gate) return hookDecision(isDeny(gate.decision) ? 'deny' : 'allow', gate.message);
+    /**
+     * 接管模式：把这次调用推到 `canUseTool` 上去（overview §3.5）。
+     *
+     * **入口只能在这儿。** `canUseTool` 不是每次调用都到——backend 觉得不用问就不问，
+     * 只读工具按默认模式直接放行；每次都到的是 PreToolUse，所以想拦谁必须在这儿回 `ask`。
+     * 放行那一档（结构工具、只读三件套、杂务）照旧不表态：接管要的是"敏感动作过人"，
+     * 不是把读一次文件也变成一张卡片。
+     */
+    if (this.takeover && !this.allowed.has(i.tool_name)) {
+      return hookDecision('ask', '接管模式：这一条由你当场处置。');
+    }
     // 该不该拦由分类器判，这里不表态——回 `ask` 会把每一次调用都推成一张卡片，
     // 而"临时脚本别烦我"正是这一档要给的东西
     return {};
@@ -1056,7 +1170,44 @@ function createInbox() {
  * 说的是"补这两步"而不是"结案吧"：这两块的内容只能由查过的人给，
  * harness 替它写一句空话进去，报告里那一栏就是编的。
  */
-function closingMessage(missing: ClosingStepKind[]): string {
+/**
+ * 切接管**并落库**——两步都成才算成，而它们各有各的失败方式。
+ *
+ * 🔴 **落不了库就把会话切回去。** 落库那一步失败时，SDK 与 runner 已经在新模式上了，
+ * 而 `case_ui_state` 还是旧值：留着不动的话，屏幕上写着「已接管」、这一轮的调用确实过闸门，
+ * 重开一次 app 它自己就没了——正是这个开关唯一要防的那种"说了谎的状态"，而且比切不动更隐蔽
+ * （切不动至少当场就说了）。切得回去就当作没切成（`failed`：这一轮维持原样）。
+ *
+ * 连回滚都失败时才回 `unsaved`：那时会话确实在新模式上，只是活不过重启。这一档不能说成
+ * `failed`——人会照着"没切成"再按一次，而那一次正好把它切回去。
+ *
+ * `persist` 由调用方给：case_ui_state 归 main 那层管，runner 不认识它。
+ */
+export async function applyTakeover(
+  runner: Pick<CaseRunner, 'setTakeover'>,
+  caseId: string,
+  on: boolean,
+  persist: () => void,
+): Promise<TakeoverResult> {
+  const r = await runner.setTakeover(on);
+  if (r !== 'ok') return r;
+  try {
+    persist();
+  } catch (err) {
+    console.error(`[takeover] ${caseId} 落库失败，会话这会儿在 ${on ? 'default' : 'auto'} 上`, err);
+    return (await runner.setTakeover(!on)) === 'ok' ? 'failed' : 'unsaved';
+  }
+  return 'ok';
+}
+
+/**
+ * 派回去补的那几件事。
+ *
+ * **修复建议与那两步不是一档**：它不是强制 step（`missing` 空着照样结得了案），
+ * 所以只在这条消息已经要发的时候顺带捎上——为它单发一条会在人已经按了结案、
+ * 确认条正要弹出来的时候插一句话进去。缺了它报告那一栏写「无」，是诚实的。
+ */
+export function closingMessage(missing: ClosingStepKind[], needFix: boolean): string {
   const what: Record<ClosingStepKind, string> = {
     impact: '用 open_step(kind="impact") 量化影响面：影响了多少用户/请求、时间窗口多长，要有查询作证据',
     leftover: '用 open_step(kind="leftover") 汇总还没查清的疑点；一条都没有也要开一步并写明"没有遗留"',
@@ -1064,6 +1215,13 @@ function closingMessage(missing: ClosingStepKind[]): string {
   return [
     '准备结案了。结案前还差这几步，请依次补上，每一步都要 close_step 收口：',
     ...missing.map((k) => `- ${what[k]}`),
+    ...(needFix
+      ? [
+          '- 报告的「修复建议」还是空的（四栏里唯一由你生成的一块）：' +
+            '在给出根因的那一步重新 close_step 补上 remediation，只填这一项即可；' +
+            '没查出根因就填在汇总遗留疑点那一步，写"下一步该怎么查"',
+        ]
+      : []),
     '补完就停下来等我，不要顺手开新的排查方向。',
   ].join('\n');
 }

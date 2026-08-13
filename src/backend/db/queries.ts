@@ -118,6 +118,8 @@ export type ReportSections = {
       }
     | undefined;
   impact: { verdict_text: string } | undefined;
+  /** 修复建议那一栏，见 `effectiveRemediation`。 */
+  remediation: { step_id: string; text: string } | undefined;
   leftovers: { step_id: string; direction: string | null; verdict_text: string }[];
   refuted: { step_id: string; direction: string | null; verdict_text: string; superseded_by: string | null }[];
 };
@@ -165,6 +167,32 @@ export function timestampedEvidenceCount(db: Db, caseId: string): number {
   ).c;
 }
 
+/**
+ * 报告的修复建议那一栏（overview §6.1）：**最新一条仍然成立的声明**。
+ *
+ * 它是四栏里唯一由 agent 生成的内容，所以只能从 step 上取——`close_step` 的 `remediation`
+ * 挂在给出判断的那一步，建议是基于那个判断给的。
+ *
+ * **与根因不共用一条选择器，是有意的**（那条纪律说的是"形态必须与根因取自同一步"，
+ * 因为形态描述的正是那条根因）。这一栏不能跟着根因走：未决型报告压根没有根因，
+ * 而"没查出来，下一步先加这几个观测"恰恰是那种案子最该留下的东西——跟着根因走的话，
+ * 归档的残报告与整个未决型都会永远少一栏，正是这次要修的那个空。
+ *
+ * 排除 `superseded` 与 `refuted`：前者的判断被后来的 step 顶掉了，后者的假设自己被否掉了，
+ * 两种情况下那条建议都失去了出处。留着它报告里会躺一条基于作废判断的修复方案，且毫无报错。
+ */
+export function effectiveRemediation(db: Db, caseId: string): { step_id: string; text: string } | undefined {
+  const row = db
+    .prepare(
+      `SELECT s.id AS step_id, s.remediation AS text ${STEP_BASE}
+         AND s.remediation IS NOT NULL AND TRIM(s.remediation) <> ''
+         AND s.status NOT IN ('superseded','refuted')
+       ORDER BY ${CHRONO_DESC} LIMIT 1`,
+    )
+    .get(caseId) as { step_id: string; text: string } | undefined;
+  return row;
+}
+
 export function reportSections(db: Db, caseId: string): ReportSections {
   const q = <T>(sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as T[];
   const base = STEP_BASE;
@@ -182,6 +210,7 @@ export function reportSections(db: Db, caseId: string): ReportSections {
       caseId,
     )[0],
     impact: impact && impact.status !== 'open' ? { verdict_text: impact.verdict_text ?? '' } : undefined,
+    remediation: effectiveRemediation(db, caseId),
     leftovers: q(
       `SELECT s.id AS step_id, s.direction, s.verdict_text ${base}
          AND s.status='inconclusive' ORDER BY ${chrono}`,
@@ -195,18 +224,117 @@ export function reportSections(db: Db, caseId: string): ReportSections {
   };
 }
 
+export type NarrativeHit = { ref_id: string; ref_kind: string; case_id: string; text: string };
+
+/**
+ * 一次检索最多搬回多少条命中。
+ *
+ * 🔴 **没有它时，主导成本不是扫描而是"把命中全搬回来"**（实测 5 万行的表，一个常见词
+ * 走 MATCH 走出 5 万行、30ms 全在 main 线程上；加了 LIMIT 之后 0.2ms）。
+ * 而这条查询是**人每打一个字就跑一次**的同步 IPC，对话带越攒越长，代价只增不减。
+ *
+ * 截断的代价是"常见词只看得到前 N 条命中里出现过的案子"，这是检索框的正常契约；
+ * 而它换来的是**代价与库的大小脱钩**。取值远大于切换栏那 20 行，
+ * 好让归并之后仍有足够多的案子可排。
+ */
+export const MAX_HITS = 2000;
+
 /**
  * 跨 case 检索。中文查询串 <3 字时 trigram 的 MATCH 不成立，回退 LIKE
  * ——trigram 索引本身支持 LIKE，不是全表扫（data-model.md §5）。
+ *
+ * **两条路的分界只此一处。** 上层（`searchCases`）按 case 归并，不再自己判长度：
+ * 各判各的话，2 字与 3 字的查询会走出两套不同的结果，而人只会以为"这个词搜不到"。
+ *
+ * 🔴 **`ESCAPE` 子句会把 trigram 的 LIKE 优化整个关掉**（实测：`INDEX 0:L3` 变成
+ * `INDEX 0:`，一次罕见词查询从 0.1ms 涨到 5.1ms，且随表增长）。所以只在查询串**真的
+ * 含通配符**时才带它——那种查询很少，慢一点认了；其余一律走得到索引的那条路。
+ * 不能一律不带：`%` `_` 是通配符，搜一个 `_` 会把全部案子翻出来。
  */
-export function searchNarrative(db: Db, term: string) {
+export function searchNarrative(db: Db, term: string): NarrativeHit[] {
   const t = term.trim();
-  if (t.length >= 3) {
+  const cols = `SELECT ref_id, ref_kind, case_id, text FROM narrative_fts`;
+  // 按 code point 数，**不是 `String.length`**：emoji 与 CJK 扩展区的字各占两个 UTF-16 单元，
+  // 两个这样的字会被当成够 3 字走 MATCH，而 trigram 那侧数的是字符——原文在库里也搜不出来
+  if ([...t].length >= 3) {
     return db
-      .prepare(`SELECT ref_id, ref_kind, case_id, text FROM narrative_fts WHERE narrative_fts MATCH ?`)
-      .all(`"${t.replace(/"/g, '')}"`) as { ref_id: string; ref_kind: string; text: string }[];
+      .prepare(`${cols} WHERE narrative_fts MATCH ? LIMIT ?`)
+      .all(`"${t.replace(/"/g, '')}"`, MAX_HITS) as NarrativeHit[];
   }
-  return db
-    .prepare(`SELECT ref_id, ref_kind, case_id, text FROM narrative_fts WHERE text LIKE ?`)
-    .all(`%${t}%`) as { ref_id: string; ref_kind: string; text: string }[];
+  const wild = /[\\%_]/.test(t);
+  return wild
+    ? (db
+        .prepare(`${cols} WHERE text LIKE ? ESCAPE '\\' LIMIT ?`)
+        .all(`%${t.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, MAX_HITS) as NarrativeHit[])
+    : (db.prepare(`${cols} WHERE text LIKE ? LIMIT ?`).all(`%${t}%`, MAX_HITS) as NarrativeHit[]);
+}
+
+/**
+ * 命中出自哪一类文本。**顺序就是优先级**：找旧案子的心智是"上次那个从库延迟的"，
+ * 而人记得的多半是自己写的问题，其次才是最后的判定；对话带排最后——它最长也最杂，
+ * 拿它当摘要，一屏结果里全是"好的，我这就查"。
+ */
+const HIT_KINDS = ['case', 'verdict', 'direction', 'evidence', 'lane', 'chat'] as const;
+export type HitKind = (typeof HIT_KINDS)[number];
+
+const hitKind = (refKind: string): HitKind =>
+  refKind.startsWith('chat') ? 'chat' : ((HIT_KINDS as readonly string[]).includes(refKind) ? (refKind as HitKind) : 'evidence');
+
+export type CaseSearchRow = CaseRow & { hits: number; snippet: string; where: HitKind };
+
+/** 摘要窗口。太长会把切换栏挤爆，太短则看不出为什么命中。 */
+const SNIPPET = 60;
+
+/** 摘要**要围着命中处取**：从头截 60 字的话，命中在第 200 字的那条看着像没命中。 */
+function snippetAround(text: string, term: string): string {
+  const at = text.toLowerCase().indexOf(term.toLowerCase());
+  if (at < 0) return text.length > SNIPPET ? `${text.slice(0, SNIPPET)}…` : text;
+  const from = Math.max(0, at - Math.floor((SNIPPET - term.length) / 2));
+  const cut = text.slice(from, from + SNIPPET);
+  return `${from > 0 ? '…' : ''}${cut}${from + SNIPPET < text.length ? '…' : ''}`;
+}
+
+/**
+ * 切换栏上的检索（ui.md §8.3）：把 `narrative_fts` 的命中按 case 归并。
+ *
+ * **排序与 `caseList` 同一条规则**（进行中的在前、同档按最近活动倒序），不按命中条数排：
+ * 两处各排各的话，同一个案子在"最近 20 个"里排第一、搜出来却排第七，人会以为搜到的是另一个。
+ * 命中条数只作为附带信息给出来，不参与排序。
+ *
+ * 归并要**在 JS 里做**而不是 `GROUP BY`：摘要得挑优先级最高的那一条，
+ * 而 SQL 的聚合给不出"这一组里按另一套顺序排第一的那行"。
+ */
+export function searchCases(db: Db, term: string, opts: { limit?: number } = {}): CaseSearchRow[] {
+  const t = term.trim();
+  if (!t) return [];
+  const best = new Map<string, { hits: number; row: NarrativeHit; kind: HitKind }>();
+  for (const hit of searchNarrative(db, t)) {
+    const kind = hitKind(hit.ref_kind);
+    const cur = best.get(hit.case_id);
+    if (!cur) best.set(hit.case_id, { hits: 1, row: hit, kind });
+    else {
+      cur.hits += 1;
+      if (HIT_KINDS.indexOf(kind) < HIT_KINDS.indexOf(cur.kind)) {
+        cur.row = hit;
+        cur.kind = kind;
+      }
+    }
+  }
+  if (!best.size) return [];
+
+  // 案子数被 `MAX_HITS` 顶死（一条命中最多贡献一个案子），所以这串占位符不会撞上
+  // SQLite 的变量上限——上限那一头不必再单独截，截了反而是按 Map 的插入顺序丢案子
+  const ids = [...best.keys()];
+  // INNER JOIN 是有意的：`narrative_fts` 上没有外键，指不到 `cases` 的命中就是脏索引，
+  // 拿它渲染出的 chip 点下去会切到一个不存在的案子（`switchTo` 回 false，界面一动不动）
+  const rows = db
+    .prepare(
+      `SELECT id, title, status, updated_at FROM cases WHERE id IN (${ids.map(() => '?').join(',')}) ${CASE_ORDER}`,
+    )
+    .all(...ids) as CaseRow[];
+
+  return rows.slice(0, opts.limit ?? 20).map((c) => {
+    const hit = best.get(c.id)!;
+    return { ...c, hits: hit.hits, snippet: snippetAround(hit.row.text, t), where: hit.kind };
+  });
 }

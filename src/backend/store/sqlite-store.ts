@@ -449,9 +449,16 @@ export function createInvestigationSession(
     async closeStep(args: CloseStepArgs) {
       const warnings: string[] = [];
       const step = db
-        .prepare(`SELECT id, kind, expected, actual, shape FROM steps WHERE id=?`)
+        .prepare(`SELECT id, kind, expected, actual, shape, remediation FROM steps WHERE id=?`)
         .get(args.stepId) as
-        | { id: string; kind: string; expected: string | null; actual: string | null; shape: string | null }
+        | {
+            id: string;
+            kind: string;
+            expected: string | null;
+            actual: string | null;
+            shape: string | null;
+            remediation: string | null;
+          }
         | undefined;
       if (!step) return { warnings: [`未知 stepId ${args.stepId}`] };
 
@@ -465,6 +472,7 @@ export function createInvestigationSession(
         expected: blankToUndefined(args.expected) ?? step.expected ?? undefined,
         actual: blankToUndefined(args.actual) ?? step.actual ?? undefined,
         shape: args.shape ?? (step.shape as CloseStepArgs['shape']) ?? undefined,
+        remediation: blankToUndefined(args.remediation) ?? step.remediation ?? undefined,
       };
 
       if (args.status !== 'inconclusive' && args.evidence.length === 0) {
@@ -526,6 +534,7 @@ export function createInvestigationSession(
           expected: blankToUndefined(args.expected),
           actual: blankToUndefined(args.actual),
           shape: args.shape,
+          remediation: blankToUndefined(args.remediation),
           at: ctx.now(),
         },
       });
@@ -541,12 +550,24 @@ export function createInvestigationSession(
       //
       // 而且这里**只陈述事实，不给处置**：写"要让它算数就把那条根因推翻"等于教它去
       // 推翻一条有效结论、或把置信度往上凑——真该不该推翻，只有查过的它自己判得了。
-      if (final.shape && args.status === 'confirmed' && step.kind === 'normal') {
-        const root = reportSections(db, ctx.caseId).rootCause;
-        if (root && root.step_id !== args.stepId) {
+      if (args.status === 'confirmed' && step.kind === 'normal') {
+        const sections = reportSections(db, ctx.caseId);
+        const root = sections.rootCause;
+        if (final.shape && root && root.step_id !== args.stepId) {
           warnings.push(
             `形态取的是报告认定的那条根因的声明——现在那条是 ${root.step_id}` +
               `（置信度 ${root.confidence}），所以这一条目前不生效。`,
+          );
+        }
+        // 修复建议是**报告四栏里唯一没有投影来源的那一栏**，不填就永远是「无」。
+        // 只在这一步真的成了根因、而全案一条建议都还没有时说一次：说早了（还没根因）
+        // 建议无从谈起，逐条都说则会变成每次 close 都挨一句的噪声。
+        // 只提醒不阻挡——它不是强制 step（那要动 kind 的 CHECK），归档的残报告
+        // 少这一栏也是诚实的
+        if (root?.step_id === args.stepId && !sections.remediation) {
+          warnings.push(
+            '报告的「修复建议」那一栏目前是空的，而它是四栏里唯一没有投影来源的一块。' +
+              '这一步已经是报告认定的根因，重新 close 它并补上 remediation 即可（只填这一项也行）。',
           );
         }
       }

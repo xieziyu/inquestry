@@ -73,6 +73,22 @@ export type CaseBrief = {
   loaded: boolean;
 };
 
+/**
+ * 检索命中的一个案子（ui.md §8.3 的「历史」那一半）。
+ *
+ * 与 `CaseBrief` 是同一种东西加三项"为什么命中"——**不另起一种类型**：
+ * 切换栏上两种列表长得一样、点下去做的也是同一件事，分成两种的话
+ * 徽标（等你 N / 跑动中）迟早只在其中一边跟得上。
+ */
+export type CaseHit = CaseBrief & {
+  /** 这个案子里命中了几条。只作展示，不参与排序（排序与最近列表同一条规则）。 */
+  hits: number;
+  /** 命中处附近的原文，已截断。 */
+  snippet: string;
+  /** 命中出自哪一类文本；标签由界面给，这里只给类别。 */
+  where: 'case' | 'verdict' | 'direction' | 'evidence' | 'lane' | 'chat';
+};
+
 export type CallNode = {
   id: string;
   callNumber: number;
@@ -167,6 +183,10 @@ export type PendingAsk = {
  *
  * 与 ①档 `PendingAsk` 的分别在于**不处理会怎样**：这一档到点按预设放行，
  * 所以有 `deadline`；①档故意没有，自动填个假结果比让人等着更糟。
+ *
+ * **接管模式下没有 `deadline`**（overview §3.5）：人刚刚明说了"每一条我自己判"，
+ * 三分钟后替他放行等于把这句话作废，而那时挂在闸门上的多半正是敏感写。
+ * 那一档因此与 ①档同形：等到有人处置，或这一轮被停掉为止。
  */
 export type PendingGate = {
   /** 就是 backend 的 toolUseID —— 与 `CallNode.id` 同一个键，处置后能直接对上节点。 */
@@ -178,7 +198,8 @@ export type PendingGate = {
   /** backend 说得出「为什么问你」时带上，说不出就没有。 */
   reason?: string;
   askedAt: number;
-  deadline: number;
+  /** 到点自动放行的时刻；接管模式下没有这一项，界面那颗倒计时环也就不该出现。 */
+  deadline?: number;
 };
 
 /** 闸门的三个手势。改写与放行是一个动作的两种形态，拒绝必须留话——不留话 agent 不知道换什么。 */
@@ -291,6 +312,12 @@ export type Snapshot = {
   cases: CaseBrief[];
   sessionStatus: 'idle' | 'live' | 'ended' | 'crashed';
   /**
+   * 接管模式开着没有（overview §3.5）。开着时每一次非放行档的调用都挂到闸门上，
+   * 且**那些闸门没有超时兜底**——所以它必须在界面上一眼看得见，
+   * 而不是等第一张闸门卡冒出来才知道自己开着它。
+   */
+  takeover: boolean;
+  /**
    * 最近一轮的失败原因。**会话可能仍是 `live` 却已经跑不动了**——凭据过期时消息流
    * 一直开着，状态永远停在 `live`。有它才知道该显示重开的入口。
    */
@@ -331,6 +358,12 @@ export type Snapshot = {
   report: {
     rootCause: { stepId: string; text: string; confidence: number | null } | null;
     impact: string | null;
+    /**
+     * 修复建议：四栏里唯一由 agent 生成、没有投影来源的那一块（overview §6.1）。
+     * 取的是**最新一条仍然成立的声明**，不跟着根因走——未决型与归档的残报告没有根因，
+     * 而它们恰恰最该留下"下一步该怎么查"。选择器只有 `queries.effectiveRemediation` 一条。
+     */
+    remediation: string | null;
     /**
      * 状态型报告的主体（D25）：应然与实然的一对。挂在根因那一步上，
      * 所以根因被推翻时它跟着一起失效，不会留下一段没有出处的对照。
@@ -376,6 +409,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   case: null,
   cases: [],
   sessionStatus: 'idle',
+  takeover: false,
   lastError: null,
   busy: false,
   backgroundLanes: 0,
@@ -387,8 +421,28 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   chat: [],
   closingGaps: [],
   shapeSuggestion: { shape: 'open', source: 'inferred', rootStepId: null, stateFillable: false },
-  report: { rootCause: null, impact: null, expected: null, actual: null, leftovers: [], refuted: [] },
+  report: {
+    rootCause: null,
+    impact: null,
+    remediation: null,
+    expected: null,
+    actual: null,
+    leftovers: [],
+    refuted: [],
+  },
 };
+
+/**
+ * 接管切没切成，以及没切成时是哪一种。**几种失败的下一步动作各不相同，不能合成一个 false**：
+ *
+ * - `gone`：状态冲突（切了案子 / 已收尾）。案子不在手上，切回去再点一次就行
+ * - `failed`：这一轮维持原样。要么 backend 的权限模式没切动，要么切动了但落不了库、
+ *   已经切回来了——两种都是"什么都没变"，人必须知道自己**没有**拿到想要的那一档，
+ *   否则会拿一个并不存在的保护继续查下去
+ * - `unsaved`：**会话确实切过去了，但只活到下次重启**。落库失败且连回滚都失败时才有它——
+ *   说成 `failed` 的话人会再按一次（这一次会把它切回去），说成 `ok` 的话重开 app 它自己就没了
+ */
+export type TakeoverResult = 'ok' | 'gone' | 'failed' | 'unsaved';
 
 export type InquestryApi = {
   envCheck(): Promise<{ claude: string | null; hint: string }>;
@@ -401,6 +455,14 @@ export type InquestryApi = {
   /** 去立案面板开新案子；当前案子照旧在后台跑。 */
   newCase(): Promise<void>;
   /**
+   * 跨 case 检索（D28 / [data-model](data-model.md) §5）。空串回空数组，不回"全部"——
+   * 清空输入框该是回到最近列表那条路，不是搜出一屏。
+   *
+   * **不走快照**：它是人打字驱动的一次性查询，塞进 60ms 一轮的全量快照里
+   * 等于每次推送都跑一遍全库检索，而结果只有输入框还开着的时候有人看。
+   */
+  searchCases(term: string): Promise<CaseHit[]>;
+  /**
    * 下面这四个都要带上**这一屏看到的 caseId**。
    *
    * 切案子那一瞬 main 那边当时就换了当前案子，而这一屏要等下一次快照（最多 60ms）才换——
@@ -409,6 +471,11 @@ export type InquestryApi = {
   start(caseId: string, question?: string): Promise<void>;
   /** 收掉当前会话再起一轮。会话卡在 `live` 却每轮都失败时，这是唯一出路。 */
   restart(caseId: string): Promise<void>;
+  /**
+   * 开 / 关接管模式（overview §3.5）：开着时每次调用都过闸门，由人当场放行 / 改写 / 拒绝。
+   * 回执是切没切成——冻结的案子切不了，静默 return 会让开关在界面上翻过去却什么都没做。
+   */
+  setTakeover(caseId: string, on: boolean): Promise<TakeoverResult>;
   /** 返回是否真的送出去了；没送出去 renderer 要把草稿留着。 */
   send(caseId: string, text: string): Promise<boolean>;
   /** 收尾三档（D29 / ui.md §8.4）。三个动作各有各的后果，不能合成一个「结束」。 */

@@ -23,11 +23,11 @@ import path from 'node:path';
 import { readBlobHead, storeBlob } from '../src/backend/db/blobs.js';
 import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../src/backend/db/database.js';
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
-import { caseList, reportSections } from '../src/backend/db/queries.js';
+import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
 import { readIntake, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
-import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
+import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
 import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 
 /** 会话准备与运行时读数是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
@@ -85,6 +85,8 @@ async function work(runner: CaseRunner, direction: string, callId: string, occur
     status: 'confirmed',
     verdict: '主从延迟成立',
     confidence: 0.8,
+    // 迁移那一段要验"新列的值靠重放补得回来"，得有一步真的填过它
+    remediation: '把从库读改成读主库，或给这条链路加一次 read-your-writes 校验',
     evidence: [
       {
         callRef: '#1',
@@ -302,6 +304,64 @@ async function main() {
       readdirSync(path.dirname(migrated)).every((f) => !f.includes('.bak')),
     readdirSync(path.dirname(migrated)).join(' '),
   );
+  // ── 内置阶梯本身也要走一遍，不能只验一级假步骤 ─────────────────────────
+  //
+  // 上面那一段验的是**这条路**（DDL 与 schema 的先后、案子留不留在原地），用的是替身步骤。
+  // 而 `MIGRATIONS` 里真正那一级写没写对是另一回事：写歪了（列名拼错、忘了加进阶梯）
+  // 的表现是**开发库被挪走**——app 起得来、界面干净、案子全没了。
+  //
+  // 造一份"真的是 v5"的库：把当前库复制一份，删掉 v6 加的那一列，再把版本调回去。
+  // 光改 user_version 不删列的话，`ALTER TABLE ADD COLUMN` 会撞上重复列，
+  // 验到的就成了"迁移会失败"而不是"迁移能成"
+  const real = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-realmig-')), 'inquestry.db');
+  db.prepare(`VACUUM INTO ?`).run(real);
+  const realOld = new DatabaseCtor(real);
+  realOld.exec(`ALTER TABLE steps DROP COLUMN remediation`);
+  realOld.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  realOld.close();
+  const fixedBefore = (
+    db.prepare(`SELECT COUNT(*) c FROM steps WHERE remediation IS NOT NULL`).get() as { c: number }
+  ).c;
+  // **不传 steps**：走的就是代码里那条内置阶梯
+  const realUp = openDatabase(real);
+  const realPost = {
+    cases: (realUp.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c,
+    fixed: (
+      realUp.prepare(`SELECT COUNT(*) c FROM steps WHERE remediation IS NOT NULL`).get() as { c: number }
+    ).c,
+    version: Number(realUp.pragma('user_version', { simple: true })),
+  };
+  realUp.close();
+  check(
+    `内置阶梯把 v${SCHEMA_VERSION - 1} 迁到 v${SCHEMA_VERSION}：案子留在原地，新列的值由重放补回来`,
+    realPost.cases === casesBefore &&
+      realPost.cases > 0 &&
+      fixedBefore > 0 &&
+      realPost.fixed === fixedBefore &&
+      realPost.version === SCHEMA_VERSION &&
+      readdirSync(path.dirname(real)).every((f) => !f.includes('.bak')),
+    `案子 ${casesBefore} → ${realPost.cases}，带修复建议的步 ${fixedBefore} → ${realPost.fixed}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}`,
+  );
+
+  // 🔴 **`case_ui_state` 不是投影，却会被投影的清空**：它对 `cases(id)` 带 ON DELETE CASCADE，
+  // `DELETE FROM cases` 一跑就整表带走。里面装的正是**重建不出来**的两样——立案时选的 agent
+  // （会话还没开，别处没有第二份）与接管开关。丢了不报错、案子还在，表现是"升级完模型悄悄
+  // 换回默认、接管自己关掉了"，与迁移失败长得完全不一样
+  const uiCase = caseList(db, { limit: 1 })[0]!.id;
+  db.prepare(
+    `INSERT INTO case_ui_state (case_id,value) VALUES (?,?)
+     ON CONFLICT(case_id) DO UPDATE SET value=excluded.value`,
+  ).run(uiCase, JSON.stringify({ takeover: true, agent: { backend: 'claude', model: 'probe-model' } }));
+  rebuildProjections(db, { blobDir: blobs });
+  const keptUi = db.prepare(`SELECT value FROM case_ui_state WHERE case_id=?`).get(uiCase) as
+    | { value: string }
+    | undefined;
+  check(
+    '重放不该把 case_ui_state 一起冲掉（它对 cases 有级联删除，而里面装的重建不出来）',
+    keptUi?.value.includes('probe-model') === true && keptUi.value.includes('"takeover":true'),
+    `重放后=${keptUi?.value ?? '(没了)'}`,
+  );
+
   // 缺一级就整条走不通：跳过那一级等于把它那几列悄悄留空
   const staleFile = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-stale-')), 'inquestry.db');
   db.prepare(`VACUUM INTO ?`).run(staleFile);
@@ -746,6 +806,241 @@ async function main() {
     pinRows.length <= 20 && !pinRows.some((c) => c.id === 'case_x'),
     `共 ${pinRows.length} 行，case_x ${pinRows.some((c) => c.id === 'case_x') ? '还在里面' : '没在'}`,
   );
+
+  // ── ⑯.5 跨 case 检索接上切换栏（ui.md §8.3 / data-model §5） ─────────────
+  //
+  // FTS5 那两张表建好很久了，一直没有人查。接上去之后这一带的错法都很安静：
+  // 只列不搜时人还知道"搜不了"，搜出来的东西不对却看不出是漏了一整类索引
+  // 还是那个案子真没提过——所以每一类命中来源都要有一条自己的检查。
+  const fx = makeRunner('case_fts', '订单支付回调丢了');
+  const fxs = (fx as unknown as Probe).beginSession();
+  const fxStep = await fxs.store.openStep({ direction: '怀疑回调被幂等键挡掉了' });
+  fxs.recordToolStart({ callId: 'call_fts1', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  fxs.recordToolEnd({ callId: 'call_fts1', output: '命中 1 条\n09:00:00 callback dropped\n(end)' });
+  await fxs.store.closeStep({
+    stepId: fxStep.stepId,
+    status: 'confirmed',
+    verdict: '幂等键把重复回调连同首次一起挡了',
+    confidence: 0.9,
+    evidence: [{ callRef: '#1', anchor: '2', claim: '回调在网关层就被丢弃', occurredAt: '09:00:00' }],
+  });
+  // 立完案没跑过的案子：**只有立案单那一条索引救得了它**。不索引 `case.opened` 的话，
+  // 它在检索里根本不存在，而"立完案先放着、过几天回来找"正是常态
+  makeRunner('case_fts_new', '证书过期导致握手失败');
+
+  const hitIds = (t: string) => searchCases(db, t).map((c) => c.id);
+  check(
+    '检索按案子归并：一个案子多条命中只出一行，条数照实报',
+    (() => {
+      const r = searchCases(db, '幂等');
+      const fts = r.find((c) => c.id === 'case_fts');
+      return new Set(r.map((c) => c.id)).size === r.length && fts?.hits === 2;
+    })(),
+    JSON.stringify(searchCases(db, '幂等')),
+  );
+  check(
+    '立完案还没跑过的案子也搜得到（立案单进了索引）',
+    hitIds('证书过期').includes('case_fts_new'),
+    `命中=${JSON.stringify(searchCases(db, '证书过期'))}`,
+  );
+  check(
+    '中文 2 字回退 LIKE，照样命中（trigram 的 MATCH 在 <3 字时不成立）',
+    hitIds('回调').includes('case_fts') && searchNarrative(db, '回调').length > 0,
+    `"回调"→${hitIds('回调').join(',')}（走 MATCH 的话这里是 0 条，而人只会以为这个词搜不到）`,
+  );
+  // 走 MATCH 还是 LIKE 按 **code point** 数分：`String.length` 数的是 UTF-16 单元，
+  // 而 emoji / CJK 扩展区一个字占两个——按它判的话两个这样的字会被当成够 3 字送进 MATCH，
+  // trigram 那侧只数出 2 个字符，于是原文明明在库里也回零条
+  check(
+    '补充平面字符按字符数判长度，不按 UTF-16 单元数（两个 emoji 仍走得到 LIKE）',
+    (() => {
+      db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
+        'probe_astral',
+        'verdict',
+        'case_fts',
+        '灰度批次 \u{1F525}\u{1F525} 全量回滚',
+      );
+      const n = searchNarrative(db, '\u{1F525}\u{1F525}').length;
+      db.prepare(`DELETE FROM narrative_fts WHERE ref_id='probe_astral'`).run();
+      return n > 0;
+    })(),
+    '按 String.length 判的话这里是 0 条（"🔥🔥".length === 4 却只有 2 个字符）',
+  );
+  check(
+    'LIKE 那条路上的通配符要转义：搜一个 % 不该把全部案子翻出来',
+    searchCases(db, '%').length === 0,
+    `"%"→${searchCases(db, '%').length} 个案子（不转义的话它匹配一切）`,
+  );
+  check(
+    '空串回空数组，不回"全部"',
+    searchCases(db, '').length === 0 && searchCases(db, '   ').length === 0,
+    `""→${searchCases(db, '').length} · "   "→${searchCases(db, '   ').length}`,
+  );
+  // 排序与最近列表同一条规则。按命中条数排的话，同一个案子在两份列表里的位置会对不上，
+  // 而两份列表长得一模一样——人会以为搜到的是另一个案子
+  check(
+    '检索结果的排序与最近列表同一条规则（进行中在前、同档按最近活动倒序）',
+    (() => {
+      // **拿 `caseList` 的实际顺序对，不在这儿把规则再写一遍**：
+      // 重写一遍的话，这条检查验的是"我这次抄对了没有"，而不是"两处是不是同一条规则"
+      const rank = new Map(caseList(db, { limit: 9999 }).map((c, i) => [c.id, i]));
+      const got = searchCases(db, '的问题').map((c) => c.id);
+      return (
+        got.length > 1 &&
+        got.every((id, i) => i === 0 || rank.get(got[i - 1]!)! < rank.get(id)!)
+      );
+    })(),
+    `顺序=${searchCases(db, '的问题').map((c) => c.id).slice(0, 6).join(',')}`,
+  );
+  // 摘要要围着命中处取：从头截 60 字的话，命中在后半段的那条看着像根本没命中
+  check(
+    '摘要围着命中处取，不是从头截一段',
+    (() => {
+      const long = `${'铺垫'.repeat(60)}关键词在很后面`;
+      db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
+        'probe_long',
+        'verdict',
+        'case_fts',
+        long,
+      );
+      const snip = searchCases(db, '关键词在很后面')[0]?.snippet ?? '';
+      db.prepare(`DELETE FROM narrative_fts WHERE ref_id='probe_long'`).run();
+      return snip.includes('关键词在很后面') && snip.startsWith('…');
+    })(),
+    '命中处落在第 120 字上：从头截的话摘要里一个匹配的字都看不到',
+  );
+  // 命中出处的优先级：人记得的是自己写的问题，其次才是判定；对话带最长最杂，排最后
+  check(
+    '同一案子里多类命中时，摘要挑优先级最高的那一类',
+    (() => {
+      db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
+        'probe_chat',
+        'chat:user',
+        'case_fts',
+        '幂等这事我早就说过了',
+      );
+      const where = searchCases(db, '幂等')[0]?.where;
+      db.prepare(`DELETE FROM narrative_fts WHERE ref_id='probe_chat'`).run();
+      return where === 'verdict';
+    })(),
+    '按到达顺序取的话，摘要会变成对话带里那句"好的我这就查"',
+  );
+  // 指不到 cases 的命中是脏索引：拿它渲染出的 chip 点下去会切到一个不存在的案子，
+  // 而 `switchTo` 只是回个 false——界面一动不动，看起来像按钮坏了
+  check(
+    '指不到案子的命中直接丢掉，不渲染成一个点不动的 chip',
+    (() => {
+      db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
+        'probe_orphan',
+        'verdict',
+        'case_ghost',
+        '孤儿索引里的独特词',
+      );
+      const r = searchCases(db, '孤儿索引里的独特词');
+      db.prepare(`DELETE FROM narrative_fts WHERE ref_id='probe_orphan'`).run();
+      return r.length === 0;
+    })(),
+    'INNER JOIN cases 是这条的唯一保障',
+  );
+  // 🔴 **`ESCAPE` 子句会把 trigram 的 LIKE 优化整个关掉**（实测 `INDEX 0:L3` → `INDEX 0:`，
+  // 罕见词 0.1ms → 5.1ms，且随表增长）。所以只在查询串真的含通配符时才带它。
+  // 验的是**真正被 prepare 出去的那条 SQL**，不在这儿照抄一份——照抄的话验的是我抄对没有
+  const prepared: string[] = [];
+  const spy = new Proxy(db, {
+    get(t, k, r) {
+      if (k !== 'prepare') return Reflect.get(t, k, r);
+      return (sql: string) => (prepared.push(sql), t.prepare(sql));
+    },
+  }) as typeof db;
+  searchNarrative(spy, '回调');
+  const plainSql = prepared.at(-1)!;
+  // 通配符那条只在 **<3 字**（LIKE 那条路）上有意义：≥3 字走的是 MATCH 的引号短语，
+  // `%` `_` 在那儿本来就不是通配符。拿一个 3 字的串验会走进 MATCH，检查就成了空的
+  searchNarrative(spy, 'a_');
+  const wildSql = prepared.at(-1)!;
+  const planOf = (sql: string, ...a: unknown[]) =>
+    (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...a) as { detail: string }[])
+      .map((r) => r.detail)
+      .join(' / ');
+  check(
+    '不含通配符的查询串不带 ESCAPE，因而用得上 trigram 的 LIKE 索引',
+    !plainSql.includes('ESCAPE') &&
+      planOf(plainSql, '%回调%', MAX_HITS).includes('L3') &&
+      wildSql.includes('ESCAPE'),
+    `普通=${planOf(plainSql, '%回调%', MAX_HITS)} · 带通配符那条${wildSql.includes('ESCAPE') ? '有' : '没有'} ESCAPE（一律带 ESCAPE 的话这里是 INDEX 0: 而不是 L3）`,
+  );
+  // 主导成本不是扫描，是把命中全搬回来——而这条查询人每打一个字就跑一次
+  const bulkFts = db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`);
+  db.transaction(() => {
+    for (let i = 0; i < MAX_HITS + 500; i++) bulkFts.run(`probe_flood_${i}`, 'verdict', 'case_fts', `洪水词条目 ${i}`);
+  })();
+  const cappedHits = searchNarrative(db, '洪水词').length;
+  const floodedCases = searchCases(db, '洪水词').length;
+  db.prepare(`DELETE FROM narrative_fts WHERE ref_id LIKE 'probe_flood_%'`).run();
+  check(
+    '一次检索最多搬回 MAX_HITS 条命中，代价与库的大小脱钩',
+    cappedHits === MAX_HITS && floodedCases > 0,
+    `${MAX_HITS + 500} 条可命中 → 搬回 ${cappedHits} 条 / ${floodedCases} 个案子（不截的话 5 万行的表上一个常见词就是 30ms 卡在 main 线程）`,
+  );
+
+  // 检索结果与最近列表是同一种 chip：少合运行时那一半，一个正等着人的案子
+  // 会被搜出来显示成"已停"，而跨 case 汇总要保的正是别让那条支线静静挂死
+  const fxReg = new CaseRegistry<CaseRunner>({ db, create: loadRunner });
+  const fxLive = makeRunner('case_fts');
+  fxReg.adopt('case_fts', fxLive);
+  void (fxLive as unknown as Probe).askOperator({
+    engine: 'mysql',
+    statement: 'SELECT 1',
+    why: '看一眼',
+    expect: '一条',
+  });
+  fxReg.switchTo('case_x');
+  check(
+    '检索结果合上了运行时那一半（等你 N / 跑动中 / 载入着）',
+    (() => {
+      const hit = fxReg.search('幂等').find((c) => c.id === 'case_fts');
+      return hit?.todos === 1 && hit.loaded === true && hit.current === false;
+    })(),
+    JSON.stringify(fxReg.search('幂等')),
+  );
+  // 命中是一次性查出来的，而运行时那一半每 60ms 会变。**渲染前要按最新快照兑一次**——
+  // 不兑的话，人停在检索结果上的这段时间里新冒出来的待办一条都不显示，
+  // 而跨 case 汇总存在的全部理由就是别让那条支线静静挂死
+  const staleHits = fxReg.search('幂等');
+  const withTodo = fxReg.briefs();
+  check(
+    '检索命中渲染前按最新快照兑运行时状态（等你 N / 跑动中 / 当前）',
+    (() => {
+      // 造一份"查出来时还没有待办"的命中，再拿带着待办的最新列表去兑
+      const cold = staleHits.map((h) => ({ ...h, todos: 0, running: false, current: false }));
+      const merged = freshenHits(cold, withTodo);
+      return merged.find((c) => c.id === 'case_fts')?.todos === 1;
+    })(),
+    `兑之前 todos=0，兑之后 todos=${freshenHits(staleHits.map((h) => ({ ...h, todos: 0 })), withTodo).find((c) => c.id === 'case_fts')?.todos}`,
+  );
+  check(
+    '不在最新列表里的命中按"静的"算，不保留查出来那一刻的旧值',
+    (() => {
+      // 切换栏把「当前的 / 还跑着的 / 挂着待办的」全部钉住，所以不在列表里 ⟺ 三样都不是。
+      // 保留旧值的话，一条刚被处理掉的待办会在检索结果上一直挂着「等你 3」
+      const ghost = freshenHits(
+        staleHits.map((h) => ({ ...h, id: 'case_gone', todos: 3, running: true, current: true })),
+        withTodo,
+      );
+      return ghost[0]?.todos === 0 && ghost[0]?.running === false && ghost[0]?.current === false;
+    })(),
+    JSON.stringify(freshenHits(staleHits.map((h) => ({ ...h, id: 'case_gone', todos: 3 })), withTodo)[0]),
+  );
+  check(
+    '兑的只是运行时那一半：命中的原因（hits / snippet / where）原样留着',
+    (() => {
+      const merged = freshenHits(staleHits, withTodo).find((c) => c.id === 'case_fts');
+      const orig = staleHits.find((c) => c.id === 'case_fts');
+      return !!orig && merged?.snippet === orig.snippet && merged.where === orig.where && merged.hits === orig.hits;
+    })(),
+    '把命中的原因也一起兑掉的话，chip 上那句"为什么它被搜出来"会随快照抖没',
+  );
+  fxReg.closeAll();
 
   // ── ⑰ 待办处置要有回执，不能静默丢掉 ────────────────────────────────────
   //

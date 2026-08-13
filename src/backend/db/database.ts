@@ -5,12 +5,14 @@ import { checkEventShapes, rebuildProjections } from './projector.js';
 import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
 
 /**
+ * 6：`steps.remediation` —— 修复建议的写入方（报告四栏最后补齐的那一栏）。
+ *    **第一级真正走重放迁移的升级**：只加一个 nullable 列，老事件形状没动过。
  * 5：`tool_calls.gate_decision` 多一档 `auto_deny`（分类器/规则拒的，人没被问到）
  *    + `chat_lines` 表与事件 `chat.appended` —— 对话带落库，它是唯一重建不出来的东西。
  * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（§9.16）。
  * 3：`steps.shape` —— agent 声明的报告形态（v2 只有 `cases.verdict_shape` 这个终态）。
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export type Db = Database.Database;
 
@@ -24,13 +26,15 @@ export type Db = Database.Database;
 export type MigrationStep = { to: number; apply: (db: Db) => void };
 
 /**
- * 升级阶梯。**目前是空的**——v1→v5 每一级都动过 CHECK 约束或字段语义，
- * 那类只能重建库。第一条真正 additive 的升级会是第一个走这条路的。
+ * 升级阶梯。v1→v5 每一级都动过 CHECK 约束或字段语义，那类只能重建库，所以阶梯从 v6 起。
  *
- * 空阶梯的行为与从前一模一样（任何版本不匹配都挪库），所以这不是一条"没人验过的路"：
- * `spike:cases` 用一份真库 + 一级假步骤把它整条走了一遍。
+ * **只写这一级需要的 DDL**，其余交给幂等的 `SCHEMA_SQL` 与一次重放：`ALTER TABLE` 补出来的
+ * 是一个空列，值要靠重放 `step.closed` 才填得回去——而 v5 的老事件里压根没有 `remediation`，
+ * 于是它们重放后照旧是 NULL。**这正是 additive 的定义**：老数据不掉、新列由新事件填。
  */
-const MIGRATIONS: MigrationStep[] = [];
+const MIGRATIONS: MigrationStep[] = [
+  { to: 6, apply: (db) => db.exec(`ALTER TABLE steps ADD COLUMN remediation TEXT`) },
+];
 
 type Upgrade =
   | { kind: 'fresh' }

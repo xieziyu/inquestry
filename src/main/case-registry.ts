@@ -9,8 +9,8 @@
  */
 
 import type { Db } from '../backend/db/database.js';
-import { caseList } from '../backend/db/queries.js';
-import type { CaseBrief, Snapshot } from '../shared/ipc.js';
+import { caseList, searchCases, type CaseRow } from '../backend/db/queries.js';
+import type { CaseBrief, CaseHit, Snapshot } from '../shared/ipc.js';
 
 export type LiveCase = {
   /** 待办数要能单独问：全局汇总每 60ms 就要把所有案子算一遍，走不起 buildSnapshot。 */
@@ -103,19 +103,37 @@ export class CaseRegistry<R extends LiveCase> {
   }
 
   briefs(): CaseBrief[] {
-    return caseList(this.opts.db, { pinned: this.pinnedIds() }).map((c) => {
-      const r = this.live.get(c.id);
-      return {
-        id: c.id,
-        title: c.title,
-        status: c.status,
-        updatedAt: c.updated_at,
-        current: c.id === this.currentId,
-        todos: r?.todoCount ?? 0,
-        running: r?.isBusy ?? false,
-        loaded: !!r,
-      };
-    });
+    return caseList(this.opts.db, { pinned: this.pinnedIds() }).map((c) => this.brief(c));
+  }
+
+  /**
+   * 检索的结果同样要**合上运行时那一半**（ui.md §8.3）。
+   *
+   * 库里那一半只知道标题与状态；「等你 N」「跑动中」只活在运行时里。少合这一下，
+   * 搜出来的 chip 会把一个正卡在 `ask_operator` 上等人的案子显示成"已停"——
+   * 而跨 case 汇总要保的正是"别让那条支线静静挂死"。
+   */
+  search(term: string): CaseHit[] {
+    return searchCases(this.opts.db, term).map((c) => ({
+      ...this.brief(c),
+      hits: c.hits,
+      snippet: c.snippet,
+      where: c.where,
+    }));
+  }
+
+  private brief(c: CaseRow): CaseBrief {
+    const r = this.live.get(c.id);
+    return {
+      id: c.id,
+      title: c.title,
+      status: c.status,
+      updatedAt: c.updated_at,
+      current: c.id === this.currentId,
+      todos: r?.todoCount ?? 0,
+      running: r?.isBusy ?? false,
+      loaded: !!r,
+    };
   }
 
   closeAll() {

@@ -24,7 +24,7 @@
 import { VERDICT_SHAPES, type IncidentEntry } from '../src/shared/ipc.js';
 import { reportMarkdown } from '../src/shared/markdown.js';
 import { reportPlan, type ReportInput } from '../src/shared/report.js';
-import { ROOT_TEXT, base, ev, incident, report, step, steps } from './fixtures/report-case.js';
+import { FIX_TEXT, ROOT_TEXT, base, ev, incident, report, step, steps } from './fixtures/report-case.js';
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -421,6 +421,35 @@ check(
     return out.includes('## 遗留疑点') && sectionOf(out, '遗留疑点').includes('无。');
   })(),
   '整节消失读起来像"没这回事"；写「无」才是"查过，没有"（§7.1 点名了这一节）',
+);
+
+check(
+  '修复建议那一节印的是内容，不是恒为「无」',
+  sectionOf(md(), '修复建议').includes(FIX_TEXT.replace(/([*[\]])/g, '\\$1')),
+  '这一栏一度没有写入方，于是"整节留白"这个错法在整篇里搜「无。」的检查下照旧通过（§9.12 那条 mutation 记的正是它）',
+);
+
+check(
+  '空的修复建议写「无」，整节照旧在',
+  (() => {
+    const out = md({ report: { ...report, remediation: null } });
+    return out.includes('## 修复建议') && sectionOf(out, '修复建议').includes('无。');
+  })(),
+  '与遗留疑点同一条理由：整节消失读起来像"没这回事"',
+);
+
+check(
+  '修复建议同样过转义那道门',
+  (() => {
+    const out = md({ report: { ...report, remediation: EVIL } });
+    const body = sectionOf(out, '修复建议')
+      .split('\n')
+      .filter((l) => l.trim() && !l.startsWith('*来源：'))
+      .join('\n')
+      .replace(/\[\^e\d+\]$/, '');
+    return body.match(/(?<!\\)[`*[\]<>~]/g) === null;
+  })(),
+  '它是 agent 生成的自由文本——四栏里最像"正常散文"的一栏，也因此最容易被漏在转义之外',
 );
 
 check(

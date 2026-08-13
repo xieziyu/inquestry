@@ -65,7 +65,7 @@ export type DomainEvents = {
     verdict: string;
     confidence: number;
     /**
-     * 下面三项**缺省表示「不动」，不是「清空」**：同一步会被 close 第二次（补证据那一次
+     * 下面四项**缺省表示「不动」，不是「清空」**：同一步会被 close 第二次（补证据那一次
      * 多半只带 evidence），当成清空的话第一次填好的形态与主体会被静默抹掉。投影用 COALESCE。
      */
     /** 状态型故障的报告主体：应然与实然的一对，成对才有意义（D25）。 */
@@ -73,6 +73,11 @@ export type DomainEvents = {
     actual?: string;
     /** agent 对报告形态的声明。结案那一下由 harness 取当前生效的那条（overview §6.1.1）。 */
     shape?: 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
+    /**
+     * 修复建议：报告四栏里唯一由 agent 生成的那一块（overview §6.1）。
+     * 与上面三项同为 patch 语义，且同样**挂在这一步上**——它是基于这一步的判断给的。
+     */
+    remediation?: string;
     at: number;
   };
   'step.superseded': { stepId: string; by: string };

@@ -4,6 +4,7 @@ import {
   VERDICT_SHAPES,
   type CallNode,
   type CaseBrief,
+  type CaseHit,
   type CaseMeta,
   type ClosingStepKind,
   type InquestryApi,
@@ -11,10 +12,11 @@ import {
   type ShapeSuggestion,
   type Snapshot,
   type StepNode,
+  type TakeoverResult,
   type VerdictShape,
 } from '../shared/ipc.js';
 import { SHAPE_COPY } from '../shared/report.js';
-import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
+import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
 import { trackLayout, type TrackRow } from './track.js';
 import { GateCard } from './GateCard.js';
 import { Intake } from './Intake.js';
@@ -94,6 +96,16 @@ export function App() {
    */
   const [cardDrafts, setCardDrafts] = useState<CardDrafts>({});
   /**
+   * 接管开关上**人最后按的那一下**，回执落地前先认它。
+   *
+   * 按钮的目标值是从快照算的，而快照要等 main 回执才更新：连点两下时第二下算出的目标
+   * 与第一下相同，main 那侧按「已经是这个状态了」幂等早退——最终生效的是第一下，
+   * 正好与人最后按的相反。
+   */
+  const [wanted, setWanted] = useState<boolean | null>(null);
+  /** 只让最后一次意图收尾：早一次的回执回来时清掉的会是还在飞的那一次的显示值。 */
+  const wantSeq = useRef(0);
+  /**
    * **会话正在进行**，不是「开过会话」。ended / crashed 都得能重开——那正是
    * 「接着查」新起一轮的入口；把它们算成 started 的话，跑完或崩掉之后按钮不出现，
    * 输入框却还能发，消息进的是一个已经没人消费的队列。
@@ -101,6 +113,8 @@ export function App() {
   const live = snap.sessionStatus === 'live';
   /** 结案 / 归档之后只能看和导出：开新会话会往一个已下结论的案子里追加步骤。 */
   const frozen = !!snap.case && snap.case.status !== 'open';
+  /** 接管开关按人最后按的那一下画：回执与快照都要一会儿才到，中间那一下不能显示成没按 */
+  const takeover = wanted ?? snap.takeover;
   // ①档永远置顶：闸门到点会自己放行，回填不处理就永远等下去（ui.md §4）
   const todos = useMemo(
     () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
@@ -137,7 +151,12 @@ export function App() {
 
   // 换了案子就把没点完的确认收掉。渲染那侧还会再核一次 caseId：
   // effect 要等这一帧渲染完才跑，中间那一下按钮照样点得到
-  useEffect(() => setConfirm(null), [snap.case?.id]);
+  useEffect(() => {
+    setConfirm(null);
+    // 接管的意图也不跨案子：留着的话新案子的开关会先画上一个案子按下的那一下
+    wantSeq.current += 1;
+    setWanted(null);
+  }, [snap.case?.id]);
 
   // 从快照上消失的待办，草稿也跟着清（自动放行 / 超时 / 被停止散掉都走这儿）
   useEffect(() => {
@@ -222,6 +241,37 @@ export function App() {
    *
    * 缺步时不是报个错就完：那两步的内容只有查过的人给得出来，所以派给 agent 去补。
    */
+  /**
+   * 开 / 关接管。**没切成要说出来**：切了案子之后 main 那边回绝，
+   * 而开关是跟着快照渲染的——不说的话屏幕上什么都没变，看起来像按钮坏了。
+   */
+  const takeCharge = async (on: boolean) => {
+    const mine = ++wantSeq.current;
+    setWanted(on);
+    const r = await window.inquestry
+      .setTakeover(openCase, on)
+      .catch((): TakeoverResult => 'failed');
+    // 后面还有更晚的一下在飞，就把收尾让给它——这一次的结果已经不是人要的那个状态了
+    if (mine !== wantSeq.current) return;
+    setWanted(null);
+    // 几种没切成要说成不同的话，且**要说清这一轮到底在哪一档**：
+    // 都说成"再点一次就行"的话，人会在没有接管的情况下继续查；而把 `unsaved` 说成没切成，
+    // 人再按的那一次正好把已经生效的这一档切回去
+    if (r === 'gone') setNotice('没切成接管模式，这个案子刚切走或已经收尾了。切回去再点一次。');
+    else if (r === 'failed')
+      setNotice(
+        on
+          ? '没接管上：这一轮仍由分类器判。原因在应用日志里。'
+          : '没交回去：这一轮还是除只读与杂务外每次都要你放行。原因在应用日志里。',
+      );
+    else if (r === 'unsaved')
+      setNotice(
+        on
+          ? '接管这一轮生效了，但没存下来：重开 app 会回到分类器判。原因在应用日志里。'
+          : '已交回，但没存下来：重开 app 会回到接管。原因在应用日志里。',
+      );
+  };
+
   const requestClose = async () => {
     const r = await window.inquestry.requestClosing(openCase).catch(() => null);
     if (!r) return setNotice('没问到这个案子的状态，可能它已经切走了。切回去再点一次。');
@@ -334,6 +384,24 @@ export function App() {
             <span className="pill busy" title="子 agent 支线在后台跑，主线不等它">
               支线 {snap.backgroundLanes}
             </span>
+          )}
+          {/* 接管模式（overview §3.5）。**开着时要一直看得见**：它把非放行档的每次调用都挂到
+              闸门上、而那些闸门没有超时兜底——不显示的话，人下次回到屏幕前看到的是一个"卡住不动"的
+              agent，而原因是他自己几天前按下的这个开关。
+              文案要说清"除只读与杂务"：接管是权限入口，说成"每次调用"会让人以为连读文件都过了人，
+              于是拿一个并不存在的保护去对敏感仓库（放行档见 case-runner 的 `allowed`） */}
+          {!frozen && (
+            <button
+              className={`takeover ${takeover ? 'on' : ''}`}
+              title={
+                takeover
+                  ? '除只读与杂务外，每次工具调用都要你放行，且不会自动过去。再点一下交回给分类器'
+                  : '接管：接下来除只读与杂务外，每次工具调用都过闸门，由你放行 / 改写 / 拒绝'
+              }
+              onClick={() => void takeCharge(!takeover)}
+            >
+              {takeover ? '已接管' : '接管'}
+            </button>
           )}
           {/* 收尾三档各是一个动作，不合成一个「结束」（D29）：
               停止随时能接着查、结案要走完两个强制 step、归档是明写的放弃 */}
@@ -507,30 +575,141 @@ export function App() {
  * 切换不中断任何一个：main 持有全部运行时，这里只是换个投影看。
  * 徽标上的「等你 N」是并发排查里唯一能看见后台支线在等人的地方。
  */
+/** ≥3 字走得到索引，快到可以边打边查。 */
+const SEARCH_DEBOUNCE_MS = 120;
+/** <3 字是全表扫（trigram 的结构性下限）：等人停下来再查，别按键盘节奏扫库。 */
+const SEARCH_DEBOUNCE_SHORT_MS = 400;
+
+/** 命中出自哪儿。**别把 `ref_kind` 直接印出来**：那是索引的内部分类，不是给人读的。 */
+const HIT_WHERE: Record<CaseHit['where'], string> = {
+  case: '问题',
+  verdict: '判定',
+  direction: '方向',
+  evidence: '证据',
+  lane: '支线',
+  chat: '对话',
+};
+
+/**
+ * 案件切换栏（D28 / ui.md §8.3）+ 跨 case 检索。
+ *
+ * 检索**换掉的是这一排 chip，不是另开一个面板**：找旧案子的下一步动作就是切过去，
+ * 而切过去的入口本来就在这儿。另开面板等于让人在两个长得一样的列表之间挑一个。
+ */
 function CaseBar({ cases }: { cases: CaseBrief[] }) {
-  if (!cases.length) return null;
+  const [term, setTerm] = useState('');
+  /**
+   * 上一次查完的结果，**连它是哪个词查的一起记**。只存命中的话，输入框换成新词之后
+   * 到下一次结果回来之间（短词那档 400ms 起）屏上还是上个词的命中，而那些 chip 点得下去
+   * ——人会照着一个跟当前输入毫无关系的列表切走。
+   *
+   * `hits: null` 是**查砸了**，与"查完了、零命中"是两回事：库坏了、FTS 语法不成立、
+   * IPC 断了都会落到这里，一律说成"没有命中"的话，人拿到的是"历史里确实没有这个案子"这个错结论。
+   */
+  const [found, setFound] = useState<{ term: string; hits: CaseHit[] | null } | null>(null);
+  /**
+   * 只认最后一次查询的结果。打字快的时候几次 invoke 会并发在飞，
+   * **回来的顺序不保证**——不认的话，一个更早、更宽的结果会盖掉刚打完那个词的结果，
+   * 而屏幕上看起来只是"搜出来的东西不对"。
+   */
+  const seq = useRef(0);
+
+  useEffect(() => {
+    const t = term.trim();
+    if (!t) {
+      // 序号也要往前推：清空之后，还在飞的那一次回来时不能再往屏上写
+      seq.current += 1;
+      setFound(null);
+      return;
+    }
+    const mine = ++seq.current;
+    /**
+     * 打一个字查一次全库；等一下再查，键入中途那几次就不必发。
+     *
+     * 🔴 **短词要多等一会儿。** <3 字走不到 trigram 索引（那是 trigram 的结构性下限，
+     * 不是我们的写法问题），一次**没有命中**的短词查询是实打实的全表扫，且随库线性增长
+     * （实测 5 万行 5ms · 20 万行 22ms · 50 万行 56ms，见 data-model §5）。而它跑在
+     * main 的同步 better-sqlite3 上——按每个键都发的话，越往后打字越顿。
+     *
+     * 长一点的等待把它从"边打边扫"变成"停下来扫一次"：**代价与打字速度脱钩**，
+     * 只与"你真的想搜这个词"的次数有关。有命中的短词反而不受影响（LIMIT 提前收，恒 ~1ms）。
+     */
+    const timer = setTimeout(() => {
+      void window.inquestry
+        .searchCases(t)
+        .then((r) => seq.current === mine && setFound({ term: t, hits: r }))
+        .catch((e: unknown) => {
+          // 界面只说得出"没搜成"，原因得留在控制台里，否则这条路径两头都没有线索
+          console.error('searchCases failed', e);
+          if (seq.current === mine) setFound({ term: t, hits: null });
+        });
+    }, t.length >= 3 ? SEARCH_DEBOUNCE_MS : SEARCH_DEBOUNCE_SHORT_MS);
+    return () => clearTimeout(timer);
+  }, [term]);
+
+  // 切过去就是这次检索的终点：留着搜索词的话，切换栏会继续显示结果列表，
+  // 而人此刻要看的是手上这个案子在最近列表里的位置
+  const go = (id: string) => {
+    setTerm('');
+    void window.inquestry.switchCase(id);
+  };
+
+  // 只认与当前输入同一个词的那份结果：对不上就退回最近列表，等这一轮查完再换
+  const t = term.trim();
+  const fresh = found?.term === t ? found : null;
+  const hits = fresh?.hits ?? null;
+  // 命中是一次性查出来的，而「等你 N」「跑动中」每 60ms 会变——**每帧按最新快照兑一次**，
+  // 否则人停在检索结果上时，新冒出来的待办一条都不会显示（正是 D28 要防的）
+  const list: CaseBrief[] = hits ? freshenHits(hits, cases) : cases;
+  if (!cases.length && !term) return null;
   return (
     <nav className="casebar">
-      {cases.map((c) => (
-        <button
-          key={c.id}
-          className={`chip ${c.status} ${c.current ? 'on' : ''}`}
-          title={c.title}
-          onClick={() => !c.current && void window.inquestry.switchCase(c.id)}
-        >
-          <span className="t">{c.title}</span>
-          {c.todos > 0 ? (
-            <span className="b todo">等你 {c.todos}</span>
-          ) : c.running ? (
-            <span className="b run">跑动中</span>
-          ) : (
-            <span className="b idle">{caseStateLabel(c)}</span>
-          )}
-        </button>
-      ))}
-      <button className="chip new" onClick={() => void window.inquestry.newCase()}>
-        ＋ 新案件
-      </button>
+      <input
+        className="casesearch"
+        value={term}
+        placeholder="搜旧案子"
+        onChange={(e) => setTerm(e.target.value)}
+        onKeyDown={(e) => e.key === 'Escape' && setTerm('')}
+      />
+      <div className="chips">
+        {t && !fresh && <span className="nohit">搜「{t}」…</span>}
+        {fresh && !fresh.hits && <span className="nohit">「{t}」没搜成，换个词再试一次</span>}
+        {hits?.length === 0 && <span className="nohit">没有命中「{t}」</span>}
+        {list.map((c) => {
+          const hit = hits ? (c as CaseHit) : null;
+          return (
+            <button
+              key={c.id}
+              className={`chip ${c.status} ${c.current ? 'on' : ''}`}
+              // 命中的原文进 title：chip 上只放得下标题，而"为什么它被搜出来"才是要看的
+              title={hit ? `${HIT_WHERE[hit.where]}：${hit.snippet}` : c.title}
+              onClick={() => !(c.current && !hit) && go(c.id)}
+            >
+              <span className="t">{c.title}</span>
+              {hit ? (
+                <span className="b hit">
+                  {HIT_WHERE[hit.where]}
+                  {hit.hits > 1 ? ` ${hit.hits}` : ''}
+                </span>
+              ) : c.todos > 0 ? (
+                <span className="b todo">等你 {c.todos}</span>
+              ) : c.running ? (
+                <span className="b run">跑动中</span>
+              ) : (
+                <span className="b idle">{caseStateLabel(c)}</span>
+              )}
+              {/* 检索结果里的待办徽标不能少：一个正等着人的案子被搜出来时，
+                  只显示"命中在判定里"会把它说成一个静止的旧案子 */}
+              {hit && c.todos > 0 && <span className="b todo">等你 {c.todos}</span>}
+            </button>
+          );
+        })}
+        {!hits && (
+          <button className="chip new" onClick={() => void window.inquestry.newCase()}>
+            ＋ 新案件
+          </button>
+        )}
+      </div>
     </nav>
   );
 }

@@ -7,6 +7,9 @@ import { isPlainKey, isTyping } from './keys.js';
  *
  * 与①档的分别全在「不处理会怎样」：这一档到点自动放行，所以有倒计时环、用描边而不是实心标头、
  * 不抢焦点。三个手势里**拒绝必须留话**——不留话 agent 只知道被挡了，不知道该换什么。
+ *
+ * **接管模式下它没有倒计时**（overview §3.5）：那时人刚说了每一条自己判，
+ * 到点替他放行等于把这句话作废。少了倒计时这张卡就与①档同形，所以那句"等你处置"要写出来。
  */
 export function GateCard({
   gate,
@@ -30,7 +33,8 @@ export function GateCard({
   /** 键不在 = 拒绝那栏还没展开。展开与留话内容是一回事，不必再多一个 boolean。 */
   const note = draft.note ?? null;
   const setNote = (v: string | null) => onDraft({ note: v ?? undefined });
-  const [left, setLeft] = useState(() => Math.max(0, gate.deadline - Date.now()));
+  /** 接管模式下没有 deadline：那一档等到有人处置为止，界面上也就不该有倒计时。 */
+  const [left, setLeft] = useState(() => (gate.deadline ? Math.max(0, gate.deadline - Date.now()) : 0));
   const box = useRef<HTMLElement>(null);
   const params = useRef<HTMLTextAreaElement>(null);
   const message = useRef<HTMLTextAreaElement>(null);
@@ -46,7 +50,9 @@ export function GateCard({
   const deny = () => note?.trim() && onDecide({ id: gate.id, action: 'deny', message: note.trim() });
 
   useEffect(() => {
-    const t = setInterval(() => setLeft(Math.max(0, gate.deadline - Date.now())), 500);
+    const at = gate.deadline;
+    if (!at) return;
+    const t = setInterval(() => setLeft(Math.max(0, at - Date.now())), 500);
     return () => clearInterval(t);
   }, [gate.deadline]);
 
@@ -73,7 +79,7 @@ export function GateCard({
     // 有意每次渲染都重挂：`A` 要放行的是**此刻**输入框里的参数，冻住闭包就会放行旧值
   });
 
-  const total = Math.max(1, gate.deadline - gate.askedAt);
+  const total = Math.max(1, (gate.deadline ?? gate.askedAt) - gate.askedAt);
   return (
     <section className={`gate ${focused ? 'focus' : ''}`} ref={box}>
       <div className="head">
@@ -81,10 +87,15 @@ export function GateCard({
         <span className="tool">{gate.toolName}</span>
         {gate.agentId && <span className="agent">子 agent {gate.agentId.slice(0, 8)}</span>}
         {changed && <span className="changed">参数已改</span>}
-        <span className="clock">
-          <Ring left={left} total={total} />
-          {fmt(left)} 后自动放行
-        </span>
+        {/* 没有倒计时不等于"忘了说"：这一档在等人，得写出来——留白读起来像它随时会自己过去 */}
+        {gate.deadline ? (
+          <span className="clock">
+            <Ring left={left} total={total} />
+            {fmt(left)} 后自动放行
+          </span>
+        ) : (
+          <span className="clock held">等你处置，不会自己放行</span>
+        )}
       </div>
 
       {gate.reason && <p className="why">{gate.reason}</p>}

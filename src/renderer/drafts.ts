@@ -1,4 +1,4 @@
-import type { ShapeSuggestion } from '../shared/ipc.js';
+import type { CaseBrief, CaseHit, ShapeSuggestion } from '../shared/ipc.js';
 
 /**
  * 结案确认条上「状态型的主体填不填得出来」该信哪一份。
@@ -49,4 +49,35 @@ export function pruneDrafts(drafts: CardDrafts, caseId: string, aliveIds: Iterab
   const next = { ...drafts };
   for (const k of dead) delete next[k];
   return next;
+}
+
+/**
+ * 把检索命中上的**运行时那一半**换成最新快照里的那一份。
+ *
+ * 命中是一次性查出来的（人打完字那一刻），而「等你 N」「跑动中」「当前」每 60ms 会变。
+ * 不换的话，人停在检索结果上的这段时间里，**新冒出来的待办一条都不会显示**——
+ * 而跨 case 汇总存在的全部理由就是别让那条支线静静挂死（D28）。
+ *
+ * 🔴 **不在 `cases` 里的按"静的"算，不是保留命中里那份旧值。** 这不是猜：
+ * 切换栏那份列表把「当前的 / 还跑着的 / 挂着待办的」全部钉住（`CaseRegistry.pinnedIds`），
+ * 所以一个案子**不在里面** ⟺ 它三样都不是。留着旧值的话，一条刚被处理掉的待办
+ * 会在检索结果上一直挂着「等你 3」。
+ *
+ * `loaded` 同理归零：它只影响"已停 / 未打开"那句话，而没被钉住的案子本就不该显示成在跑。
+ */
+export function freshenHits(hits: CaseHit[], cases: CaseBrief[]): CaseHit[] {
+  const live = new Map(cases.map((c) => [c.id, c]));
+  return hits.map((h) => {
+    const now = live.get(h.id);
+    return {
+      ...h,
+      todos: now?.todos ?? 0,
+      running: now?.running ?? false,
+      current: now?.current ?? false,
+      loaded: now?.loaded ?? false,
+      // 状态是库里的事实，不随快照抖动；标题同理。命中那三项（hits/snippet/where）
+      // 说的是"这次检索为什么找到它"，更不该被覆盖
+      status: now?.status ?? h.status,
+    };
+  });
 }

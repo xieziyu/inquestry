@@ -18,6 +18,7 @@ const api: InquestryApi = {
   newCase: () => ipcRenderer.invoke('case:new'),
   start: (caseId: string, question?: string) => ipcRenderer.invoke('case:start', caseId, question),
   restart: (caseId: string) => ipcRenderer.invoke('case:restart', caseId),
+  setTakeover: (caseId: string, on: boolean) => ipcRenderer.invoke('case:takeover', caseId, on),
   send: (caseId: string, text: string) => ipcRenderer.invoke('case:send', caseId, text),
   interrupt: (caseId: string) => ipcRenderer.invoke('case:interrupt', caseId),
   stopLane: (caseId: string, lane: string) => ipcRenderer.invoke('case:stopLane', caseId, lane),
@@ -30,6 +31,7 @@ const api: InquestryApi = {
   exportMarkdown: (caseId: string) => ipcRenderer.invoke('case:exportMarkdown', caseId),
   exportImage: (caseId: string) => ipcRenderer.invoke('case:exportImage', caseId),
   exportPayload: (token: string) => ipcRenderer.invoke('export:payload', token),
+  searchCases: (term: string) => ipcRenderer.invoke('case:search', term),
   snapshot: () => ipcRenderer.invoke('case:snapshot'),
   excerpt: (callId: string, anchor: string | null) => ipcRenderer.invoke('case:excerpt', callId, anchor),
   onSnapshot: (cb: (s: Snapshot) => void) => {

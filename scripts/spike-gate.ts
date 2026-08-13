@@ -19,8 +19,8 @@ import path from 'node:path';
 import { readBlobText } from '../src/backend/db/blobs.js';
 import { blobDir, openDatabase } from '../src/backend/db/database.js';
 import { rebuildProjections } from '../src/backend/db/projector.js';
-import type { GateOutcome } from '../src/backend/store/sqlite-store.js';
-import { CaseRunner } from '../src/main/case-runner.js';
+import { setCaseStatus, type GateOutcome } from '../src/backend/store/sqlite-store.js';
+import { applyTakeover, CaseRunner } from '../src/main/case-runner.js';
 
 /** 闸门那几个方法是 CaseRunner 的私有面：这里要验的正是它们，只好从旁边够进去。 */
 type Probe = {
@@ -30,10 +30,17 @@ type Probe = {
     input: Record<string, unknown>,
     opts: { toolUseID: string; agentID?: string; signal: AbortSignal; title?: string },
   ): Promise<GateOutcome>;
-  onToolStart(input: unknown, toolUseID: string): void;
+  onToolStart(input: unknown, toolUseID: string): unknown;
   onToolFailed(input: unknown, toolUseID: string): void;
   onPermissionDenied(input: unknown, toolUseID: string): void;
-  gates: Map<string, { finish: (o: GateOutcome) => void; abandon: (why: string) => void }>;
+  gates: Map<
+    string,
+    { ask: { deadline?: number }; finish: (o: GateOutcome) => void; abandon: (why: string) => void }
+  >;
+  /** 接管模式要同时切 backend 那侧，验它得有个假查询接住 `setPermissionMode`。 */
+  q: unknown;
+  /** 建会话与运行时切换共用的那一个读数。 */
+  readonly permissionMode: string;
 };
 
 type Row = {
@@ -220,6 +227,201 @@ async function main() {
     rh?.status === 'abandoned' && rh.gate_decision === 'auto',
     `status=${rh?.status} gate=${rh?.gate_decision} blob 内容=${blob(rh)?.slice(0, 24)}`,
   );
+
+  // ── ⑦ 接管模式：闸门唯一的入口（overview §3.5 / ui.md §12 头条） ────────
+  //
+  // 分类器按后果判之后，②档卡片在默认路上不再出现——闸门那套机器还在，却没有任何
+  // 界面动作触发得了它。这一段验的就是那个开关：**两侧一起切，缺一不可**。
+  // 只改我们自己的 PreToolUse 而不切 backend 的 permissionMode，失败方式是
+  // "开关翻过去了、调用照旧不到闸门上来"，屏幕上什么都看不出。
+  const modes: string[] = [];
+  probe.q = { setPermissionMode: (m: string) => (modes.push(m), Promise.resolve()) };
+
+  check(
+    '默认不接管：PreToolUse 对普通工具不表态（回空，不是 allow）',
+    JSON.stringify(probe.onToolStart({ tool_name: 'Bash', tool_input: { command: 'ls' } }, 'call_t0')) === '{}' &&
+      probe.permissionMode === 'auto',
+    `返回=${JSON.stringify(probe.onToolStart({ tool_name: 'Bash', tool_input: {} }, 'call_t0b'))} · mode=${probe.permissionMode}`,
+  );
+
+  const on = await runner.setTakeover(true);
+  const askDecision = (out: unknown) =>
+    (out as { hookSpecificOutput?: { permissionDecision?: string } } | undefined)?.hookSpecificOutput
+      ?.permissionDecision;
+  check(
+    '接管开着：非放行档的调用被推到 canUseTool 上（PreToolUse 回 ask）',
+    on && askDecision(probe.onToolStart({ tool_name: 'Bash', tool_input: { command: 'rm -rf x' } }, 'call_t1')) === 'ask',
+    `回执=${on} · decision=${askDecision(probe.onToolStart({ tool_name: 'Bash', tool_input: {} }, 'call_t1b'))}`,
+  );
+  check(
+    '两侧一起切：backend 的 permissionMode 也从 auto 回到 default',
+    modes.at(-1) === 'default' && probe.permissionMode === 'default',
+    `切过的模式=${modes.join(',')} · 当前=${probe.permissionMode}（只切我们这侧的话，分类器仍在判，多数调用压根到不了闸门）`,
+  );
+  check(
+    '放行档照旧不表态：记事本与工具检索不该变成卡片',
+    ['TodoWrite', 'ToolSearch'].every(
+      (t) => JSON.stringify(probe.onToolStart({ tool_name: t, tool_input: {} }, `call_t_${t}`)) === '{}',
+    ),
+    '接管要的是"敏感动作过人"，不是把每一次调用都堆成待办',
+  );
+  // 只读三件套只在**真项目**下才在放行档里（演示模式挂的是玩具数据源），
+  // 所以这条得另起一个带项目起点的 runner——拿演示模式那个验，验到的是"它本来就没给 Read"
+  const realRunner = new CaseRunner({
+    db,
+    blobDir: blobs,
+    promptText: '',
+    caseId: 'case_gate_real',
+    intake: {
+      title: '真项目下的接管',
+      question: '真项目下的接管',
+      projectRoot: '/tmp',
+      incidentDate: '2026-08-09',
+      tzOffset: '+08:00',
+      clues: null,
+    },
+    agent: { backend: 'claude', model: null, effort: null },
+    onChange: () => {},
+  });
+  const realProbe = realRunner as unknown as Probe;
+  realProbe.openSession();
+  await realRunner.setTakeover(true);
+  check(
+    '真项目下接管时，只读三件套照旧直接放行',
+    ['Read', 'Grep', 'Glob'].every(
+      (t) => JSON.stringify(realProbe.onToolStart({ tool_name: t, tool_input: {} }, `call_r_${t}`)) === '{}',
+    ) &&
+      askDecision(realProbe.onToolStart({ tool_name: 'Bash', tool_input: { command: 'rm -rf x' } }, 'call_r_bash')) ===
+        'ask',
+    '读代码是排查的地基：把它也堆成卡片的话，接管模式一开就没法用了',
+  );
+  realRunner.close();
+
+  // 接管那一档**没有超时兜底**（ui.md §12 那条"闸门只有三分钟一档"）：
+  // 人刚说了每一条自己判，三分钟后替他放行等于把这句话作废，而那时挂着的多半是敏感写
+  const t1 = ask('call_t2', 'drop table');
+  started('call_t2', 'drop table');
+  check(
+    '接管模式挂上来的闸门没有 deadline（不会自己过去）',
+    probe.gates.get('call_t2')?.ask.deadline === undefined && probe.gates.get('call_d') === undefined,
+    `deadline=${probe.gates.get('call_t2')?.ask.deadline}`,
+  );
+  // 中途关掉开关，不该让一条正等着人的调用突然长出一个倒计时，也不该把它就地放行——
+  // 关接管不等于"刚才那条就放行吧"，人正要按拒绝的那条不能因为切了个开关自己过去
+  await runner.setTakeover(false);
+  check(
+    '关掉接管：已经挂着的那条既不放行也不长出倒计时',
+    probe.gates.has('call_t2') && probe.gates.get('call_t2')?.ask.deadline === undefined,
+    `还挂着=${probe.gates.has('call_t2')} · deadline=${probe.gates.get('call_t2')?.ask.deadline}`,
+  );
+  check(
+    '关掉之后 backend 那侧也切回 auto',
+    modes.at(-1) === 'auto' && probe.permissionMode === 'auto',
+    `切过的模式=${modes.join(',')}`,
+  );
+  runner.decideGate({ id: 'call_t2', action: 'deny', message: '这条会写库。' });
+  await t1;
+  check(
+    '关掉接管之后，人对那条挂着的处置照旧落得下去',
+    row('call_t2')?.gate_decision === 'deny' && row('call_t2')?.status === 'denied',
+    `gate=${row('call_t2')?.gate_decision} status=${row('call_t2')?.status}`,
+  );
+  // 非接管模式挂上来的那一档照旧有 deadline——这两档的分别全在"不处理会怎样"
+  const t3 = ask('call_t3', 'select 9');
+  started('call_t3', 'select 9');
+  check(
+    '不接管时闸门照旧有 deadline（到点按预设放行）',
+    typeof probe.gates.get('call_t3')?.ask.deadline === 'number',
+    `deadline=${probe.gates.get('call_t3')?.ask.deadline}`,
+  );
+  probe.gates.get('call_t3')?.finish({ decision: 'timeout' });
+  await t3;
+  const snapBefore = runner.snapshot().takeover;
+  await runner.setTakeover(true);
+  check(
+    '接管状态进快照：它把每次调用都挂到闸门上，界面必须一眼看得见',
+    snapBefore === false && runner.snapshot().takeover === true,
+    `切之前=${snapBefore} 切之后=${runner.snapshot().takeover}`,
+  );
+  // 🔴 **切不动就不该报成功。** fire-and-forget 出去、当场把开关翻过去的话，
+  // 屏幕上写着「已接管」而分类器仍在判——这个开关唯一要防的就是这种"说了谎的状态"
+  probe.q = { setPermissionMode: () => Promise.reject(new Error('控制请求失败')) };
+  const failed = await runner.setTakeover(false);
+  check(
+    'backend 那侧切不动时回 failed，且自己这边的状态一动不动',
+    failed === 'failed' && runner.snapshot().takeover === true,
+    `回执=${failed} · takeover=${runner.snapshot().takeover}（报成功的话，界面会显示一个从没生效过的开关）`,
+  );
+  // 🔴 **两种没切成要分得开。** 都回同一个值的话，界面只能说一句"案子可能切走了"——
+  // 而 backend 切不动时案子明明还在手上，人照着那句切回来再按一次，
+  // 然后在没有接管的情况下继续查下去
+  setCaseStatus(db, { caseId: 'case_gate_real', blobDir: blobs, now: () => Date.now() }, 'closed');
+  const gone = await realRunner.setTakeover(true);
+  check(
+    '状态冲突（案子已收尾）与 backend 切不动是两种回执，不是同一个 false',
+    gone === 'gone' && failed === 'failed',
+    `已收尾=${gone} · 切不动=${failed}（同一个值的话，界面对后者只说得出"再点一次"）`,
+  );
+  // 两次快速点击并发发出去时，控制请求的回执顺序不保证：后发的先回，最终生效的会是先按的那一下
+  const order: string[] = [];
+  probe.q = {
+    setPermissionMode: (m: string) => {
+      order.push(`start:${m}`);
+      return new Promise<void>((res) =>
+        setTimeout(() => {
+          order.push(`done:${m}`);
+          res();
+        }, m === 'auto' ? 30 : 5),
+      );
+    },
+  };
+  const [r1, r2] = await Promise.all([runner.setTakeover(false), runner.setTakeover(true)]);
+  check(
+    '连续切换串行化：后一次等前一次落定，最终状态与最后按下的那一次一致',
+    order.join(',') === 'start:auto,done:auto,start:default,done:default' &&
+      r1 === 'ok' &&
+      r2 === 'ok' &&
+      runner.snapshot().takeover === true,
+    `顺序=${order.join(',')} · 回执=${r1}/${r2} · takeover=${runner.snapshot().takeover}`,
+  );
+  // 落库那一步失败：SDK 与 runner 已经在新模式上，而 case_ui_state 还是旧值。
+  // 🔴 不回滚的话屏幕上写着「已接管」、这一轮确实过闸门，重开 app 它自己就没了——
+  // 比切不动更隐蔽，因为切不动当场就说了
+  probe.q = { setPermissionMode: () => Promise.resolve() };
+  const boom = () => {
+    throw new Error('database or disk is full');
+  };
+  const rolledBack = await applyTakeover(runner, 'case_gate', true, boom);
+  check(
+    '落库失败且回滚成功：当作没切成，会话切回旧模式',
+    rolledBack === 'failed' && runner.snapshot().takeover === false,
+    `回执=${rolledBack} · takeover=${runner.snapshot().takeover}（不回滚的话，这是一个重开 app 就消失的「已接管」）`,
+  );
+  // 回滚也失败：会话确实在新模式上，只是活不过重启。说成 failed 的话人会再按一次，
+  // 而那一次正好把已经生效的这一档切回去
+  let calls = 0;
+  probe.q = {
+    setPermissionMode: () => (++calls === 1 ? Promise.resolve() : Promise.reject(new Error('控制请求失败'))),
+  };
+  const unsaved = await applyTakeover(runner, 'case_gate', true, boom);
+  check(
+    '落库失败且回滚也失败：回 unsaved，不冒充没切成',
+    unsaved === 'unsaved' && runner.snapshot().takeover === true,
+    `回执=${unsaved} · takeover=${runner.snapshot().takeover}（说成 failed 的话，人再按一次正好把生效了的这一档关掉）`,
+  );
+  // 落得下库时照旧回 ok，且只切一次——回滚那条路不该在正常路径上跑
+  calls = 0;
+  probe.q = { setPermissionMode: () => (++calls, Promise.resolve()) };
+  let persisted = 0;
+  const okr = await applyTakeover(runner, 'case_gate', false, () => void persisted++);
+  check(
+    '落得下库时回 ok，落库只做一次、不多切一次模式',
+    okr === 'ok' && persisted === 1 && calls === 1 && runner.snapshot().takeover === false,
+    `回执=${okr} · 落库=${persisted} 次 · 切模式=${calls} 次`,
+  );
+
+  probe.q = null;
+  await runner.setTakeover(false);
 
   // 判决落在哪条事件上取决于到达顺序（反序那次是 started 直接带走的），
   // 所以不数 gated 的条数，只问重放后是不是同一批判决——events 是不是真相看这一条

@@ -74,6 +74,15 @@ export const closeStepShape = {
     .optional()
     .describe('**本该是什么**。状态型故障（shape=state）的报告主体就是这一对，与 actual 成对填。'),
   actual: z.string().optional().describe('**实际是什么**。与 expected 成对填。'),
+  remediation: z
+    .string()
+    .optional()
+    .describe(
+      '**该怎么修**——最终报告四栏里唯一由你生成的那一块，不填报告里就写「无」。' +
+        '在给出根因的那一步填；没查出根因就在汇总遗留疑点那一步填「下一步该怎么查、先加哪些观测」。' +
+        '写得可执行：改哪个配置 / 加哪个索引 / 谁来做，别写「建议加强监控」这种落不了地的话。' +
+        '**这一步的结论被后来的 step 推翻时，这条建议跟着失效**——所以要挂在给出判断的那一步上。',
+    ),
   evidence: z
     .array(z.object(evidenceItemShape))
     .describe('结论所依据的证据。status 非 inconclusive 时必须至少一条，否则这个结论无法被复核。'),
