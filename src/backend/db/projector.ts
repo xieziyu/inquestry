@@ -51,7 +51,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
         p.at,
       );
       // 立案单进检索：找旧案子的心智是"上次那个从库延迟的"，而人记得的多半是自己写的问题，
-      // 不是 agent 后来下的判定。**只在这里进一次**——标题就是问题的前 40 字（ui.md §12），
+      // 不是 agent 后来下的判定。**只在这里进一次**——标题就是问题的前 40 字，
       // 两条都索引等于同一段文字在 trigram 表里躺两份，命中一次翻出两条
       insertNarrative(db, deps.caseId, p.caseId, 'case', p.question || p.title);
       return;
@@ -129,7 +129,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       // **只收还开着的那一步**，这条事件因此是幂等的：同一条应用两次不改口。
       // 照写的话，收口时刻会被后一次往后挪，轨道上一条早就结束的支线显示成刚刚才停。
       // 发事件那侧也各自挡了一道（桥只收一次尾、三个发送口都只挑开着的步），
-      // **两道闸各管一段**：那一侧管"别发第二条"，这一侧管"发了也不听"（§9.16）
+      // **两道闸各管一段**：那一侧管"别发第二条"，这一侧管"发了也不听"（ui.md §3.2）
       const converged = db
         .prepare(`UPDATE steps SET status='converged', verdict_text=?, t_end=? WHERE id=? AND status='open'`)
         .run(p.summary, p.at, p.stepId);

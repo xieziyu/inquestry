@@ -1,8 +1,8 @@
 /**
- * Spike Tools —— 让真 agent 排查一个玩具事故，验**遵从性**（overview §9.2）。
+ * Spike Tools —— 让真 agent 排查一个玩具事故，验**遵从性**（tools.md）。
  *
  * 前两个 spike 验的是「能不能做到」，这个验的是「这套设计到底成不成立」：
- * overview §8.2 把「agent 填 direction 敷衍」列为头号风险，只有真跑一次才能证伪。
+ * 「agent 填 direction 敷衍」一度是头号风险，只有真跑一次才能证伪（tools.md §4）。
  *
  * 观测：
  *   1. 是否每个方向都先 open_step，且 direction 是可证伪命题（不是「我要进一步分析」）

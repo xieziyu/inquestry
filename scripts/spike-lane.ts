@@ -1,5 +1,8 @@
 /**
- * Spike A2 —— 子 agent 泳道（overview §9.0 的 A2 · §3.4 · §4.5）。
+ * Spike A2 —— 子 agent 泳道（overview §3.4 · §4.5）。
+ *
+ * **这个文件就是那两块地基的实测结论**：下面每一条 check 的标题即断言，
+ * 设计文档不另存一份表（存了就会实现改了而表还写着旧的）。
  *
  * 轨道那一侧早就备好了：`steps.lane` 有列、有索引、UI 有 `.lane.branch`——但没有人往里写，
  * 因为分叉的真实数据来源一直没验过。这个 spike 只回答两个问题：
@@ -73,7 +76,7 @@ type Recorder = {
     agentId: string;
     agentType?: string;
     transcript?: string;
-    /** 支线最后说的那句话。收口那一步写的就是它（§9.16），拿不到才退回通知里的摘要。 */
+    /** 支线最后说的那句话。收口那一步写的就是它（ui.md §3.2），拿不到才退回通知里的摘要。 */
     lastMessage?: string;
     at: number;
   }[];
@@ -138,7 +141,7 @@ type StreamMsg = {
   task_id?: string;
   tool_use_id?: string;
   tool_use_result?: unknown;
-  /** 支线跑完时通知自带的摘要——没有 SubagentStop 时收口写的就是它（§9.16）。 */
+  /** 支线跑完时通知自带的摘要——没有 SubagentStop 时收口写的就是它（ui.md §3.2）。 */
   summary?: string;
   status?: string;
   tasks?: unknown[];
@@ -699,7 +702,7 @@ async function runAsync() {
         `Agent 调用的 tool_use_id=${gammaTaskId}`,
     ],
     [
-      // 收口那一步写的就是这两样（§9.16）。**没有它们，收口只能由 harness 编一句判定**——
+      // 收口那一步写的就是这两样（ui.md §3.2）。**没有它们，收口只能由 harness 编一句判定**——
       // 而报告里会因此多出一条没有人下过的结论。两样都要，因为被人停掉的那条不发 SubagentStop
       '20. 收口拿得到支线自己的话：SubagentStop 的最后一句 + 通知自带的摘要',
       Boolean(rec.subagentStop.find((s) => s.agentId === payload.agentId)?.lastMessage?.trim()) &&

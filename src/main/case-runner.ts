@@ -54,7 +54,7 @@ const GATE_TIMEOUT_MS = 3 * 60 * 1000;
 
 /**
  * 下面三组是**直接放行**的那一档：账本自己、只读三件套、agent 自理的杂务。
- * 其余一切交给 backend 的分类器按后果判（`permissionMode: 'auto'`，实测见 overview 附录 A.2）。
+ * 其余一切交给 backend 的分类器按后果判（`permissionMode: 'auto'`，实测见 `scripts/spike-automode.ts`）。
  *
  * 这里一度还有第四组"一律不给"（Bash 与写盘那几个，配套 `disallowedTools`）。
  * 它挡住的不只是危险动作，还有**本机那些只读的查询 CLI**——而排查恰恰全靠它们，
@@ -185,7 +185,7 @@ export class CaseRunner {
    * - **我们自己的 PreToolUse** 回 `ask`，把调用推到 `canUseTool` 上去。这是闸门唯一的入口
    *   （实测：`canUseTool` 只在 backend 觉得要问时才到，PreToolUse 才是每次都到的那个）
    * - **backend 的 permissionMode** 从 `auto` 切回 `default`。不切的话分类器仍在判，
-   *   而它只有放行与拒绝两种输出、从不推给人（附录 A.2）——那正是接管要绕开的东西
+   *   而实测至今没见它把任何一次调用推给人（`spike:automode`）——那正是接管要绕开的东西
    *
    * 已经挂在闸门上的那些**不动**：关掉接管不等于"刚才那条就放行吧"，
    * 人正要按拒绝的那一条不该因为切了个开关就自己过去。
@@ -372,7 +372,7 @@ export class CaseRunner {
         // （实测 SessionStart 在第一次工具调用之前就跑了），项目 `.mcp.json` 同理直接拉起进程。
         // 两者都绕过 PreToolUse / canUseTool / disallowedTools——三分法只管得住 agent
         // 自己发出的调用。真正的信任边界是「立案时选的那个目录」，等价于在那儿直接跑 claude。
-        // 尚未缓解，见 ui.md §12。
+        // 已决定接受该风险（overview §8 风险表最后一行）。
         settingSources: this.demoMode ? [] : ['user', 'project', 'local'],
         // 项目起点决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
         cwd: this.intake.projectRoot ?? undefined,
@@ -381,7 +381,7 @@ export class CaseRunner {
         systemPrompt: { type: 'preset', preset: 'claude_code', append: this.init.promptText },
         includeHookEvents: true,
         /**
-         * 判定交给 backend 的分类器（附录 A.2 实测：删构建产物不惊动人，碰凭据当场拒）。
+         * 判定交给 backend 的分类器（该拦不该拦以 `spike:automode` 的实跑为准）。
          *
          * ⚠️ **它只有放行与拒绝两种输出，从不推给人**——②档卡片在这条路上不会出现，
          * 被拒的调用是事后在轨道上看见的。要"人当场放行"就得回到自己判（§3.5 接管模式）。
@@ -389,7 +389,7 @@ export class CaseRunner {
          * ⚠️ **别传 `allowedTools`**：裸工具名会在权限流之前整体放行，分类器与 `canUseTool`
          * 都不会被问到（SDK 自己会警告 `CAN_USE_TOOL_SHADOWED`）——A.2 头一轮就栽在这上面。
          */
-        // 接管模式下切回 `default`：分类器只有放行与拒绝两种输出、从不推给人（附录 A.2），
+        // 接管模式下切回 `default`：分类器不会把调用推给人（`spike:automode`），
         // 留着它判的话，人明明按了「接管」，多数调用照旧不会到闸门上来
         permissionMode: this.permissionMode,
         mcpServers: {
@@ -589,7 +589,7 @@ export class CaseRunner {
   }
 
   /**
-   * 一条支线跑完了：收口它那一步，并在对话带上说一声（§9.16）。
+   * 一条支线跑完了：收口它那一步，并在对话带上说一声（ui.md §3.2）。
    *
    * **收口的内容是支线自己的话**（`SubagentStop` 的最后一句，退回通知里的摘要）。
    * harness 不替它下判定——那一步没有命题，`confirmed` / `refuted` 都无从谈起，
@@ -798,7 +798,7 @@ export class CaseRunner {
       const abandon = (why: string) =>
         settle({ decision: 'deny', message: why }, () => this.abandonCall(id, why));
       /**
-       * **接管模式下不设超时**（overview §3.5 / ui.md §12 那条"闸门只有三分钟一档"）。
+       * **接管模式下不设超时**（overview §3.5 / ui.md §4 的 ②′）。
        *
        * 到点按预设放行的前提是"人不在时排查不该停"，而接管模式里人刚刚明说了
        * 每一条自己判——三分钟后替他放行，等于把那句话作废，且挂在闸门上的多半正是敏感写。
@@ -926,7 +926,7 @@ export class CaseRunner {
    *
    * 每次调用都到（`canUseTool` 不是——backend 觉得不用问就不问），所以账只能记在这一侧。
    * 它一度还是闸门的入口：回 `ask` 把工具推到 `canUseTool` 上去。**现在不推了**——
-   * 该不该拦由 backend 的分类器判（§3.5 / 附录 A.2），这里只回空。
+   * 该不该拦由 backend 的分类器判（§3.5 / `spike:automode`），这里只回空。
    *
    * 回空而不是回 `allow`：明写 allow 会盖掉项目自己 settings 里的 deny 规则（比如不许读 .env），
    * 也会盖掉分类器的判断。这里要的是别多管，不是抢权。

@@ -16,7 +16,7 @@
 
 ## 1. 能力对照
 
-Claude 侧为 2026-08-10 在 CLI `2.1.220` / SDK `0.3.226` 上的实测（见 overview 附录 A）。codex 侧标注来源：**〔实测〕**= duetlens 在 codex `0.144.x` 上字节级验证过；**〔推断〕**= 由协议形态推导，接入前需核实。
+Claude 侧为实测（`npm run spike:claude` / `spike:lane`，结论就在那两个脚本里）。codex 侧标注来源：**〔实测〕**= duetlens 在 codex `0.144.x` 上字节级验证过；**〔推断〕**= 由协议形态推导，接入前需核实。
 
 | Inquestry 机制 | Claude Code | codex app-server | 结论 |
 |---|---|---|---|
@@ -60,7 +60,7 @@ tools/                 // schema + handler，不 import 任何 backend 类型
   └─ http-mcp-adapter  // codex: in-process HTTP server + --url 注入
 ```
 
-传输不能统一，是 codex 侧的硬约束：**实测 codex 会对同一 MCP server 做多次 `initialize`**（duetlens 一次 review 观测到 4 次），stdio 子进程会被反复 respawn，故必须 HTTP。这是 duetlens 已经付过学费的地方。
+传输不能统一，是 codex 侧的硬约束：**实测 codex 会对同一 MCP server 做多次 `initialize`**，stdio 子进程会被反复 respawn，故必须 HTTP。这是 duetlens 已经付过学费的地方。
 
 > 第一阶段就按这个形状写。handler 里一旦混进 SDK 的 tool context 类型，第二阶段等于重写。
 
@@ -76,7 +76,7 @@ tools/                 // schema + handler，不 import 任何 backend 类型
 | `SessionForked` | `forkSession` |
 | `TurnFailed` | `turn/completed` 的 `turn.error` |
 
-沿用 duetlens 的**领域事件面编译期收敛**：事件名→载荷单一来源、`emit` 私有、renderer 侧 `switch` + never 哨兵。Inquestry 的事件种类比 duetlens 多得多（step / tool / evidence / pending / 泳道），漏接一个就是某类节点在 UI 上静默消失——duetlens 上"agent finding 只落库未外发、整个 Discussion 栏为空却无人报错"就是这么来的，这里价值更大。
+沿用 duetlens 的**领域事件面编译期收敛**：事件名→载荷单一来源、`emit` 私有、renderer 侧 `switch` + never 哨兵。Inquestry 的事件种类比 duetlens 多得多（step / tool / evidence / pending / 泳道），漏接一个就是某类节点在 UI 上静默消失——duetlens 上"整个 Discussion 栏为空却无人报错"就是这么来的。
 
 ### 2.3 控制语义层 —— 抽象成**能力**，不是方法
 
@@ -124,13 +124,4 @@ AgentCapabilities {
 
 > **codex backend 的排查体验会整体弱一档，主要弱在控制面。** 这不是不接的理由，但要在接之前就写明，而不是接完当 bug 查。
 
----
-
-## 5. 待实测
-
-接 codex 前必须核实（〔推断〕项）：
-
-1. codex 的 reject 能否携带消息回给模型且不中断 turn——**决定 D6 是否真的无解**
-2. `turn/steer` 的确切语义与取消粒度（对应 overview §3.3 的批次代表 uuid 那个坑）
-3. codex 是否有可用的 subagent / 并行支线概念
-4. `thread/fork` 的分叉点粒度是否够细（overview §4.1 要的是"从第 5 步换个假设重来"）
+> **接入前必须先核实这几条〔推断〕**：codex 的 reject 能否携带消息回给模型且不中断 turn（决定 D6 是否真的无解）· `turn/steer` 的确切语义与取消粒度 · 有没有可用的 subagent / 并行支线概念 · `thread/fork` 的分叉点粒度够不够细。

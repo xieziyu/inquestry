@@ -82,7 +82,7 @@ export type DomainEvents = {
   };
   'step.superseded': { stepId: string; by: string };
   /**
-   * 一条子 agent 支线跑完，它的兜底步就此收口（§9.16）。
+   * 一条子 agent 支线跑完，它的兜底步就此收口（data-model.md 的 `converged` 一节）。
    *
    * **与 `step.closed` 分成两条**：那一条记的是 agent 对一个命题下的判定，而支线的兜底步
    * 压根没有命题——收口只说「这条支线到此为止，账收在这儿」。合成一条的话，报告与结案

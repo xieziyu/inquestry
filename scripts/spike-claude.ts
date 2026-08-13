@@ -1,5 +1,5 @@
 /**
- * Spike A —— 在裸 Node 里验 Claude backend 的**协议能力**（overview §9.0）。
+ * Spike A —— 在裸 Node 里验 Claude backend 的**协议能力**（overview §2 / §3）。
  *
  * 只验能力，不验运行环境；Electron main 内的 PATH / 打包 / 签名是 Spike B。
  *
@@ -11,6 +11,46 @@
  *   5. hook 事件能拿到 PreToolUse 及其 agent_id（tool call 自动归属 step 的兜底，§4.4）
  *
  * 跑：npm run spike:claude
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * ## 速查：这套设计用到的 CLI flag 与 SDK API
+ *
+ * 放在这儿而不是设计文档里，是因为它们随 SDK 走不随设计走——要核对就跑一次这个 spike，
+ * 或直接翻 `@anthropic-ai/claude-agent-sdk` 的类型定义，别信一份手抄的表。
+ *
+ * CLI（长驻双向流那套，overview §2）：
+ *   --input-format stream-json    实时流式输入（需配 -p）
+ *   --output-format stream-json   实时流式输出
+ *   --include-partial-messages    增量 chunk，打字机效果（**不落库**，只走 IPC）
+ *   --forward-subagent-text       转发子 agent 正文，带 parent_tool_use_id
+ *   --include-hook-events         hook 生命周期事件进流（自动归属的地基）
+ *   --replay-user-messages        回显 stdin 的 user message 用于 ack
+ *   --session-id / --resume / --fork-session
+ *   --permission-mode             acceptEdits | auto | bypassPermissions | manual | dontAsk | plan
+ *   --bare                        ⛔ 强制 API key，**禁用**（D4：它会绕开订阅凭据）
+ *
+ * SDK：
+ *   canUseTool                    单次调用闸门：allow / allow+updatedInput / deny+message
+ *   interrupt()                   turn 级中断，返回 receipt，支持 cancel_queued（D7）
+ *   setPermissionMode(mode)       运行时切档
+ *   createSdkMcpServer()          进程内 MCP server（ask_operator 的载体，D14）
+ *   backgroundTasks(toolUseId)    把一条前台支线转后台（认 tool_use_id）
+ *   stopTask(taskId)              停掉一条支线（认 task_id，而它就是 agent_id）
+ *   forkSession()                 从某点分叉
+ *   getSubagentMessages() / listSubagents()
+ *   supportedModels()             每个模型真实的 supportsEffort 与 effort 档位
+ *
+ * **能力探测要 feature-detect，不要版本嗅探**：`system/init` 的 `capabilities` 是开放集合
+ * （观测到 interrupt_receipt_v1 / interrupt_cancel_queued_v1 / msg_lifecycle_v1）。
+ *
+ * ## 两条顺带打出来的环境观测
+ *
+ * - **`settingSources: []` 不隔离用户环境**：用户的 slash command 与全部 MCP 照样加载。
+ *   overview §2「白送用户已有的 skill 和 MCP」因此成立，但反面是排查无关的工具会一起进来，
+ *   而工具集一大模型会先走一跳 ToolSearch
+ * - **主线调用的 hook input 里没有 `agent_id`**（与 §4.4 一致：它只在子 agent 内出现）。
+ *   子 agent 那一侧由 `spike:lane` 补齐
+ * ──────────────────────────────────────────────────────────────────────────
  */
 
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';

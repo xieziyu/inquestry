@@ -228,7 +228,7 @@ async function main() {
     `status=${rh?.status} gate=${rh?.gate_decision} blob 内容=${blob(rh)?.slice(0, 24)}`,
   );
 
-  // ── ⑦ 接管模式：闸门唯一的入口（overview §3.5 / ui.md §12 头条） ────────
+  // ── ⑦ 接管模式：闸门唯一的入口（overview §3.5 / ui.md §4 的 ②′） ────────
   //
   // 分类器按后果判之后，②档卡片在默认路上不再出现——闸门那套机器还在，却没有任何
   // 界面动作触发得了它。这一段验的就是那个开关：**两侧一起切，缺一不可**。
@@ -297,7 +297,7 @@ async function main() {
   );
   realRunner.close();
 
-  // 接管那一档**没有超时兜底**（ui.md §12 那条"闸门只有三分钟一档"）：
+  // 接管那一档**没有超时兜底**（ui.md §4 的 ②′）：
   // 人刚说了每一条自己判，三分钟后替他放行等于把这句话作废，而那时挂着的多半是敏感写
   const t1 = ask('call_t2', 'drop table');
   started('call_t2', 'drop table');

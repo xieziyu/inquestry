@@ -82,7 +82,7 @@ export const incident: IncidentEntry[] = [
 export const ROOT_TEXT = '连接池在扩容时被复用了旧配置';
 /**
  * 修复建议**必须非空**：它是四栏里唯一由 agent 生成的一块，一度恒为「无」，
- * 于是"整节留白"这个错法在所有检查下都照旧通过（overview §9.12 那条 mutation 记的正是它）。
+ * 于是"整节留白"这个错法在所有检查下都照旧通过。
  * 带上 markdown 元字符：这一栏与别处一样要过转义那道门。
  */
 export const FIX_TEXT = '把 pool_size 从 *继承* 改成按实例算，并给 [扩容流程] 补一条校验';

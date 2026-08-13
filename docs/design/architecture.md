@@ -29,24 +29,16 @@ duetlens 选 Electron 的理由是渲染一致性 + 主进程即 Node。这里�
 
 **代价**沿用 duetlens 的判断：体积（~100MB 级）与内存显著高于 Tauri，且须按 Electron 安全基线配置（`contextIsolation` 开、`nodeIntegration` 关、preload + `contextBridge`）。
 
-### 可执行文件：自带 vs 用户已装
+### 可执行文件：用用户已装的那份
 
-**〔2026-08-10 spike 实测〕SDK `0.3.220` 不打包 cli.js，而是通过 platform 专属 optionalDependency 拉一份原生二进制**：
-
-```
-node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/   257 MB   (manifest 版本 2.1.220)
-```
-
-**"打包后的 Electron 没有独立 node"这条风险因此不成立**——SDK spawn 的是原生二进制，与 node 无关。但换来一个新决策：
+SDK 不打包 cli.js，而是通过 platform 专属 optionalDependency 拉一份**原生二进制**（~257MB）。所以"打包后的 Electron 没有独立 node"这条风险不成立——SDK spawn 的是原生二进制，与 node 无关。但换来一个选择：
 
 | 方案 | 体积 | 版本 | 风险 |
 | --- | --- | --- | --- |
 | 用 SDK 自带二进制 | app 体积 **+257MB**（Electron 本体才 ~100MB 级） | 与 SDK 锁死，可复现 | 体积劝退；升级即再下一份 |
-| `pathToClaudeCodeExecutable` 指向用户已装的 `claude` | +0 | 随用户漂移（本机 2.1.226 vs SDK 2.1.220） | 需环境检查 + 版本下限校验；未装则引导安装 |
+| `pathToClaudeCodeExecutable` 指向用户已装的 `claude` | +0 | 随用户漂移 | 需环境检查 + 版本下限校验；未装则引导安装 |
 
-**倾向后者**：本工具的用户就是已经在用 Claude Code 排查问题的人（overview §1.1），"已装"是合理前提；配合 duetlens 那套环境检查屏（缺件时给绝对路径输入框）成本很低。两条路径在 spike 里已确认**都能起进程、都能握手**。
-
-> 顺带实测：`settingSources: []` **不等于完全隔离**——用户的 slash command / plugin 仍会加载（观测到 48–49 条）。真要确定性环境，需另想办法。
+**取后者**：本工具的用户就是已经在用 Claude Code 排查问题的人（overview §1.1），"已装"是合理前提；配合环境检查屏（缺件时给绝对路径输入框）成本很低。两条路径都能起进程、都能握手。
 
 ### 剩余的环境风险
 
@@ -56,7 +48,7 @@ node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/   257 MB   (manifest �
 | --- | --- | --- |
 | PATH | Finder/Dock 启动的 app 只有 `/usr/bin:/bin:/usr/sbin:/sbin` | 抄 duetlens `src/backend/env/shell-path.ts`，其 `fallbackDirs()` 已含 `~/.local/bin` |
 | 签名 | 打包签名后 entitlements 需允许 spawn 子进程 | duetlens 已有 entitlements plist 经验 |
-| **OAuth 过期** | 凭据在 Keychain（本机无 `~/.claude/.credentials.json`）；过期时子进程直接返回 `401 OAuth access token has expired`，**且无法在 app 内重新登录** | 环境检查须覆盖"已装但未登录/已过期"，并明确引导用户去终端跑 `claude` 登录。**这是 spike 当场撞到的真实场景，不是假想** |
+| **OAuth 过期** | 凭据在 Keychain；过期时子进程直接返回 `401 OAuth access token has expired`，**且无法在 app 内重新登录**（长效令牌那条路走不通，见 overview §2） | 环境检查须覆盖"已装但未登录/已过期"，并明确引导用户去终端跑 `claude` 登录 |
 
 ## 后端分层
 
@@ -77,6 +69,8 @@ node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/   257 MB   (manifest �
 - 错误跨 IPC 只剩 message（Electron 丢自定义字段），满载错误需在消息里嵌可识别标记
 
 overview §3.4 的「转后台」会让支线活得很久，进程比 duetlens 更容易攒，这条约束在这里只会更紧。
+
+⚠️ **降级绝不能挑挂着待办的那个**（[ui](ui.md) §8.3）：那会把等着人回答的 pending 就地作废，等于替人做了「这条不查了」的决定。
 
 ## 存储：事件、投影、blob 三分
 
@@ -130,7 +124,7 @@ duetlens 的三层直接沿用，**但 Inquestry 多一类**：
 
 ### 领域事件面编译期收敛
 
-沿用 duetlens：事件名→载荷单一来源、`emit` 私有、renderer 侧 `switch` + never 哨兵。Inquestry 的事件种类多得多（step / tool / evidence / pending / 泳道），漏接一个就是某类节点在 UI 上静默消失。
+沿用 duetlens：事件名→载荷单一来源、`emit` 私有、renderer 侧 `switch` + never 哨兵。事件种类多得多（step / tool / evidence / pending / 泳道），漏接一个就是某类节点在 UI 上静默消失。
 
 ## 屏幕与 Timeline 布局
 
@@ -146,4 +140,4 @@ SPA，屏幕划分沿用 duetlens 的 `screens/` 组织：
 
 推论：case 屏顶栏没有时间线切换器；report 屏也不实时刷新，它读的是结案时冻结的投影。
 
-**布局可以换，数据模型换不了**（overview §8.1）——屏幕怎么分是前端局部决定，不影响 EvidenceRef 的双时间戳设计。
+**布局可以换，数据模型换不了**——屏幕怎么分是前端局部决定，不影响 EvidenceRef 的双时间戳设计。

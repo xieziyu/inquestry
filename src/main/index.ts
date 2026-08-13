@@ -776,7 +776,7 @@ app.whenReady().then(async () => {
         // 与点击前那一张字节完全相同（§11 的过期帧）。等到画面真的变了才算拍到，
         // 等不到就抛；否则文件名和日志都说这是报告，而里面是调查台
         const before = (await win!.webContents.capturePage()).toPNG();
-        // 收尾之后界面会自己翻到报告屏（§9.11），那时不用点
+        // 收尾之后界面会自己翻到报告屏（ui.md §6），那时不用点
         if (ready === 'toreport') {
           await win!.webContents.executeJavaScript(`document.querySelector('.toreport').click()`);
         }

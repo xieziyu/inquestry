@@ -136,7 +136,7 @@ export type StepNode = {
   lane: string | null;
   kind: 'normal' | 'unclassified' | 'impact' | 'leftover';
   /**
-   * `converged` 只出现在支线的兜底步上（§9.16）：那一步没有命题，所以它不是一种判定，
+   * `converged` 只出现在支线的兜底步上（ui.md §3.2）：那一步没有命题，所以它不是一种判定，
    * 只是说"这条支线到此为止"。报告那几栏按具体 status 取，它因此哪一栏都不进。
    */
   status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded' | 'converged';

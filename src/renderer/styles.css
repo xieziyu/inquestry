@@ -409,7 +409,7 @@ button.primary small { opacity: .6; font-weight: 400; }
   padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; margin-right: 4px;
 }
 
-/* 导出与返回并列：报告屏上能做的就这几件事（ui.md §6.1）。两种导出长一个样：
+/* 导出与返回并列：报告屏上能做的就这几件事（ui.md §6）。两种导出长一个样：
    Markdown 与长图并列一等（D26），把其中一个做成次要按钮就等于替人选了一种 */
 .anchors .exportmd, .anchors .exportimg {
   background: var(--panel-2); border: 1px solid var(--fill); color: var(--accent);

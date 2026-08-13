@@ -1,5 +1,5 @@
 /**
- * 子 agent 泳道的归属桥（overview §4.5，实测见附录 A.1）。
+ * 子 agent 泳道的归属桥（overview §4.5，实测见 `scripts/spike-lane.ts`）。
  *
  * lane key 是**起这条支线那次调用的 `tool_use_id`**，而记账口（PreToolUse）给的是
  * `agent_id`——两个键天生不同。两边都有的只有**内层那次调用的 `tool_use_id`**：

@@ -91,7 +91,7 @@ export type InvestigationSession = {
   /** 对话带上添一句。**agent 的结论重建得出来，人当时说的话重建不出来**（`chat.appended`）。 */
   appendChat(input: { role: 'user' | 'assistant' | 'system'; text: string }): void;
   /**
-   * 一条支线跑完，收口它的兜底步（§9.16）。返回收的是哪一步，没有开着的步就返回 null。
+   * 一条支线跑完，收口它的兜底步（data-model.md 的 `converged` 一节）。返回收的是哪一步，没有开着的步就返回 null。
    *
    * **收口的人只能是 harness**：支线自己开不了步也收不了步（PreToolUse 当场回绝），
    * 而主线拿不到那一步的 id。没有这一手，一条跑完的支线会永远停在「进行中」。
@@ -424,7 +424,7 @@ export function createInvestigationSession(
           )
           .get(parentStepId, ctx.caseId);
         if (!known) {
-          // 静默丢掉不算修好：agent 会以为分叉已经记下了（§9.9 同一条）
+          // 静默丢掉不算修好：agent 会以为分叉已经记下了（ui.md §3）
           warnings.push(`parentStepId ${parentStepId} 不是本案子里的 step，这一步按主干记。`);
           parentStepId = undefined;
         }

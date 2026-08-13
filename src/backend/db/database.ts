@@ -9,7 +9,7 @@ import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
  *    **第一级真正走重放迁移的升级**：只加一个 nullable 列，老事件形状没动过。
  * 5：`tool_calls.gate_decision` 多一档 `auto_deny`（分类器/规则拒的，人没被问到）
  *    + `chat_lines` 表与事件 `chat.appended` —— 对话带落库，它是唯一重建不出来的东西。
- * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（§9.16）。
+ * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（data-model.md 的 `converged` 一节）。
  * 3：`steps.shape` —— agent 声明的报告形态（v2 只有 `cases.verdict_shape` 这个终态）。
  */
 export const SCHEMA_VERSION = 6;
