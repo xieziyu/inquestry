@@ -76,6 +76,23 @@ export type DomainEvents = {
     at: number;
   };
   'step.superseded': { stepId: string; by: string };
+  /**
+   * 一条子 agent 支线跑完，它的兜底步就此收口（§9.16）。
+   *
+   * **与 `step.closed` 分成两条**：那一条记的是 agent 对一个命题下的判定，而支线的兜底步
+   * 压根没有命题——收口只说「这条支线到此为止，账收在这儿」。合成一条的话，报告与结案
+   * 校验就得在同一个 status 上分辨两种含义，而它们只看得见 status。
+   *
+   * `summary` 是**支线自己的话**（SubagentStop 的最后一句，退回 task_notification 的摘要），
+   * 不是 harness 编的判定：这一步唯一能说的就是它自己说过什么。
+   */
+  'lane.converged': {
+    stepId: string;
+    lane: string;
+    outcome: 'completed' | 'failed' | 'stopped' | 'orphaned';
+    summary: string;
+    at: number;
+  };
 
   'blob.stored': { sha256: string; size: number; mime: string; lineCount: number; at: number };
 

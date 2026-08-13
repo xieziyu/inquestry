@@ -21,16 +21,33 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { blobDir, openDatabase } from '../src/backend/db/database.js';
+import { applyEvent } from '../src/backend/db/projector.js';
+import { reportSections } from '../src/backend/db/queries.js';
+import { sweepZombies, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { LaneBridge } from '../src/main/lane-bridge.js';
 import { trackLayout } from '../src/renderer/track.js';
 
 /** 泳道那几个方法是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
 type Probe = {
-  openSession(): unknown;
+  openSession(): InvestigationSession;
+  /** 断流那条路要真的从 `consume()` 走一遍，光调 `endOnce` 验不到"崩溃会不会绕过收口"。 */
+  consume(q: unknown): Promise<void>;
+  q: unknown;
   onToolStart(input: unknown, toolUseID: string): { hookSpecificOutput?: { permissionDecision?: string } };
+  convergeLane(finished: { lane: string; agentId: string; status: string; summary: string }): void;
   lanes: LaneBridge;
 };
+
+/** 一条支线跑完的通知。收口只认它——被人停掉的那条不发 `SubagentStop`（A.1）。 */
+const notify = (agentId: string, status: string, summary: string, lane?: string) => ({
+  type: 'system',
+  subtype: 'task_notification',
+  task_id: agentId,
+  tool_use_id: lane,
+  status,
+  summary,
+});
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -42,7 +59,7 @@ const forwarded = (lane: string, ...callIds: string[]) => ({
   message: { content: callIds.map((id) => ({ type: 'tool_use', id })) },
 });
 
-function main() {
+async function main() {
   const file = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-branch-')), 'inquestry.db');
   const db = openDatabase(file);
 
@@ -63,13 +80,21 @@ function main() {
     onChange: () => {},
   });
   const probe = runner as unknown as Probe;
-  probe.openSession();
+  const session = probe.openSession();
 
   const start = (callId: string, agentId?: string, tool = 'mcp__datasource__query_logs') =>
     probe.onToolStart({ tool_name: tool, tool_input: { q: callId }, agent_id: agentId }, callId);
   const stepOf = (callId: string) =>
     (db.prepare(`SELECT step_id FROM tool_calls WHERE id=?`).get(callId) as { step_id: string } | undefined)
       ?.step_id;
+  const stepRow = (stepId?: string) =>
+    db.prepare(`SELECT status, verdict_text, t_end FROM steps WHERE id=?`).get(stepId) as
+      | { status: string; verdict_text: string | null; t_end: number | null }
+      | undefined;
+  const narrativeRows = (stepId?: string) =>
+    (db.prepare(`SELECT COUNT(*) c FROM narrative_fts WHERE ref_id=? AND ref_kind='lane'`).get(stepId) as {
+      c: number;
+    }).c;
   const laneOfStep = (stepId?: string) =>
     (db.prepare(`SELECT lane FROM steps WHERE id=?`).get(stepId) as { lane: string | null } | undefined)?.lane;
   const parentOfStep = (stepId?: string) =>
@@ -215,6 +240,144 @@ function main() {
     `call_open_lane 的 step_id = ${stepOf('call_open_lane')}`,
   );
 
+  // ── ⑤ 收口：跑完的支线不能永远停在「进行中」（§9.16） ────────────────────
+  //
+  // 收口只认 `task_notification`（被人停掉的那条不发 `SubagentStop`），内容一律是**支线自己的话**：
+  // harness 替它编一句判定的话，报告里会多出一条没有人下过的结论。
+
+  probe.lanes.noteSubagentStop('ag_alpha', '  三次日志都指向同一个实例，alpha 这条查完了  ');
+  const finA = probe.lanes.absorb(notify('ag_alpha', 'completed', '（通知自带的摘要）', 'task_alpha') as never);
+  if (finA) probe.convergeLane(finA);
+  const aRow = stepRow(stepOf('inner_a1'));
+  check(
+    '16. 支线跑完，它那一步收成 converged（不是 open，也不是任何一种判定）',
+    aRow?.status === 'converged' && !!aRow?.t_end,
+    `alpha 那一步 status=${aRow?.status} t_end=${aRow?.t_end}`,
+  );
+  check(
+    '16b. 收口写的是支线自己的话，且 SubagentStop 的最后一句压过通知里的摘要',
+    !!aRow?.verdict_text?.includes('同一个实例') && !aRow?.verdict_text?.includes('通知自带'),
+    `verdict = ${JSON.stringify(aRow?.verdict_text)}`,
+  );
+  check(
+    '17. 收一条支线不动主干那一步（主线还在查，它凭什么被收）',
+    stepRow(stepOf('main_first'))?.status === 'open',
+    `主干那一步 status=${stepRow(stepOf('main_first'))?.status}`,
+  );
+
+  // 没有 SubagentStop 的那条（被停下的就是这样）只能用通知里的摘要
+  const finB = probe.lanes.absorb(notify('ag_beta', 'stopped', 'beta 被停下之前只跑了一次查询', 'task_beta') as never);
+  if (finB) probe.convergeLane(finB);
+  check(
+    '18. 没有 SubagentStop 时退回通知里的摘要，且说得出它是被停下的',
+    stepRow(stepOf('inner_b1'))?.status === 'converged' &&
+      !!stepRow(stepOf('inner_b1'))?.verdict_text?.includes('被停下') &&
+      !!stepRow(stepOf('inner_b1'))?.verdict_text?.includes('只跑了一次查询'),
+    `verdict = ${JSON.stringify(stepRow(stepOf('inner_b1'))?.verdict_text)}`,
+  );
+
+  // 同一条泳道可能再来一条通知（转后台那一手就会）。**收口时刻不能被它往后挪**：
+  // 轨道上一条早就结束的支线于是显示成刚刚才停，而没有任何报错
+  const beforeAgain = stepRow(stepOf('inner_a1'));
+  const againStep = session.convergeLane({ lane: 'task_alpha', outcome: 'completed', summary: '迟到的第二条通知' });
+  const afterAgain = stepRow(stepOf('inner_a1'));
+  check(
+    '19. 第二条通知收不到已经收口的那一步（不改口、不挪收口时刻）',
+    againStep === null &&
+      afterAgain?.t_end === beforeAgain?.t_end &&
+      afterAgain?.verdict_text === beforeAgain?.verdict_text,
+    `返回 ${againStep} / t_end ${beforeAgain?.t_end} → ${afterAgain?.t_end}`,
+  );
+
+  // 守卫写在 projector 里（同一条事件应用两次也不改口）。上面那条验的是**发事件的人**不发，
+  // 这条验的是**应用事件的人**不听——两处各管一段，只验一处的话另一处怎么改都不会变红
+  const twiceStep = stepOf('inner_a1')!;
+  const before2 = stepRow(twiceStep);
+  applyEvent(
+    db,
+    {
+      type: 'lane.converged',
+      payload: { stepId: twiceStep, lane: 'task_alpha', outcome: 'completed', summary: '重放里迟到的第二条', at: (before2?.t_end ?? 0) + 5000 },
+    },
+    { blobDir: blobDir(file), caseId: 'case_branch' },
+  );
+  const after2 = stepRow(twiceStep);
+  check(
+    '19b. 同一条收口事件应用两次也不改口（投影侧的幂等）',
+    after2?.t_end === before2?.t_end && after2?.verdict_text === before2?.verdict_text,
+    `t_end ${before2?.t_end} → ${after2?.t_end} / verdict ${JSON.stringify(after2?.verdict_text)}`,
+  );
+  // **幂等要连检索索引一起算**：步没变而索引多一条的话，跨案检索会把同一条支线翻出来两次，
+  // 而 `steps` 上一切正常——只查步的那种检查看不见这一半
+  check(
+    '19c. 第二次应用不往检索索引里再塞一条摘要',
+    narrativeRows(twiceStep) === 1,
+    `narrative_fts 里 ${narrativeRows(twiceStep)} 条`,
+  );
+
+  // 通知里缺 `tool_use_id` 时不能就此撒手：`agent_id` 是桥的另一头，反查得到泳道。
+  // 撒手的后果正是这次要修的那个形状——那条支线再没有人收得了
+  const finG = probe.lanes.absorb(notify('ag_ghost', 'completed', 'ghost 查完了') as never);
+  if (finG) probe.convergeLane(finG);
+  check(
+    '20. 通知缺 tool_use_id 时按 agent_id 反查泳道，照样收得掉',
+    finG?.lane === 'task_ghost' && stepRow(stepOf('inner_g1'))?.status === 'converged',
+    `反查到 ${finG?.lane}，那一步 status=${stepRow(stepOf('inner_g1'))?.status}`,
+  );
+
+  // 一次工具调用都没打的支线没有兜底步。**别为了"收口"凭空造一个空步**：
+  // 轨道上会多出一个从没查过任何东西的节点，报告里也多一行
+  const nothing = session.convergeLane({ lane: 'task_never', outcome: 'completed', summary: 'x' });
+  check(
+    '21. 没打过任何调用的支线没有步可收，不凭空造一个',
+    nothing === null && !db.prepare(`SELECT 1 FROM steps WHERE lane='task_never'`).get(),
+    `返回 ${nothing}`,
+  );
+
+  // converged 是"这条支线到此为止"，不是一种判定。**借 inconclusive 的话每条跑完的支线
+  // 都会变成报告里的一条「遗留疑点」**（queries.ts 只看 status 不看 kind），而它谁都没落下
+  const sections = reportSections(db, 'case_branch');
+  check(
+    '22. 收口的支线哪一栏报告都不进（尤其不是「遗留疑点」）',
+    sections.leftovers.length === 0 && sections.refuted.length === 0 && !sections.rootCause,
+    `遗留疑点 ${sections.leftovers.length} 条 / 被推翻 ${sections.refuted.length} 条 / 根因 ${sections.rootCause?.step_id ?? '无'}`,
+  );
+
+  // 停一条支线认的是 `agent_id`（A.1：`task_id` 就是它）。认不出来就不该发 stopTask——
+  // 拿别的键去停，停不掉还是停错了都不会有任何报错
+  check(
+    '23. 还在跑的支线报得出 agent_id，收过尾的不再算「在跑」',
+    probe.lanes.agentOf('agent:ag_race') === 'ag_race' &&
+      probe.lanes.liveLanes.includes('agent:ag_race') &&
+      !probe.lanes.liveLanes.includes('task_alpha'),
+    `在跑的 ${JSON.stringify(probe.lanes.liveLanes)} / race 的 agent ${probe.lanes.agentOf('agent:ag_race')}`,
+  );
+
+  // 桥没合拢时这条支线是按 `agent:<agent_id>` 记的账，而通知带的是真 key。
+  // **以已经记上账的那个为准**：信通知的话，收口去查一个库里从来没有过的 lane，
+  // 那一步收不到、「停」也撤不掉，一条早就跑完的支线挂到会话结束才被当成 orphan
+  const finR = probe.lanes.absorb(notify('ag_race', 'completed', 'race 查完了', 'task_race') as never);
+  if (finR) probe.convergeLane(finR);
+  check(
+    '23b. 库里记的是临时 key 时，通知带着真 tool_use_id 也要收得掉那一步',
+    finR?.lane === 'agent:ag_race' &&
+      stepRow(raceStep)?.status === 'converged' &&
+      !probe.lanes.liveLanes.includes('agent:ag_race'),
+    `通知认到 ${finR?.lane}，那一步 status=${stepRow(raceStep)?.status}，在跑的 ${JSON.stringify(probe.lanes.liveLanes)}`,
+  );
+
+  // 一条泳道只收一次尾。再来一条照旧返回 LaneFinish 的话，收口那侧查不到开着的步，
+  // 会把它解释成"这条支线没有留下任何调用"并再说一遍——而它明明查了一堆东西
+  check(
+    '23c. 同一条泳道的第二条通知直接被桥吃掉（不再惊动收口那侧）',
+    probe.lanes.absorb(notify('ag_race', 'completed', '迟到的第二条', 'task_race') as never) === null,
+    '第二条通知返回 null',
+  );
+
+  // 收尾那一段要有一条**还开着**的支线才验得到，上面几条已经把先前那些都收掉了
+  probe.lanes.absorb(forwarded('task_orph', 'inner_o1') as never);
+  start('inner_o1', 'ag_orph');
+
   // ── ⑤ 后台电平：主线不忙了不等于这个案子闲下来了 ──────────────────────────
   const bridge = new LaneBridge();
   check('12. 没有支线时电平是 0', bridge.backgroundLanes === 0, `实得 ${bridge.backgroundLanes}`);
@@ -248,10 +411,95 @@ function main() {
     `支线在跑时 ${busyWithLane}，close 之后 ${runner.isBusy}`,
   );
 
+  // ── ⑥ 没人收得了的那些支线 ───────────────────────────────────────────────
+  //
+  // 收口只在通知到达时发生，而**关掉查询之后 SDK 保证不再有任何消息**——
+  // 会话收尾时还开着的支线于是永远没有下一条通知。两处兜底各管一段：
+  // 这个进程里的归 `close()`，上一个进程留下的归启动清扫。
+  const orphan = stepRow(stepOf('inner_o1'));
+  check(
+    '24. 会话收尾时还开着的支线一并收口，并说清是没收尾的那种',
+    orphan?.status === 'converged' && !!orphan?.verdict_text?.includes('没有收尾'),
+    `那一步 status=${orphan?.status} verdict=${JSON.stringify(orphan?.verdict_text)}`,
+  );
+
+  // 上一个进程留下的：库里还开着的支线步，而它的会话早就没了。
+  // 不扫的话轨道上永远有一条「进行中」的支线，等的是一条再也不会来的通知
+  const zombie = new CaseRunner({
+    db,
+    blobDir: blobDir(file),
+    promptText: '',
+    caseId: 'case_zombie',
+    intake: {
+      title: '上一个进程',
+      question: '上一个进程',
+      projectRoot: null,
+      incidentDate: '2026-08-09',
+      tzOffset: '+08:00',
+      clues: null,
+    },
+    agent: { backend: 'claude', model: null, effort: null },
+    onChange: () => {},
+  });
+  const zprobe = zombie as unknown as Probe;
+  zprobe.openSession();
+  zprobe.lanes.absorb(forwarded('task_zzz', 'inner_z1') as never);
+  zprobe.onToolStart({ tool_name: 'mcp__datasource__query_logs', tool_input: {}, agent_id: 'ag_zzz' }, 'inner_z1');
+  const zStep = stepOf('inner_z1');
+  const swept = sweepZombies(db, { blobDir: blobDir(file), now: () => Date.now() });
+  check(
+    '25. 启动清扫收得掉上一个进程留下的支线（它等的那条通知永远不会来）',
+    swept.lanes === 1 && stepRow(zStep)?.status === 'converged',
+    `扫到 ${swept.lanes} 条，那一步 status=${stepRow(zStep)?.status}`,
+  );
+  check(
+    '25b. 已经收口的不会被再扫一遍（第二次扫是 0，不然每次启动都改一遍收口时刻）',
+    sweepZombies(db, { blobDir: blobDir(file), now: () => Date.now() }).lanes === 0,
+    '第二次清扫 0 条',
+  );
+
+  // ── ⑦ 断流与崩溃：没有人再按下「关闭」的那两条路 ──────────────────────────
+  //
+  // backend 崩了 / 消息流自己结束时**只走 `endOnce`**，而它之后 `consume()` 的 finally
+  // 立刻 `lanes.reset()`——收口只挂在 `close()` 上的话，那几步就再没有人收得了：
+  // 界面上一条永远"还在查"的支线，一直挂到下次启动清扫。这条要从 `consume()` 真的走一遍，
+  // 光调 `endOnce` 验不到"崩溃那条路会不会绕过收口"
+  const crashed = new CaseRunner({
+    db,
+    blobDir: blobDir(file),
+    promptText: '',
+    caseId: 'case_crash',
+    intake: {
+      title: '断流',
+      question: '断流',
+      projectRoot: null,
+      incidentDate: '2026-08-09',
+      tzOffset: '+08:00',
+      clues: null,
+    },
+    agent: { backend: 'claude', model: null, effort: null },
+    onChange: () => {},
+  });
+  const cprobe = crashed as unknown as Probe;
+  cprobe.openSession();
+  cprobe.lanes.absorb(forwarded('task_ccc', 'inner_c1') as never);
+  cprobe.onToolStart({ tool_name: 'mcp__datasource__query_logs', tool_input: {}, agent_id: 'ag_ccc' }, 'inner_c1');
+  const cStep = stepOf('inner_c1');
+  const boom = (async function* () {
+    throw new Error('模拟断流');
+  })();
+  cprobe.q = boom;
+  await cprobe.consume(boom);
+  check(
+    '26. 消息流崩了也收口（那条路不经过 close，之后泳道映射就被清了）',
+    stepRow(cStep)?.status === 'converged' && !!stepRow(cStep)?.verdict_text?.includes('出错'),
+    `那一步 status=${stepRow(cStep)?.status} verdict=${JSON.stringify(stepRow(cStep)?.verdict_text)}`,
+  );
+
   const bad = checks.filter(([, ok]) => !ok);
   for (const [name, ok, detail] of checks) console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}\n      ${detail}`);
   console.log(`\n${checks.length - bad.length}/${checks.length} 通过`);
   if (bad.length) process.exit(1);
 }
 
-main();
+void main();

@@ -88,8 +88,24 @@ export type InvestigationSession = {
   }): void;
   /** 这个 callId 有没有落过库 —— 闸门用它判断该补记还是该等 started 带上判决。 */
   hasToolCall(callId: string): boolean;
+  /**
+   * 一条支线跑完，收口它的兜底步（§9.16）。返回收的是哪一步，没有开着的步就返回 null。
+   *
+   * **收口的人只能是 harness**：支线自己开不了步也收不了步（PreToolUse 当场回绝），
+   * 而主线拿不到那一步的 id。没有这一手，一条跑完的支线会永远停在「进行中」。
+   */
+  convergeLane(input: { lane: string; outcome: LaneOutcome; summary: string }): string | null;
+  /**
+   * 会话收尾时还开着的支线一并收口。**不做的话它们再没有人收得了**：
+   * 消息流一关就不会再有 `task_notification`，那几步会一直显示成还在查，
+   * 而它们所属的会话早就没了。
+   */
+  convergeOpenLanes(summary: string): number;
   endSession(status?: 'ended' | 'crashed'): void;
 };
+
+/** 支线是怎么结束的。`orphaned` 是会话先没的那种——不是支线自己跑完。 */
+export type LaneOutcome = 'completed' | 'failed' | 'stopped' | 'orphaned';
 
 type CaseContext = Pick<SessionContext, 'caseId' | 'blobDir'> & { now: () => number };
 
@@ -228,7 +244,7 @@ export function missingClosingSteps(db: Db, caseId: string): ClosingStepKind[] {
 export function sweepZombies(
   db: Db,
   opts: { blobDir: string; now: () => number },
-): { calls: number; sessions: number } {
+): { calls: number; sessions: number; lanes: number } {
   const calls = db
     .prepare(
       `SELECT tc.id, se.case_id, tc.session_id FROM tool_calls tc
@@ -238,6 +254,13 @@ export function sweepZombies(
   const sessions = db
     .prepare(`SELECT id, case_id FROM sessions WHERE status='live'`)
     .all() as { id: string; case_id: string }[];
+  const lanes = db
+    .prepare(
+      `SELECT s.id, s.lane, s.session_id, se.case_id FROM steps s
+       JOIN sessions se ON se.id = s.session_id
+       WHERE s.lane IS NOT NULL AND s.status='open'`,
+    )
+    .all() as { id: string; lane: string; session_id: string; case_id: string }[];
 
   for (const c of calls) {
     const ctx: CaseContext = { caseId: c.case_id, blobDir: opts.blobDir, now: opts.now };
@@ -256,7 +279,23 @@ export function sweepZombies(
       payload: { sessionId: s.id, status: 'crashed', at: opts.now() },
     });
   }
-  return { calls: calls.length, sessions: sessions.length };
+  // 支线的兜底步同理，而且**它比僵尸调用更没人管**：收口只在 `task_notification` 到达时发生，
+  // 上一个进程的消息流已经没了，那条通知永远不会来。会话是不是 `live` 都要扫——
+  // 已经标了 ended 的会话下面照样可能留着一条开着的支线（进程被杀在两件事之间）
+  for (const l of lanes) {
+    const ctx: CaseContext = { caseId: l.case_id, blobDir: opts.blobDir, now: opts.now };
+    emitTo(db, ctx, l.session_id, {
+      type: 'lane.converged',
+      payload: {
+        stepId: l.id,
+        lane: l.lane,
+        outcome: 'orphaned',
+        summary: '（这条支线没有收尾：上一次运行结束时它还开着，结果没有留下来。）',
+        at: opts.now(),
+      },
+    });
+  }
+  return { calls: calls.length, sessions: sessions.length, lanes: lanes.length };
 }
 
 function emitTo(db: Db, ctx: CaseContext, sessionId: string | null, ev: DomainEvent) {
@@ -334,6 +373,18 @@ export function createInvestigationSession(
     return (db.prepare(`SELECT step_id FROM tool_calls WHERE id=?`).get(lane) as
       | { step_id: string }
       | undefined)?.step_id;
+  }
+
+  /** 这条泳道当前开着的那一步。与 `ensureStep` 认的是同一条（`lane IS ?` / `status='open'`）。 */
+  function openLaneStep(lane: string): string | undefined {
+    return (
+      db
+        .prepare(
+          `SELECT id FROM steps WHERE session_id=? AND lane=? AND status='open'
+           ORDER BY ordinal DESC LIMIT 1`,
+        )
+        .get(ctx.sessionId, lane) as { id: string } | undefined
+    )?.id;
   }
 
   const nextOrdinal = () =>
@@ -550,6 +601,31 @@ export function createInvestigationSession(
         type: 'toolcall.completed',
         payload: { callId, outputSha256: blob.sha256, status: status ?? 'done', at: ctx.now() },
       });
+    },
+
+    convergeLane({ lane, outcome, summary }) {
+      const step = openLaneStep(lane);
+      // 没有开着的步 = 这条支线一次工具调用都没打（兜底步只在第一次调用时才开），
+      // 或者它已经收过口了。两种都不该补一个空步出来充数
+      if (!step) return null;
+      emit({ type: 'lane.converged', payload: { stepId: step, lane, outcome, summary, at: ctx.now() } });
+      return step;
+    },
+
+    convergeOpenLanes(summary) {
+      const rows = db
+        .prepare(
+          `SELECT id, lane FROM steps WHERE session_id=? AND lane IS NOT NULL AND status='open'
+           ORDER BY ordinal`,
+        )
+        .all(ctx.sessionId) as { id: string; lane: string }[];
+      for (const r of rows) {
+        emit({
+          type: 'lane.converged',
+          payload: { stepId: r.id, lane: r.lane, outcome: 'orphaned', summary, at: ctx.now() },
+        });
+      }
+      return rows.length;
     },
 
     endSession(status = 'ended') {

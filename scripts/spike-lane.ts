@@ -69,11 +69,18 @@ type Recorder = {
   pre: PreCall[];
   forwarded: Forwarded[];
   subagentStart: { agentId: string; agentType?: string; at: number }[];
-  subagentStop: { agentId: string; agentType?: string; transcript?: string; at: number }[];
+  subagentStop: {
+    agentId: string;
+    agentType?: string;
+    transcript?: string;
+    /** 支线最后说的那句话。收口那一步写的就是它（§9.16），拿不到才退回通知里的摘要。 */
+    lastMessage?: string;
+    at: number;
+  }[];
   gate: { toolName: string; agentId?: string; toolUseId: string }[];
   /** 主线的 tool_result（`parent_tool_use_id === null`），转后台那轮靠它判"等没等"。 */
   mainResults: { toolUseId: string; text: string; structured: unknown; at: number }[];
-  notifications: { taskId: string; toolUseId?: string; status?: string; at: number }[];
+  notifications: { taskId: string; toolUseId?: string; status?: string; summary?: string; at: number }[];
   bgLevels: { n: number; at: number }[];
   resultAt: number | null;
   isError: boolean;
@@ -131,6 +138,8 @@ type StreamMsg = {
   task_id?: string;
   tool_use_id?: string;
   tool_use_result?: unknown;
+  /** 支线跑完时通知自带的摘要——没有 SubagentStop 时收口写的就是它（§9.16）。 */
+  summary?: string;
   status?: string;
   tasks?: unknown[];
   is_error?: boolean;
@@ -172,7 +181,13 @@ function absorb(rec: Recorder, msg: unknown) {
     }
   }
   if (m.type === 'system' && m.subtype === 'task_notification') {
-    rec.notifications.push({ taskId: m.task_id ?? '?', toolUseId: m.tool_use_id, status: m.status, at });
+    rec.notifications.push({
+      taskId: m.task_id ?? '?',
+      toolUseId: m.tool_use_id,
+      status: m.status,
+      summary: m.summary,
+      at,
+    });
   }
   if (m.type === 'system' && m.subtype === 'background_tasks_changed') {
     rec.bgLevels.push({ n: Array.isArray(m.tasks) ? m.tasks.length : 0, at });
@@ -299,11 +314,17 @@ async function runSession(rec: Recorder, opts: RunOpts) {
           {
             hooks: [
               async (input) => {
-                const i = input as { agent_id?: string; agent_type?: string; agent_transcript_path?: string };
+                const i = input as {
+                  agent_id?: string;
+                  agent_type?: string;
+                  agent_transcript_path?: string;
+                  last_assistant_message?: string;
+                };
                 rec.subagentStop.push({
                   agentId: i.agent_id ?? '?',
                   agentType: i.agent_type,
                   transcript: i.agent_transcript_path,
+                  lastMessage: i.last_assistant_message,
                   at: Date.now(),
                 });
                 return {};
@@ -676,6 +697,16 @@ async function runAsync() {
         inner.every((p) => laneOf(rec, p.toolUseId) === gammaTaskId),
       `内层 ${inner.length} 次，泳道 ${JSON.stringify(inner.map((p) => laneOf(rec, p.toolUseId)))}，` +
         `Agent 调用的 tool_use_id=${gammaTaskId}`,
+    ],
+    [
+      // 收口那一步写的就是这两样（§9.16）。**没有它们，收口只能由 harness 编一句判定**——
+      // 而报告里会因此多出一条没有人下过的结论。两样都要，因为被人停掉的那条不发 SubagentStop
+      '20. 收口拿得到支线自己的话：SubagentStop 的最后一句 + 通知自带的摘要',
+      Boolean(rec.subagentStop.find((s) => s.agentId === payload.agentId)?.lastMessage?.trim()) &&
+        Boolean(note?.summary?.trim()),
+      `last_assistant_message=${JSON.stringify(
+        rec.subagentStop.find((s) => s.agentId === payload.agentId)?.lastMessage?.slice(0, 60),
+      )} / notification.summary=${JSON.stringify(note?.summary?.slice(0, 60))}`,
     ],
   ];
 

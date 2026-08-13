@@ -3,8 +3,11 @@ import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { SCHEMA_SQL } from './schema.js';
 
-/** 3：steps.shape —— agent 声明的报告形态（v2 只有 cases.verdict_shape 这个终态）。 */
-export const SCHEMA_VERSION = 3;
+/**
+ * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（§9.16）。
+ * 3：`steps.shape` —— agent 声明的报告形态（v2 只有 `cases.verdict_shape` 这个终态）。
+ */
+export const SCHEMA_VERSION = 4;
 
 export type Db = Database.Database;
 

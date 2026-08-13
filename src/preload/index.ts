@@ -20,6 +20,7 @@ const api: InquestryApi = {
   restart: (caseId: string) => ipcRenderer.invoke('case:restart', caseId),
   send: (caseId: string, text: string) => ipcRenderer.invoke('case:send', caseId, text),
   interrupt: (caseId: string) => ipcRenderer.invoke('case:interrupt', caseId),
+  stopLane: (caseId: string, lane: string) => ipcRenderer.invoke('case:stopLane', caseId, lane),
   requestClosing: (caseId: string) => ipcRenderer.invoke('case:requestClosing', caseId),
   closeCase: (caseId: string, shape: VerdictShape) => ipcRenderer.invoke('case:close', caseId, shape),
   archiveCase: (caseId: string) => ipcRenderer.invoke('case:archive', caseId),

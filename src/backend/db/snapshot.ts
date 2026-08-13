@@ -33,6 +33,7 @@ export function buildSnapshot(
     Snapshot,
     | 'busy'
     | 'backgroundLanes'
+    | 'liveLanes'
     | 'chat'
     | 'pending'
     | 'gates'

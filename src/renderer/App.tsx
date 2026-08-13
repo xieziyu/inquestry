@@ -457,7 +457,12 @@ export function App() {
           </div>
         )}
 
-        <InvestigationTimeline steps={snap.steps} onExcerpt={showExcerpt} />
+        <InvestigationTimeline
+          steps={snap.steps}
+          liveLanes={snap.liveLanes}
+          onExcerpt={showExcerpt}
+          onStopLane={(lane) => void window.inquestry.stopLane(openCase, lane)}
+        />
       </main>
 
       <footer className="dock">
@@ -628,10 +633,15 @@ function caseStateLabel(c: CaseBrief) {
  */
 function InvestigationTimeline({
   steps,
+  liveLanes,
   onExcerpt,
+  onStopLane,
 }: {
   steps: StepNode[];
+  /** 还在跑的泳道。只有这几条给得出「停」——停一条已经收尾的支线什么都不会发生。 */
+  liveLanes: string[];
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
+  onStopLane: (lane: string) => void;
 }) {
   const layout = useMemo(() => trackLayout(steps), [steps]);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -691,7 +701,9 @@ function InvestigationTimeline({
           >
             <StepCard
               row={row}
+              live={!!row.step.lane && liveLanes.includes(row.step.lane)}
               onExcerpt={onExcerpt}
+              onStopLane={onStopLane}
               nodeRef={(el) => {
                 if (el) nodes.current.set(row.step.id, el);
                 else nodes.current.delete(row.step.id);
@@ -736,11 +748,16 @@ function CaseMetaStrip({ meta }: { meta: CaseMeta }) {
 
 function StepCard({
   row,
+  live,
   onExcerpt,
+  onStopLane,
   nodeRef,
 }: {
   row: TrackRow;
+  /** 这条支线还在跑（§3.4：支线默认在后台跑，主线这一轮收了它还可能在查）。 */
+  live: boolean;
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
+  onStopLane: (lane: string) => void;
   nodeRef: (el: HTMLElement | null) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -756,6 +773,17 @@ function StepCard({
           <span className="lanetag" title={`子 agent 泳道 ${step.lane}`}>
             支线 {step.lane.slice(-6)}
           </span>
+        )}
+        {/* 停一条支线只停它自己（§3.4），所以按钮长在那一行上而不是顶栏——
+            顶栏那枚「支线 N」说不出要停的是哪一条 */}
+        {live && step.lane && (
+          <button
+            className="stoplane"
+            title="只停这一条支线，主线与别的支线照旧"
+            onClick={() => onStopLane(step.lane!)}
+          >
+            停
+          </button>
         )}
         <span className={`state ${step.status}`}>{statusLabel(step.status)}</span>
         {row.parentLabel && (
@@ -845,7 +873,7 @@ function ChatStrip({ snap }: { snap: Snapshot }) {
 
 function statusLabel(s: string) {
   return (
-    { open: '进行中', confirmed: '已证实', refuted: '已推翻', inconclusive: '未查清', superseded: '被推翻', live: '会话中', ended: '已结束', crashed: '已中断', idle: '待开始' } as Record<string, string>
+    { open: '进行中', confirmed: '已证实', refuted: '已推翻', inconclusive: '未查清', superseded: '被推翻', converged: '已收口', live: '会话中', ended: '已结束', crashed: '已中断', idle: '待开始' } as Record<string, string>
   )[s] ?? s;
 }
 

@@ -619,7 +619,7 @@ app.whenReady().then(async () => {
   // 都必然是上一个进程留下的（进程一走，等着人回答的 Promise 也就没了）。
   // 建完 runner 再扫就会把这一轮自己的活计一起判成放弃
   const swept = sweepZombies(db, { blobDir: blobs, now: () => Date.now() });
-  if (swept.calls || swept.sessions) console.log('[main] 清扫上次遗留', swept);
+  if (swept.calls || swept.sessions || swept.lanes) console.log('[main] 清扫上次遗留', swept);
   cases = new CaseRegistry<CaseRunner>({ db, create: loadCase });
   restoreLatestCase();
 
@@ -657,6 +657,10 @@ app.whenReady().then(async () => {
     return runner ? runner.send(text) : false;
   });
   ipcMain.handle('case:interrupt', (_e, caseId: string) => cases.currentIf(caseId)?.interrupt());
+  ipcMain.handle('case:stopLane', async (_e, caseId: string, lane: string) => {
+    const runner = cases.currentIf(caseId);
+    return runner ? runner.stopLane(lane) : false;
+  });
   // 收尾后两档（D29）。问询与执行是两个入口：合成一个的话，界面就得靠 60ms 前的快照
   // 决定"这一下是问还是执行"，而隔着那一拍点下去的会是不可逆的结案
   // 对不上就回 null，不回一个「什么都不缺」的空壳：后者会让界面弹出确认条，

@@ -119,7 +119,11 @@ export type StepNode = {
    */
   lane: string | null;
   kind: 'normal' | 'unclassified' | 'impact' | 'leftover';
-  status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded';
+  /**
+   * `converged` 只出现在支线的兜底步上（§9.16）：那一步没有命题，所以它不是一种判定，
+   * 只是说"这条支线到此为止"。报告那几栏按具体 status 取，它因此哪一栏都不进。
+   */
+  status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded' | 'converged';
   direction: string | null;
   verdict: string | null;
   confidence: number | null;
@@ -300,6 +304,12 @@ export type Snapshot = {
    * 而它中断的是一轮已经收完的 turn），要么把它说成空闲——正是这一条要防的。
    */
   backgroundLanes: number;
+  /**
+   * 还没收尾的那几条泳道（值是 `StepNode.lane`）。**与 `backgroundLanes` 是两个来源**：
+   * 电平由 backend 推，只说得出"还有几条"；这一份按 hook 侧的 `agent_id` 认，说得出
+   * "是哪几条"，也只有它认得出停一条要用的 `task_id`。UI 只给这里面的泳道显示「停」。
+   */
+  liveLanes: string[];
   steps: StepNode[];
   incident: IncidentEntry[];
   pending: PendingAsk[];
@@ -369,6 +379,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   lastError: null,
   busy: false,
   backgroundLanes: 0,
+  liveLanes: [],
   steps: [],
   incident: [],
   pending: [],
@@ -402,6 +413,11 @@ export type InquestryApi = {
   send(caseId: string, text: string): Promise<boolean>;
   /** 收尾三档（D29 / ui.md §8.4）。三个动作各有各的后果，不能合成一个「结束」。 */
   interrupt(caseId: string): Promise<void>;
+  /**
+   * 停掉一条还在跑的支线（§3.4）。**只停那一条**，主线与别的支线照旧跑。
+   * 回执是请求发出去了没有：已经跑完的支线停不掉，那不是故障，但按钮得有回音。
+   */
+  stopLane(caseId: string, lane: string): Promise<boolean>;
   /**
    * 问「现在还差哪几步」，缺了就顺手派给 agent。**不执行任何收尾**——
    * 点「结案」先走这条，拿到空缺口才弹确认条，于是快照过期也绕不过那道确认。

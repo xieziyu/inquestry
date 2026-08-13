@@ -184,6 +184,16 @@ button.primary small { opacity: .6; font-weight: 400; }
 .state.confirmed { color: var(--ok); }
 .state.refuted, .state.superseded { color: var(--bad); }
 .state.inconclusive { color: var(--warn); }
+/* 收口是"这条支线到此为止"，不是一种判定——所以给中性色，与已证实/已推翻分得开。
+   支线在后台查东西并不找人，一律不碰暖色（ui.md §3.2） */
+.state.converged { color: var(--dim); }
+.step.converged { border-left-color: var(--line); }
+/* 只停这一条支线：按钮长在那一行上，顶栏那枚「支线 N」说不出要停的是哪一条 */
+.step .stoplane {
+  color: var(--dim); font-size: 11px; line-height: 1.6;
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; background: transparent; cursor: pointer;
+}
+.step .stoplane:hover { color: var(--bad); border-color: var(--bad); }
 /* 限定在 head 里：`superseded` 同时是卡片自己的状态类，不限定的话整张卡的正文都会跟着变红，
    而同样被推翻的 refuted 卡不会——两种推翻看起来成了两回事 */
 .step .head .superseded { color: var(--bad); }

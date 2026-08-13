@@ -23,11 +23,18 @@ export type LaneMessage = {
   task_id?: string;
   tool_use_id?: string;
   status?: string;
+  summary?: string;
   tasks?: unknown[];
 };
 
-/** 一条支线跑完的通知。**被人停掉的支线不发 `SubagentStop`，只发这个**（A.1）。 */
-export type LaneFinish = { lane: string; agentId: string; status: string };
+/**
+ * 一条支线跑完的通知。**被人停掉的支线不发 `SubagentStop`，只发这个**（A.1），
+ * 所以收口只认它。
+ *
+ * `summary` 是**支线自己的话**：优先 `SubagentStop` 给的最后一句（那是它对主线说的结论），
+ * 退回这条通知自带的摘要。harness 不替它编一句判定——收口那一步唯一能说的就是它说过什么。
+ */
+export type LaneFinish = { lane: string; agentId: string; status: string; summary: string };
 
 export class LaneBridge {
   /** 内层 `tool_use_id` → lane key。桥的左半边，由转发上来的子 agent 消息填。 */
@@ -36,6 +43,17 @@ export class LaneBridge {
   private byAgent = new Map<string, string>();
   /** `background_tasks_changed` 给的电平：现在还有几条支线在后台跑。 */
   private level = 0;
+  /**
+   * 还没收到收尾通知的泳道（lane → agent_id）。**按 hook 侧的 `agent_id` 建，不按电平的
+   * `tasks[].task_id` 建**：后者与 `agent_id` 是不是同一个键还没有人实测过，而停一条支线
+   * 认的正是 `agent_id`（A.1 验过 `task_id === agent_id`，那是 `task_notification` 那侧）。
+   * 拿一个没验过的 id 去 `stopTask`，停不掉还是停错了都不会有报错。
+   */
+  private live = new Map<string, string>();
+  /** `SubagentStop` 给的最后一句话，按 `agent_id` 存着等收尾时用。 */
+  private lastWords = new Map<string, string>();
+  /** 已经收过尾的泳道。收尾是一次性的，第二条通知不该再惊动收口那侧。 */
+  private finished = new Set<string>();
 
   /**
    * 吸收一条流消息。返回值只在支线跑完时非空——调用方要说一声，
@@ -53,11 +71,51 @@ export class LaneBridge {
       this.level = Array.isArray(msg.tasks) ? msg.tasks.length : 0;
       return null;
     }
-    if (msg.subtype === 'task_notification' && msg.tool_use_id) {
+    if (msg.subtype === 'task_notification') {
       // `task_id` 就是那条支线的 `agent_id`（A.1）
-      return { lane: msg.tool_use_id, agentId: msg.task_id ?? '?', status: msg.status ?? 'completed' };
+      const agentId = msg.task_id ?? '?';
+      // **认过的那条优先，通知里的 `tool_use_id` 只是退路。** 两者不一致是常态：
+      // 桥没合拢时这条支线是按 `agent:<agent_id>` 记的账（`laneOf`），而通知带的是真 key——
+      // 信通知的话，收口去查一个库里从来没有过的 lane，那一步收不到、「停」也撤不掉，
+      // 一条早就跑完的支线于是挂到会话结束才被当成 orphan。这与 `laneOf` 的"认过就不改口"
+      // 是同一条纪律：**以已经记上账的那个 key 为准**。
+      // 反过来退路也省不掉——`tool_use_id` 缺席时 `agent_id` 是找得到步的唯一线索
+      const lane = this.byAgent.get(agentId) ?? msg.tool_use_id;
+      if (!lane) return null;
+      // **一条泳道只收一次尾。** 再来一条通知时照旧返回 LaneFinish 的话，收口那侧查不到
+      // 开着的步，会把它解释成"这条支线没有留下任何调用"并再说一遍——而它明明查了一堆东西
+      if (this.finished.has(lane)) return null;
+      this.finished.add(lane);
+      this.live.delete(lane);
+      return {
+        lane,
+        agentId,
+        status: msg.status ?? 'completed',
+        summary: this.lastWords.get(agentId)?.trim() || msg.summary?.trim() || '',
+      };
     }
     return null;
+  }
+
+  /**
+   * `SubagentStop` 给的最后一句话。**只存不判**：这条 hook 到得比 `task_notification` 早，
+   * 而被人停掉的那条根本不发它（A.1）——所以它是锦上添花的那一半，收口不能等它。
+   */
+  noteSubagentStop(agentId: string, lastMessage?: string): void {
+    if (lastMessage?.trim()) this.lastWords.set(agentId, lastMessage.trim());
+  }
+
+  /** 还没收尾的泳道，按第一次工具调用认出来的先后。UI 只给这些泳道显示「停」。 */
+  get liveLanes(): string[] {
+    return [...this.live.keys()];
+  }
+
+  /** 停一条支线要的 `task_id`（= `agent_id`，A.1）。认不出来就别停——停错一条不会有报错。 */
+  agentOf(lane: string): string | undefined {
+    const live = this.live.get(lane);
+    if (live) return live;
+    for (const [agentId, l] of this.byAgent) if (l === lane) return agentId;
+    return undefined;
   }
 
   /**
@@ -80,6 +138,8 @@ export class LaneBridge {
     if (known) return known;
     const lane = this.byCall.get(callId) ?? `agent:${agentId}`;
     this.byAgent.set(agentId, lane);
+    // 第一次工具调用就是这条支线「活着」的第一个证据，也是唯一一处拿得到 `agent_id` 的地方
+    this.live.set(lane, agentId);
     return lane;
   }
 
@@ -92,6 +152,9 @@ export class LaneBridge {
   reset(): void {
     this.byCall.clear();
     this.byAgent.clear();
+    this.live.clear();
+    this.lastWords.clear();
+    this.finished.clear();
     this.level = 0;
   }
 }

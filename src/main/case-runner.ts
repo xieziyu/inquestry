@@ -9,7 +9,7 @@ import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-age
 import { randomUUID } from 'node:crypto';
 
 import type { Db } from '../backend/db/database.js';
-import { LaneBridge } from './lane-bridge.js';
+import { LaneBridge, type LaneFinish } from './lane-bridge.js';
 import { locateEvidence, readBlobText } from '../backend/db/blobs.js';
 import { buildSnapshot } from '../backend/db/snapshot.js';
 import {
@@ -25,6 +25,7 @@ import {
   type CaseStatus,
   type GateOutcome,
   type InvestigationSession,
+  type LaneOutcome,
 } from '../backend/store/sqlite-store.js';
 import { createInquestryMcpServer, toolName } from '../backend/tools/sdk-mcp-adapter.js';
 import { createDemoDataSource, DEMO_TOOL, suggestOperatorAnswer } from '../backend/datasource/demo.js';
@@ -220,6 +221,7 @@ export class CaseRunner {
         {
           busy: this.busy,
           backgroundLanes: this.lanes.backgroundLanes,
+          liveLanes: this.lanes.liveLanes,
           chat: this.chat,
           pending: [...this.pending.values()].map((p) => p.ask),
           gates: [...this.gates.values()].map((g) => g.ask),
@@ -317,6 +319,19 @@ export class CaseRunner {
           PostToolUseFailure: [{ hooks: [async (input, id) => this.onToolFailed(input, id)] }],
           // 规则层的拒绝要抢在失败之前把调用收成 denied，否则会被记成工具故障
           PermissionDenied: [{ hooks: [async (input, id) => this.onPermissionDenied(input, id)] }],
+          // 支线最后说的那句话就在这条 hook 的载荷里，省了去读 transcript 文件。
+          // **只存不判**：被人停掉的那条根本不发它（A.1），收口一律等 `task_notification`
+          SubagentStop: [
+            {
+              hooks: [
+                async (input) => {
+                  const i = input as { agent_id?: string; last_assistant_message?: string };
+                  if (i.agent_id) this.lanes.noteSubagentStop(i.agent_id, i.last_assistant_message);
+                  return {};
+                },
+              ],
+            },
+          ],
         },
       },
     });
@@ -342,7 +357,7 @@ export class CaseRunner {
         const finished = this.lanes.absorb(msg as never);
         // 一条后台支线跑完不说一声，就是"悄悄地查完悄悄地回来"（§3.4）。
         // 认 `task_notification` 而不是 `SubagentStop`：被人停掉的那条不发后者
-        if (finished) this.pushChat('system', `支线 ${finished.lane.slice(-6)} 已${laneEndLabel(finished.status)}。`);
+        if (finished) this.convergeLane(finished);
         if (msg.type === 'assistant') {
           const text = extractText((msg as { message?: { content?: unknown } }).message?.content);
           if (text.trim()) this.pushChat('assistant', text);
@@ -361,10 +376,10 @@ export class CaseRunner {
           this.onChange();
         }
       }
-      if (mine()) this.endOnce('ended');
+      if (mine()) this.endOnce('ended', '会话的消息流结束了。');
     } catch (err) {
       if (mine()) {
-        this.endOnce('crashed');
+        this.endOnce('crashed', '会话出错中断了。');
         this.pushChat('system', `会话出错：${(err as Error).message}`);
       }
     } finally {
@@ -419,7 +434,7 @@ export class CaseRunner {
     // 一直挂到下次启动清扫——而那时案子早就冻上、甚至已经导出了。
     // 中断走的是另一条路：它不关查询，在跑的调用会由 PostToolUseFailure 带 is_interrupt 收尾
     this.abandonInFlight(why);
-    this.endOnce('ended');
+    this.endOnce('ended', why);
     this.q?.close();
     this.q = null;
     // **收尾这条路上没有别人会清它**：`consume()` 的 finally 认的是 `this.q === q`，
@@ -477,11 +492,65 @@ export class CaseRunner {
     for (const r of rows) this.abandonCall(r.id, why);
   }
 
-  private endOnce(status: 'ended' | 'crashed') {
+  /**
+   * 一条支线跑完了：收口它那一步，并在对话带上说一声（§9.16）。
+   *
+   * **收口的内容是支线自己的话**（`SubagentStop` 的最后一句，退回通知里的摘要）。
+   * harness 不替它下判定——那一步没有命题，`confirmed` / `refuted` 都无从谈起，
+   * 而借 `inconclusive` 会让每条跑完的支线在报告里变成一条「遗留疑点」。
+   *
+   * 主线随后多半会把这条支线的结论写进自己那一步；这里收的只是"支线到此为止"。
+   */
+  private convergeLane(finished: LaneFinish) {
+    const label = laneEndLabel(finished.status);
+    const summary =
+      finished.summary || `（这条支线${label}了，但没有留下可读的结论——它的调用都记在这一步下面。）`;
+    const stepId = this.session?.convergeLane({
+      lane: finished.lane,
+      outcome: laneOutcome(finished.status),
+      summary: finished.summary ? `支线${label}：${finished.summary}` : summary,
+    });
+    // 一次工具调用都没打的支线没有步可收，但它跑完了这件事照旧要说一声
+    this.pushChat(
+      'system',
+      `支线 ${finished.lane.slice(-6)} 已${label}${stepId ? '，已收口。' : '（没有留下任何调用）。'}`,
+    );
+    this.onChange();
+  }
+
+  /**
+   * 停掉一条还在跑的支线（§3.4 / A.1）。回执是**真的发出去了没有**：
+   * 认不出 `agent_id` 就不发——`stopTask` 认的是它，拿别的键去停不会有任何报错。
+   *
+   * 这里不收口那一步：停掉的支线照样会发 `task_notification`（`status='stopped'`），
+   * 收口走的仍是那一条路。两处各收一次的话，收口时刻会被这一下提前，
+   * 而后到的通知已经收不到开着的步了。
+   */
+  async stopLane(lane: string): Promise<boolean> {
+    const agentId = this.lanes.agentOf(lane);
+    if (!agentId || !this.q) return false;
+    try {
+      await this.q.stopTask(agentId);
+      this.pushChat('system', `已请求停掉支线 ${lane.slice(-6)}。`);
+      this.onChange();
+      return true;
+    } catch (err) {
+      // 已经跑完的支线停不掉，这不是故障——但人按下去总得有个回音
+      this.pushChat('system', `支线 ${lane.slice(-6)} 停不掉了：${(err as Error).message}`);
+      this.onChange();
+      return false;
+    }
+  }
+
+  private endOnce(status: 'ended' | 'crashed', why = '会话已经结束了。') {
     // 会话没开过就没什么可收的：立完案没点「开始排查」就关窗是常态
     if (this.ended || !this.session) return;
     this.ended = true;
     this.status = status;
+    // **支线的收口必须与会话收尾在同一个漏斗里。** 挂在 `close()` 上只盖得住"人主动收"
+    // 那一条路：断流与崩溃只走这儿，而它们之后 `consume()` 的 finally 立刻 `lanes.reset()`，
+    // 那几步就再没有人收得了——轨道上一条永远"还在查"的支线，会一直挂到下次启动清扫
+    this.session.convergeOpenLanes(`（这条支线没有收尾：${why}）`);
     this.session.endSession(status);
   }
 
@@ -910,6 +979,11 @@ function hookDecision(permissionDecision: 'allow' | 'deny' | 'ask', permissionDe
 /** 支线跑完的措辞。`stopped` 是人手动停的，与自己跑完不是一回事。 */
 function laneEndLabel(status: string): string {
   return status === 'stopped' ? '被停下' : status === 'failed' ? '失败收场' : '跑完';
+}
+
+/** 通知里的 status 只有这三种（SDK 类型），认不出的一律当跑完——收口不该卡在一个新枚举上。 */
+function laneOutcome(status: string): LaneOutcome {
+  return status === 'stopped' || status === 'failed' ? status : 'completed';
 }
 
 function hardDenyMessage(name: string) {

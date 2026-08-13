@@ -118,6 +118,24 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       insertNarrative(db, deps.caseId, p.stepId, 'verdict', p.verdict);
       return;
     }
+    case 'lane.converged': {
+      const p = ev.payload;
+      // **只收还开着的那一步**，这条事件因此是幂等的：同一条应用两次不改口。
+      // 照写的话，收口时刻会被后一次往后挪，轨道上一条早就结束的支线显示成刚刚才停。
+      // 发事件那侧也各自挡了一道（桥只收一次尾、三个发送口都只挑开着的步），
+      // **两道闸各管一段**：那一侧管"别发第二条"，这一侧管"发了也不听"（§9.16）
+      const converged = db
+        .prepare(`UPDATE steps SET status='converged', verdict_text=?, t_end=? WHERE id=? AND status='open'`)
+        .run(p.summary, p.at, p.stepId);
+      // **幂等要连检索索引一起算。** 上面那句可能命中 0 行，而这句照写的话，
+      // 同一条事件应用两次就在 `narrative_fts` 里留下两条一模一样（或互相矛盾）的摘要，
+      // 跨案检索会把它们都翻出来——步的状态看着没变，索引却已经脏了
+      if (converged.changes === 1) {
+        // 进检索，但**不是 verdict**：它是支线自己的话，不是对某个命题的判定
+        insertNarrative(db, deps.caseId, p.stepId, 'lane', p.summary);
+      }
+      return;
+    }
     case 'step.superseded': {
       const p = ev.payload;
       db.prepare(`UPDATE steps SET status='superseded', superseded_by=? WHERE id=?`).run(p.by, p.stepId);

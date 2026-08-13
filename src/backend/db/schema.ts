@@ -96,7 +96,10 @@ CREATE TABLE IF NOT EXISTS steps (
   shape              TEXT CHECK (shape IN ('sequence','state','chain','distribution','open')),
   verdict_text       TEXT,
   verdict_confidence REAL CHECK (verdict_confidence BETWEEN 0 AND 1),
-  status             TEXT    NOT NULL CHECK (status IN ('open','confirmed','refuted','inconclusive','superseded')),
+  -- \`converged\` 只给子 agent 泳道的兜底步：它没有命题，所以不可能有判定，
+  -- 而报告那几栏（根因 / 遗留疑点 / 被推翻）都按具体 status 取，它因此哪一栏都不进。
+  -- 借用 \`inconclusive\` 会让每条跑完的支线变成一条「遗留疑点」（queries.ts 只看 status 不看 kind）
+  status             TEXT    NOT NULL CHECK (status IN ('open','confirmed','refuted','inconclusive','superseded','converged')),
   superseded_by      TEXT REFERENCES steps(id),
   t_start            INTEGER NOT NULL,
   t_end              INTEGER,
