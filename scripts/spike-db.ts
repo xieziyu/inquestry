@@ -142,7 +142,7 @@ function seed(db: Database.Database): Event[] {
   // ── step 1：走错的方向，后面被推翻
   e('step.opened', { id: 'st1', sessionId: S, ordinal: 1, direction: '怀疑前端重复提交：按钮没防抖导致点了两次' }, 10);
   e('blob.stored', { sha256: sha(gwLog), size: gwLog.length, mime: 'text/plain', lineCount: 1, text: gwLog }, 11);
-  e('toolcall.completed', { id: 'tc1', sessionId: S, stepId: 'st1', tool: 'cls_query', input: '{"q":"/submit"}', sha256: sha(gwLog) }, 12);
+  e('toolcall.completed', { id: 'tc1', sessionId: S, stepId: 'st1', tool: 'query_logs', input: '{"q":"/submit"}', sha256: sha(gwLog) }, 12);
   e(
     'evidence.attached',
     { id: 'ev1', stepId: 'st1', toolCallId: 'tc1', anchor: '1-1', claim: '网关只收到一次用户点击提交', occurredAt: at(1.22), occurredRaw: '12:03:01.220', actor: 'gateway' },
@@ -167,7 +167,7 @@ function seed(db: Database.Database): Event[] {
   // ── step 3：真因。最早发生的事件之一，却是最后才查到
   e('step.opened', { id: 'st3', sessionId: S, ordinal: 3, direction: '怀疑主从复制延迟：重试时读从库未命中，于是又写了一条' }, 30);
   e('blob.stored', { sha256: sha(appLog), size: appLog.length, mime: 'text/plain', lineCount: 2, text: appLog }, 31);
-  e('toolcall.completed', { id: 'tc2', sessionId: S, stepId: 'st3', tool: 'cls_query', input: '{"q":"replica"}', rewritten: 1, gate: 'rewrite', sha256: sha(appLog) }, 32);
+  e('toolcall.completed', { id: 'tc2', sessionId: S, stepId: 'st3', tool: 'query_logs', input: '{"q":"replica"}', rewritten: 1, gate: 'rewrite', sha256: sha(appLog) }, 32);
   e(
     'evidence.attached',
     { id: 'ev4', stepId: 'st3', toolCallId: 'tc2', anchor: '1-2', claim: '服务端读从库未命中 id=X，主从复制延迟 340ms', occurredAt: at(2.24), occurredRaw: '12:03:02.240', actor: 'app' },
