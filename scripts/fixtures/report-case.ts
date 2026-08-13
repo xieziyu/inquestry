@@ -22,6 +22,7 @@ export function step(p: Partial<StepNode> & { id: string }): StepNode {
     sessionId: 'se1',
     sessionIndex: 1,
     parentStepId: null,
+    lane: null,
     kind: 'normal',
     status: 'open',
     direction: p.id,

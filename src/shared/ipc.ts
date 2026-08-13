@@ -111,6 +111,13 @@ export type StepNode = {
    * 原样落库会直接炸），所以这里到手的要么是本案子里的真 step，要么就是 null。
    */
   parentStepId: string | null;
+  /**
+   * 这一步属于哪条子 agent 泳道（overview §4.5）；null = 主干。
+   *
+   * 值是**起这条支线那次调用的 `tool_use_id`**，UI 只拿它当"是不是支线"的开关与短标识，
+   * 缩进照旧走 `parentStepId`——轨道不必认识泳道，一条支线在它眼里就是一次分叉（D23）。
+   */
+  lane: string | null;
   kind: 'normal' | 'unclassified' | 'impact' | 'leftover';
   status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded';
   direction: string | null;
@@ -285,6 +292,14 @@ export type Snapshot = {
    */
   lastError: string | null;
   busy: boolean;
+  /**
+   * 还有几条子 agent 支线在后台跑（§3.4）。
+   *
+   * **与 `busy` 分开**：`result` 一到主线就不忙了，而支线默认就在后台跑，那一刻很可能
+   * 还有一条在查。合成一个的话，界面要么把"只剩支线"说成主线在跑（停止按钮跟着冒出来，
+   * 而它中断的是一轮已经收完的 turn），要么把它说成空闲——正是这一条要防的。
+   */
+  backgroundLanes: number;
   steps: StepNode[];
   incident: IncidentEntry[];
   pending: PendingAsk[];
@@ -353,6 +368,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   sessionStatus: 'idle',
   lastError: null,
   busy: false,
+  backgroundLanes: 0,
   steps: [],
   incident: [],
   pending: [],

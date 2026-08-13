@@ -70,6 +70,11 @@ export type InvestigationSession = {
     toolName: string;
     input: unknown;
     agentId?: string;
+    /**
+     * 这次调用属于哪条子 agent 泳道（overview §4.5），主线为空。
+     * 由 `LaneBridge` 算出——**不能在这里按 agentId 猜**，两个键天生不同。
+     */
+    lane?: string;
     /** 闸门先于 PreToolUse 落定时，判决直接写进 started，不必再补一条 gated。 */
     gate?: GateOutcome;
   }): { callNumber: number; stepId: string };
@@ -285,11 +290,24 @@ export function createInvestigationSession(
     },
   });
 
-  /** 没有 open step 时的兜底节点（overview §4.4）：工具调用不能丢。 */
-  function ensureStep(): string {
+  /**
+   * 没有 open step 时的兜底节点（overview §4.4）：工具调用不能丢。
+   *
+   * **按泳道各算各的。** 主干与每条支线各有一个「当前 open 的 step」——共用一个的话，
+   * 一条后台支线查到的东西会记进主线正开着的那一步，报告里于是有一步的证据来自
+   * 一条它从没发起过的查询。`lane IS ?` 而不是 `=`：主干那侧绑的是 NULL。
+   *
+   * 支线的兜底节点**挂在起它那次调用所在的步下面**：lane key 就是那次调用的
+   * `tool_use_id`，顺着它查一次就得到父。轨道因此不必认识泳道，照旧按
+   * `parent_step_id` 把它缩进成一条分叉（D23）。
+   */
+  function ensureStep(lane?: string): string {
     const open = db
-      .prepare(`SELECT id FROM steps WHERE session_id=? AND status='open' ORDER BY ordinal DESC LIMIT 1`)
-      .get(ctx.sessionId) as { id: string } | undefined;
+      .prepare(
+        `SELECT id FROM steps WHERE session_id=? AND lane IS ? AND status='open'
+         ORDER BY ordinal DESC LIMIT 1`,
+      )
+      .get(ctx.sessionId, lane ?? null) as { id: string } | undefined;
     if (open) return open.id;
     const id = ctx.newId('st');
     emit({
@@ -300,10 +318,22 @@ export function createInvestigationSession(
         ordinal: nextOrdinal(),
         kind: 'unclassified',
         direction: null,
+        parentStepId: lane ? laneParent(lane) : undefined,
+        lane,
         at: ctx.now(),
       },
     });
     return id;
+  }
+
+  /**
+   * 起这条支线那次调用落在哪一步。查不到就当主干——`parent_step_id` 上有开着的外键，
+   * 编一个 id 出去换来的是整个事务回滚，那次工具调用连账都记不上。
+   */
+  function laneParent(lane: string): string | undefined {
+    return (db.prepare(`SELECT step_id FROM tool_calls WHERE id=?`).get(lane) as
+      | { step_id: string }
+      | undefined)?.step_id;
   }
 
   const nextOrdinal = () =>
@@ -479,8 +509,8 @@ export function createInvestigationSession(
     store,
     intake,
 
-    recordToolStart({ callId, toolName, input, agentId, gate }) {
-      const stepId = ensureStep();
+    recordToolStart({ callId, toolName, input, agentId, lane, gate }) {
+      const stepId = ensureStep(lane);
       const before = db
         .prepare(`SELECT COUNT(*) c FROM tool_calls WHERE step_id=?`)
         .get(stepId) as { c: number };

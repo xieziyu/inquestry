@@ -31,7 +31,14 @@ export function buildSnapshot(
   ctx: { caseId: string; blobDir: string; agent: AgentChoice },
   extra: Pick<
     Snapshot,
-    'busy' | 'chat' | 'pending' | 'gates' | 'sessionStatus' | 'cases' | 'lastError'
+    | 'busy'
+    | 'backgroundLanes'
+    | 'chat'
+    | 'pending'
+    | 'gates'
+    | 'sessionStatus'
+    | 'cases'
+    | 'lastError'
   >,
 ): Snapshot {
   const meta = caseMeta(db, ctx.caseId, ctx.agent);
@@ -51,8 +58,8 @@ export function buildSnapshot(
 
   const steps = db
     .prepare(
-      `SELECT s.id, s.session_id, s.parent_step_id, s.ordinal, s.kind, s.status, s.direction, s.verdict_text,
-              s.verdict_confidence, s.superseded_by
+      `SELECT s.id, s.session_id, s.parent_step_id, s.lane, s.ordinal, s.kind, s.status, s.direction,
+              s.verdict_text, s.verdict_confidence, s.superseded_by
        FROM steps s JOIN sessions se ON se.id = s.session_id
        WHERE se.case_id=? ORDER BY se.started_at, se.rowid, s.ordinal`,
     )
@@ -60,6 +67,7 @@ export function buildSnapshot(
     id: string;
     session_id: string;
     parent_step_id: string | null;
+    lane: string | null;
     ordinal: number;
     kind: StepNode['kind'];
     status: StepNode['status'];
@@ -122,6 +130,7 @@ export function buildSnapshot(
     sessionId: s.session_id,
     sessionIndex: sessionIndex.get(s.session_id) ?? 1,
     parentStepId: s.parent_step_id,
+    lane: s.lane,
     kind: s.kind,
     status: s.status,
     direction: s.direction,

@@ -9,6 +9,7 @@ import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-age
 import { randomUUID } from 'node:crypto';
 
 import type { Db } from '../backend/db/database.js';
+import { LaneBridge } from './lane-bridge.js';
 import { locateEvidence, readBlobText } from '../backend/db/blobs.js';
 import { buildSnapshot } from '../backend/db/snapshot.js';
 import {
@@ -61,6 +62,10 @@ const CHORES = ['TodoWrite', 'ToolSearch'];
  * 里面若有 allow 规则，canUseTool 根本不会被问到，只靠这里的判断守不住。
  */
 const NEVER_ALLOWED = ['Bash', 'BashOutput', 'KillShell', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+/** 支线想自己开步/收步时回的话。得说清替代做法，否则它只会换个姿势再试一次。 */
+const LANE_STRUCTURAL_DENY =
+  '支线不记账：open_step / close_step 只有主线用得了。把你查到的东西和结论写进给主线的回复里，' +
+  '由主线来开步收步——你这条支线的每次工具调用都已经自动记在它自己的节点上了。';
 
 type Pending = {
   ask: PendingAsk;
@@ -112,6 +117,8 @@ export class CaseRunner {
   /** 闸门赶在 PreToolUse 之前落定时，判决先搁这儿，等 started 事件把它带上。 */
   private preGated = new Map<string, GateOutcome>();
   private busy = false;
+  /** 子 agent 泳道的归属桥与后台电平（§3.4 / §4.5）。 */
+  private lanes = new LaneBridge();
   private ended = false;
   /** 最近一轮的失败原因。会话可能还「活着」但已经跑不动了，这是 UI 唯一的线索。 */
   private lastError: string | null = null;
@@ -156,8 +163,13 @@ export class CaseRunner {
     return this.pending.size + this.gates.size;
   }
 
+  /**
+   * 「这个案子还在跑吗」。**支线也算**：`result` 一到主线就不忙了，而那一刻后台可能
+   * 还有几条支线在查。只看主线的话，`trimIdle()` 会把一个正有支线在跑的运行时卸掉，
+   * 案件切换栏也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
+   */
   get isBusy() {
-    return this.busy;
+    return this.busy || this.lanes.backgroundLanes > 0;
   }
 
   get sessionStatus() {
@@ -174,6 +186,8 @@ export class CaseRunner {
       this.ended = false;
       this.session = null;
       this.sessionId = randomUUID();
+      // lane key 是上一次会话的 `tool_use_id`，留着只会把新会话的调用配到旧泳道上
+      this.lanes.reset();
     }
     return this.openSession();
   }
@@ -205,6 +219,7 @@ export class CaseRunner {
         { caseId: this.caseId, blobDir: this.blobs, agent: this.init.agent },
         {
           busy: this.busy,
+          backgroundLanes: this.lanes.backgroundLanes,
           chat: this.chat,
           pending: [...this.pending.values()].map((p) => p.ask),
           gates: [...this.gates.values()].map((g) => g.ask),
@@ -322,6 +337,12 @@ export class CaseRunner {
     try {
       for await (const msg of q) {
         if (!mine()) return;
+        // 泳道归属只在活着的时候拼得出来（§4.5）：转发上来的子 agent 消息是桥的左半边，
+        // 而 hook 那侧的调用随时可能到——先吸收再往下走
+        const finished = this.lanes.absorb(msg as never);
+        // 一条后台支线跑完不说一声，就是"悄悄地查完悄悄地回来"（§3.4）。
+        // 认 `task_notification` 而不是 `SubagentStop`：被人停掉的那条不发后者
+        if (finished) this.pushChat('system', `支线 ${finished.lane.slice(-6)} 已${laneEndLabel(finished.status)}。`);
         if (msg.type === 'assistant') {
           const text = extractText((msg as { message?: { content?: unknown } }).message?.content);
           if (text.trim()) this.pushChat('assistant', text);
@@ -355,6 +376,9 @@ export class CaseRunner {
         this.q = null;
         this.inbox = createInbox();
         this.busy = false;
+        // 电平得跟着查询一起归零：消息流没了就再也不会有 `background_tasks_changed`
+        // 把它推回 0，留着的话这个运行时永远"忙着"——界面停在进行中，`trimIdle()` 也永久跳过它
+        this.lanes.reset();
         this.onChange();
       }
     }
@@ -403,6 +427,7 @@ export class CaseRunner {
     // 留着 busy=true 的后果不只是界面一直显示「进行中」——`trimIdle()` 跳过忙着的运行时，
     // 于是每收尾一个就永久占住一格，载入上限形同虚设
     this.busy = false;
+    this.lanes.reset();
     // 输入流是**跟着查询走的**：`createInbox` 是一个 async generator，只能有一个消费者。
     // 不在这儿换掉的话，`restart()` 随后 push 进去的开场白会被正在收尾的旧查询取走，
     // 或者旧迭代器一关、新查询上来直接看到 done——库里已经有了新 session、界面显示
@@ -739,7 +764,14 @@ export class CaseRunner {
     if (!i.tool_name || !toolUseID) return {};
     const verdict = this.classify(i.tool_name);
     // 结构工具就是账本本身，不给自己记一笔
-    if (STRUCTURAL.has(i.tool_name)) return {};
+    if (STRUCTURAL.has(i.tool_name)) {
+      // **支线不记账**（§4.5：泳道各自收敛回主干节点）。放它开步的话，那一步落在主干上
+      // （MCP 那侧拿不到 agent_id，泳道传不进去），主线随后的调用就会记进一个支线开的步里；
+      // close_step 更糟，一条支线收得掉另一条根本不认识的步。所以这里当场回绝并说清怎么办
+      if (i.agent_id) return hookDecision('deny', LANE_STRUCTURAL_DENY);
+      return {};
+    }
+    const lane = this.lanes.laneOf(toolUseID, i.agent_id);
 
     // hook 的 deny 会绕过 canUseTool（SDK 契约），所以硬边界的记账只能落在这一侧
     const gate: GateOutcome | undefined =
@@ -753,6 +785,7 @@ export class CaseRunner {
       toolName: i.tool_name,
       input: i.tool_input,
       agentId: i.agent_id,
+      lane,
       gate,
     });
     // 回填卡与它的调用在这里连线：hook 一定先于工具正文，正文里才发得出那张卡
@@ -872,6 +905,11 @@ function hookDecision(permissionDecision: 'allow' | 'deny' | 'ask', permissionDe
   return {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason },
   } as never;
+}
+
+/** 支线跑完的措辞。`stopped` 是人手动停的，与自己跑完不是一回事。 */
+function laneEndLabel(status: string): string {
+  return status === 'stopped' ? '被停下' : status === 'failed' ? '失败收场' : '跑完';
 }
 
 function hardDenyMessage(name: string) {

@@ -154,6 +154,11 @@ button.primary small { opacity: .6; font-weight: 400; }
   background: var(--line);
 }
 .step .branch { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+/* 支线标识用中性色：暖色是「需要人动手」的全局专属，一条支线在后台查东西不找人 */
+.step .lanetag {
+  color: var(--dim); font-family: var(--mono); font-size: 11px;
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}
 .step .refuter { color: var(--bad); font-size: 11.5px; }
 
 /* 全屏只有这一种曲线，它只表示推翻——一出现就不用读字也知道发生了什么 */

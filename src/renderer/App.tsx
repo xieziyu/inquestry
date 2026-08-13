@@ -328,6 +328,13 @@ export function App() {
           <span className={`pill ${snap.busy ? 'busy' : snap.sessionStatus}`}>
             {snap.busy ? '进行中' : statusLabel(snap.sessionStatus)}
           </span>
+          {/* 支线默认就在后台跑（§3.4）：主线这一轮收了，后台可能还有一条在查。
+              不单独说一句的话，屏幕上写着"空闲"而实际还在查——正是这一条要防的 */}
+          {snap.backgroundLanes > 0 && (
+            <span className="pill busy" title="子 agent 支线在后台跑，主线不等它">
+              支线 {snap.backgroundLanes}
+            </span>
+          )}
           {/* 收尾三档各是一个动作，不合成一个「结束」（D29）：
               停止随时能接着查、结案要走完两个强制 step、归档是明写的放弃 */}
           {!frozen && (
@@ -743,6 +750,13 @@ function StepCard({
       <div className="head">
         <span className="ord">{row.label}</span>
         <span className={`kind ${step.kind}`}>{kindLabel(step.kind)}</span>
+        {/* 缩进只说明"接在谁下面"，说不出是不是另一条 agent 在查——
+            支线里的调用没经过主线的判断，读的人有权知道 */}
+        {step.lane && (
+          <span className="lanetag" title={`子 agent 泳道 ${step.lane}`}>
+            支线 {step.lane.slice(-6)}
+          </span>
+        )}
         <span className={`state ${step.status}`}>{statusLabel(step.status)}</span>
         {row.parentLabel && (
           <span className="branch" title={row.depthCapped ? '缩进已到头，父子关系仍在' : undefined}>
@@ -757,7 +771,12 @@ function StepCard({
         )}
         {row.refutes.length > 0 && <span className="refuter">推翻了 {row.refutes.join('、')}</span>}
       </div>
-      <p className="direction">{step.direction ?? '（未归类：agent 在声明方向之前就先查了一次）'}</p>
+      <p className="direction">
+        {step.direction ??
+          (step.lane
+            ? '（支线：子 agent 自己的调用都记在这里，方向由主线在收敛回来时给）'
+            : '（未归类：agent 在声明方向之前就先查了一次）')}
+      </p>
       {step.verdict && <p className="verdict">{step.verdict}</p>}
 
       {step.evidence.length > 0 && (
