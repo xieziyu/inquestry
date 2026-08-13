@@ -260,7 +260,11 @@ lane key 用起子 agent 那次调用的 `tool_use_id`。**但记账口给的是
 - **活体桥是内层那次调用的 `tool_use_id`**：hook 侧有它（连同 `agent_id`），转发上来的子 agent 消息里也有它（连同 `parent_tool_use_id` = lane key），按它一 join，`agent_id ↔ lane` 就闭合了。**不要按到达顺序或"最近一次 Task 调用"去猜**——并发时支线的到达顺序会与发起顺序反过来，实测如此
 - 支线**跑完之后**还有两条便宜的路，可用来对账、不能用来实时归属：Agent 的 tool_result（`tool_use_result.agentId`）、以及 `task_notification`（`task_id` 就是 `agent_id`，同一条消息带 `tool_use_id`）
 - **`forwardSubagentText` 只管子 agent 的正文。** 不开这个开关，子 agent 的 `tool_use` 块照样带 `parent_tool_use_id` 转发上来——**泳道归属不依赖它**，它只决定支线里的文本/thinking 渲不渲染
-- Timeline 做成**泳道**：主干一条线，并发时 fan-out 成平行支线，各自收敛回主干节点
+- Timeline 做成**泳道**：主干一条线，并发时 fan-out 成平行支线，各自收敛回主干节点。
+  **落地时泳道没有成为轨道的一个新概念**：每条泳道各有一个「当前 open 的 step」，
+  它的 `parent_step_id` 指到起这条支线那次调用所在的那一步，轨道于是照旧把它当一次分叉缩进（ui.md §3.2）
+- **支线不记账**：`open_step` / `close_step` 只有主线用得了，带 `agent_id` 的当场被 PreToolUse 回绝。
+  MCP 那侧拿不到 `agent_id`，泳道传不进去——放它开步，那一步会落在主干上，主线随后的调用就记进一个支线开的步里
 - SDK 有选项开启**子 agent 周期性进度摘要**（约 30s fork 一次子会话生成一句话摘要，前后台都适用，官方说明成本很低）——泳道上"这条支线正在干嘛"不用自己实现
 - 子 agent transcript 落盘：`~/.claude/projects/<dir>/<sessionId>/subagents/agent-<agentId>.jsonl`；SDK 提供 `getSubagentMessages` / `listSubagents`
 
@@ -645,11 +649,23 @@ agent 的增量负担只是**多填一个枚举**，块的组装由 harness 做�
     - **处置**：`backgroundTasks(toolUseId)` 只针对那一条，成立。但**支线默认就在后台跑**（`run_in_background` 默认为真），所以 §3.4 的重点从"能不能折叠到后台"挪成了"一条已经在后台跑的支线怎么让人看得见"
     - **顺带推翻了 §3.4 一条从没调过的旧断言**：单条泳道**停得掉**（`stopTask(taskId)`，回执 `stopped`）。代价是它不发 `SubagentStop`——收尾要认 `task_notification`
 
-15. **接下来**：**把泳道接进轨道**。`lane` 那一列到现在还没有读它的人，A2 只证明了数据拿得到。要动的三处：
+15. **把泳道接进轨道** —— ✅ **已完成**，见 [ui](ui.md) §3.2，由 `npm run spike:branch` 兜底（离线，进 `spike:all`；真会话那侧仍归 `spike:lane`）。
 
-    - `case-runner` 记账时按 A.1 的桥算出 `lane` 并写进 `open_step` / `tool_calls`
-    - 轨道渲染分叉（D23：主干纵向单调追加、永不重排，分叉只向右生长）
-    - ⚠️ **支线默认异步会戳到会话状态**：现在 `result` 一到就 `busy = false`，而那一刻支线可能还在后台跑。界面会说"空闲"，其实还有一条在查——`task_notification` 与 `background_tasks_changed` 的电平都得接上
+    A.1 的桥落成 `src/main/lane-bridge.ts`：单独一个文件是因为它是这一带唯一算得出对错的部分，spike 直接喂消息给它就行。三处各带一条实现时才想清楚的：
+
+    - **归属**：转发消息与 hook 谁先到不保证，桥还没合拢时**决不能回主干**——那次支线查询会记进主线正开着的那一步，报告里于是有一步的证据来自它从没发起过的查询，且没有任何报错。所以有 `agent_id` 就一定不是主干：桥没合拢就退回 `agent:<agent_id>` 这个临时 key，代价只是那条泳道认不出父、在轨道上落到主干层显示（徽标照旧）。**而且一个 `agent_id` 认过的泳道就不再改口**——桥晚一步合拢时升级 key，换来的是同一条支线裂成两步，已经记上账的那几次留在旧 key 上，正是 D23 禁的那种回头改
+    - **分叉不必让轨道认识泳道**：泳道的兜底步把 `parent_step_id` 指到**起它那次调用所在的那一步**（lane key 就是那次调用的 `tool_use_id`，顺着查一次就有），`trackLayout` 于是原样把它缩进成一次分叉，一行没改。查不到那次调用时落回主干层——`parent_step_id` 上有开着的外键，编一个 id 出去是整个事务回滚，那次工具调用连账都记不上
+    - **`tool_calls` 没有加 `lane` 列**（§9.15 原话是"写进 `open_step` / `tool_calls`"）：泳道挂在步上，调用侧已有 `agent_id`，要查泳道 join 一次步就够。加一列换来的是一次 schema 升版与整个开发库归档，而它推不出任何新东西
+    - **每条泳道各有一个「当前 open 的 step」**（`lane IS ?`，主干那侧绑 NULL）。共用一个的话，一条后台支线查到的东西会记进主线正开着的那一步，报告里于是有一步的证据来自它从没发起过的查询
+    - **支线不记账**：`open_step` / `close_step` 带 `agent_id` 时 PreToolUse 当场回绝并说清替代做法。不拦的话那一步会落在主干上（MCP 那侧拿不到 `agent_id`，泳道传不进去），主线随后的调用就记进一个支线开的步里；`close_step` 更糟，一条支线收得掉另一条根本不认识的步
+    - **会话状态分成两个读数**：`snapshot.busy` 仍只说主线这一轮，新增 `backgroundLanes` 说后台还有几条。合成一个的话，界面要么把"只剩支线"说成主线在跑（停止按钮跟着冒出来，而它中断的是一轮已经收完的 turn），要么把它说成空闲。对外的 `isBusy`（`trimIdle` 与案件切换栏的 `running` 用它）取两者之或——不然一个正有支线在跑的运行时会被卸掉
+    - ⚠️ **电平必须跟着查询一起归零**：消息流一没，`background_tasks_changed` 就再也不会把它推回 0，这个运行时于是永远"忙着"——界面停在进行中，`trimIdle()` 也永久跳过它。`consume` 的 finally、`close()`、换会话三处都要清
+
+16. **接下来**：**支线的收敛**。现在一条支线跑完只在对话带上留一句话，它那一步永远停在 `unclassified` / `open`：
+
+    - 泳道的兜底步没有收口的人。主线在回复里消化了支线的结论，但那一步的 `direction` / `verdict` 仍是空的，报告里它只是一堆没有命题的调用
+    - `SubagentStop` 给的 transcript 路径与 `getSubagentMessages` 都还没有人读——支线内部的推理过程现在完全看不到，只看得见它调了哪些工具
+    - 停一条支线的入口还没有（`stopTask(taskId)` 已由 A.1 验过能停，`task_id` 就是 `agent_id`，第一次工具调用的 hook 里就有）
 
 ---
 

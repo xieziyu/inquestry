@@ -96,6 +96,25 @@
   给「被 X 推翻」徽标写的 `.superseded { color }` 不限定在 `.head` 里就会把整张卡的正文染红，
   而同为推翻的 `refuted` 卡不会——看起来成了两回事
 
+### 3.2 子 agent 泳道就是一次分叉
+
+归属那半在 harness 侧（overview §4.5 / §9.15，桥在 `src/main/lane-bridge.ts`），
+轨道这半**一行没改**：泳道的兜底步把 `parent_step_id` 指到起它那次调用所在的那一步，
+`trackLayout` 照旧按父子缩进。轨道不认识泳道，也不该认识——它只管"接在谁下面"。
+
+- **缩进说不出「这是另一条 agent 在查」**，所以卡片上另有一枚中性色的「支线 ⟨key 后六位⟩」徽标。
+  **不用暖色**：暖色是「需要人动手」的全局专属，一条支线在后台查东西并不找人
+- **一条支线可能认不出自己的父**（桥比第一次工具调用晚到时，overview §9.15）。那一行落在主干层，
+  但徽标照旧——读的人看得出"这是另一条 agent 在查"，只是不知道接在哪一步。反过来把它当主干显示才是错的
+- **支线的兜底步没有 `direction`，但它的空文案与主干那条不一样。**
+  主干那句是「agent 在声明方向之前就先查了一次」，支线那句得说清方向由主线收敛时给——
+  照抄主干那句的话，读的人会以为主线漏了一次 `open_step`
+- **顶栏的「支线 N」与「进行中」是两枚独立的药丸。** 支线默认就在后台跑（overview §3.4），
+  主线这一轮收了之后它还可能在查。合成一个的话，界面要么把"只剩支线"说成主线在跑
+  （停止按钮跟着冒出来，而它中断的是一轮已经收完的 turn），要么说成空闲
+- **一条支线跑完要在对话带上留一句话。** 认 `task_notification` 而不是 `SubagentStop`——
+  被人停掉的那条不发后者（overview 附录 A.1），靠它收尾会让那条永远挂着
+
 ## 4. 需要人的地方：按"不处理会怎样"分三级
 
 不按工具类型分，因为工具类型不决定紧迫性。
@@ -480,7 +499,7 @@ renderer 的报错默认只留在它自己的 devtools 里——`console-message
 
 **两条现成命令，别自己拼**：跑全套自检 `npm run spike:all`，跑 app（含无人值守探针）`npm run app`。两者各自把 ABI 切好再跑——`better-sqlite3` 装完 Electron 之后只对一个 ABI 有效，而**忘了切的表现是 app 停在启动失败屏上干等到超时**（`NODE_MODULE_VERSION` 对不上）。这一条同一天栽了两次，所以绑进脚本，不靠记。
 
-harness 侧的记账、状态与投影由 spike 兜底，改哪一带先跑哪一条：`spike:db`（数据模型）· `spike:tools`（工具契约）· `spike:wire`（主干接线）· `spike:lane`（子 agent 泳道）· `spike:gate`（闸门与收尾）· `spike:cases`（并发多案子）· `spike:close`（三种收尾）· `spike:track`（轨道布局）· `spike:report`（报告章节组装）· `spike:markdown`（Markdown 导出）· `spike:image`（长图分页）。**后四条是纯函数，不碰库也不用切 ABI；`tools` / `wire` / `lane` 反过来要起真会话、靠订阅凭据，不在 `spike:all` 里。**单跑某一条时若刚跑过 app，先 `npm run rebuild:node`（`spike:all` 自带）。
+harness 侧的记账、状态与投影由 spike 兜底，改哪一带先跑哪一条：`spike:db`（数据模型）· `spike:tools`（工具契约）· `spike:wire`（主干接线）· `spike:lane`（子 agent 泳道）· `spike:gate`（闸门与收尾）· `spike:cases`（并发多案子）· `spike:close`（三种收尾）· `spike:track`（轨道布局）· `spike:branch`（子 agent 泳道接进轨道）· `spike:report`（报告章节组装）· `spike:markdown`（Markdown 导出）· `spike:image`（长图分页）。**`tools` / `wire` / `lane` 要起真会话、靠订阅凭据，不在 `spike:all` 里；其余都进 `spike:all`**（`report` / `markdown` / `image` 是纯函数，连库都不碰）。单跑某一条时若刚跑过 app，先 `npm run rebuild:node`（`spike:all` 自带）。
 
 renderer 的状态没有 node 侧的回归网。验它用**临时探针**：在 main 里加一段 env 开关的 `executeJavaScript` 脚本，驱动真 app（点按钮 → 读回 DOM），验完把探针删干净。能提成纯函数的（`renderer/drafts.ts`）就提出来进 spike。
 
