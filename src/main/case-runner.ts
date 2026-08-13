@@ -109,7 +109,7 @@ export class CaseRunner {
   private db: Db;
   private blobs: string;
   private intake: CaseIntake;
-  /** 到真的要跑第一轮时才开：立完案先放着不看，不该在库里留一个空会话。 */
+  /** 到真的要跑第一轮时才开：建完单先放着不看，不该在库里留一个空会话。 */
   private session: InvestigationSession | null = null;
   private caseId: string;
   private sessionId = randomUUID();
@@ -197,9 +197,9 @@ export class CaseRunner {
    *
    * 会话还没起来时没有什么可等的（下一轮 `start()` 按同一个 getter 建），这时直接落。
    *
-   * 回执是切没切成：冻结的案子没有会话可切，静默 return 的话开关会在界面上翻过去，
+   * 回执是切没切成：冻结的排查没有会话可切，静默 return 的话开关会在界面上翻过去，
    * 而它其实什么都没做。**两种没切成要分开报**（`TakeoverResult`）：状态冲突再点一次就行，
-   * 而 backend 切不动是这个权限入口整个失效——两者说成同一句的话，人会照着"案子切走了"
+   * 而 backend 切不动是这个权限入口整个失效——两者说成同一句的话，人会照着"排查切走了"
    * 切回来再按一次，然后继续在没有接管的情况下往下查。
    */
   async setTakeover(on: boolean): Promise<TakeoverResult> {
@@ -237,7 +237,7 @@ export class CaseRunner {
     return run;
   }
 
-  /** 没有项目起点 = 演示事故：只有这种情况才把玩具数据源塞进去。 */
+  /** 没有项目起点 = 演示模式：只有这种情况才把玩具数据源塞进去。 */
   private get demoMode() {
     return !this.intake.projectRoot;
   }
@@ -247,7 +247,7 @@ export class CaseRunner {
   }
 
   /**
-   * 下面三个是给案件切换栏用的**便宜**读数（D28）：全局汇总每次快照都要把所有案子算一遍，
+   * 下面三个是给排查切换栏用的**便宜**读数（D28）：全局汇总每次快照都要把所有排查算一遍，
    * 走 buildSnapshot 的话每 60ms 就是一轮全库查询。
    */
   get todoCount() {
@@ -255,9 +255,9 @@ export class CaseRunner {
   }
 
   /**
-   * 「这个案子还在跑吗」。**支线也算**：`result` 一到主线就不忙了，而那一刻后台可能
+   * 「这次排查还在跑吗」。**支线也算**：`result` 一到主线就不忙了，而那一刻后台可能
    * 还有几条支线在查。只看主线的话，`trimIdle()` 会把一个正有支线在跑的运行时卸掉，
-   * 案件切换栏也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
+   * 排查切换栏也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
    */
   get isBusy() {
     return this.busy || this.lanes.backgroundLanes > 0;
@@ -302,7 +302,7 @@ export class CaseRunner {
     ));
   }
 
-  /** `cases` 由注册处给：一个 runner 只认得自己那个案子。 */
+  /** `cases` 由注册处给：一个 runner 只认得自己那次排查。 */
   snapshot(cases: CaseBrief[] = []): Snapshot {
     try {
       return buildSnapshot(
@@ -337,19 +337,19 @@ export class CaseRunner {
     return locateEvidence(text, anchor, undefined)?.excerpt ?? text.slice(0, 4000);
   }
 
-  /** 案子的状态以库为准，不在内存里另存一份——收尾之后重建运行时也得照样是冻的。 */
+  /** 排查的状态以库为准，不在内存里另存一份——收尾之后重建运行时也得照样是冻的。 */
   get caseStatus(): CaseStatus {
     return readCaseStatus(this.db, this.caseId) ?? 'open';
   }
 
-  /** 还差哪几步才能结案（§6.2）。空数组 = 现在就能结。 */
+  /** 还差哪几步才能定稿（§6.2）。空数组 = 现在就能结。 */
   get closingGaps(): ClosingStepKind[] {
     return missingClosingSteps(this.db, this.caseId);
   }
 
   async start(question?: string) {
-    // 结案与归档都是冻结：再开一轮会往一个已下结论的案子里追加步骤，
-    // 报告与它记录的过程就此对不上。要接着查就另立案件
+    // 定稿与归档都是冻结：再开一轮会往一个已下结论的排查里追加步骤，
+    // 报告与它记录的过程就此对不上。要接着查就另建一次排查
     if (this.caseStatus !== 'open') return;
     const opening = question?.trim() || openingMessage(this.intake);
     if (this.q) return this.send(opening);
@@ -371,7 +371,7 @@ export class CaseRunner {
         // ⚠️ 这不只是放开上下文：磁盘 settings 里的 `hooks` 是 shell 命令，**加载即执行**
         // （实测 SessionStart 在第一次工具调用之前就跑了），项目 `.mcp.json` 同理直接拉起进程。
         // 两者都绕过 PreToolUse / canUseTool / disallowedTools——三分法只管得住 agent
-        // 自己发出的调用。真正的信任边界是「立案时选的那个目录」，等价于在那儿直接跑 claude。
+        // 自己发出的调用。真正的信任边界是「新建排查时选的那个目录」，等价于在那儿直接跑 claude。
         // 已决定接受该风险（overview §8 风险表最后一行）。
         settingSources: this.demoMode ? [] : ['user', 'project', 'local'],
         // 项目起点决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
@@ -495,7 +495,7 @@ export class CaseRunner {
     }
   }
 
-  /** 返回是否真的送进去了：冻结的案子没有会话接得住，送了只会静静排在一个没人消费的队列里。 */
+  /** 返回是否真的送进去了：冻结的排查没有会话接得住，送了只会静静排在一个没人消费的队列里。 */
   async send(text: string): Promise<boolean> {
     if (this.caseStatus !== 'open') return false;
     this.pushChat('user', text);
@@ -517,8 +517,8 @@ export class CaseRunner {
     await this.start();
   }
 
-  /** 关窗 / 换案子时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
-  close(why = '案子已关闭。') {
+  /** 关窗 / 换排查时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
+  close(why = '排查已关闭。') {
     this.discardPending(why);
     // 闸门同理：它挂着的也是一个 agent 那侧在等的 Promise
     for (const g of [...this.gates.values()]) g.abandon(why);
@@ -527,7 +527,7 @@ export class CaseRunner {
     // 而 `close()` 之后 SDK 保证不再有任何消息（sdk.d.ts: "After calling close(),
     // no further messages will be received."），PostToolUse 永远不会来。
     // 忙着的时候归档是允许的动作，不收的话冻结后的报告里那条会永远显示「进行中」，
-    // 一直挂到下次启动清扫——而那时案子早就冻上、甚至已经导出了。
+    // 一直挂到下次启动清扫——而那时排查早就冻上、甚至已经导出了。
     // 中断走的是另一条路：它不关查询，在跑的调用会由 PostToolUseFailure 带 is_interrupt 收尾
     this.abandonInFlight(why);
     this.endOnce('ended', why);
@@ -592,8 +592,8 @@ export class CaseRunner {
    * 一条支线跑完了：收口它那一步，并在对话带上说一声（ui.md §3.2）。
    *
    * **收口的内容是支线自己的话**（`SubagentStop` 的最后一句，退回通知里的摘要）。
-   * harness 不替它下判定——那一步没有命题，`confirmed` / `refuted` 都无从谈起，
-   * 而借 `inconclusive` 会让每条跑完的支线在报告里变成一条「遗留疑点」。
+   * harness 不替它下结论——那一步没有命题，`confirmed` / `refuted` 都无从谈起，
+   * 而借 `inconclusive` 会让每条跑完的支线在报告里变成一条「遗留问题」。
    *
    * 主线随后多半会把这条支线的结论写进自己那一步；这里收的只是"支线到此为止"。
    */
@@ -639,7 +639,7 @@ export class CaseRunner {
   }
 
   private endOnce(status: 'ended' | 'crashed', why = '会话已经结束了。') {
-    // 会话没开过就没什么可收的：立完案没点「开始排查」就关窗是常态
+    // 会话没开过就没什么可收的：建完单没点「开始排查」就关窗是常态
     if (this.ended || !this.session) return;
     this.ended = true;
     this.status = status;
@@ -651,7 +651,7 @@ export class CaseRunner {
   }
 
   /**
-   * 收尾第一档：**停止**（D29）。中断当前轮，案子仍是 `open`，随时能接着查。
+   * 收尾第一档：**停止**（D29）。中断当前轮，排查仍是 `open`，随时能接着查。
    *
    * 挂起的两种待办都得散：这一轮已经没了，人再回答也回给不到任何人——
    * 而那条 `ask_operator` 调用会一直挂在 `pending` 上（回填这侧原先漏了这一下）。
@@ -673,10 +673,10 @@ export class CaseRunner {
   }
 
   /**
-   * 结案前的问询。**这条路不改任何状态**，缺了就把那两步派给 agent。
+   * 定稿前的问询。**这条路不改任何状态**，缺了就把那两步派给 agent。
    *
    * 与 `closeCase()` 分开是这一带最要紧的一条边界：界面拿的是 60ms 合流推来的快照，
-   * 隔着这一拍，一次本以为"去补两步"的点击会落进执行路径，把案子直接冻上且没经过确认。
+   * 隔着这一拍，一次本以为"去补两步"的点击会落进执行路径，把排查直接冻上且没经过确认。
    * 分开之后，执行入口只有确认按钮够得到。
    */
   requestClosing(): ClosingRequest {
@@ -693,9 +693,9 @@ export class CaseRunner {
   }
 
   /**
-   * 收尾第二档：**结案**（D29）。先走完影响面与遗留疑点两个强制 step（§6.2）才给结。
+   * 收尾第二档：**定稿**（D29）。先走完影响面与遗留问题两个强制 step（§6.2）才给结。
    *
-   * 挡在这里而不是结完再补：报告的影响面栏是那一步的投影，缺了它结案只会得到
+   * 挡在这里而不是结完再补：报告的影响面栏是那一步的投影，缺了它定稿只会得到
    * 一份"看起来完整实则半截"的报告。真要就这么收手，走的是归档——那一档明写着放弃。
    *
    * **执行入口只回绝、不派活**：派活是问询那条路的事。缺步走到这儿只说明界面那份
@@ -707,29 +707,29 @@ export class CaseRunner {
     if (missing.length) return { ok: false, missing };
     // 界面给的形态是人在确认条上按下去的那个选择，认它；认不出来（版本对不上、
     // 或是从别处调进来的）才退回建议值——报告总得有个装法，不能落个 NULL 进去
-    this.freeze('closed', '案子已结案，', isVerdictShape(shape) ? shape : suggestVerdictShape(this.db, this.caseId).shape);
+    this.freeze('closed', '排查已定稿，', isVerdictShape(shape) ? shape : suggestVerdictShape(this.db, this.caseId).shape);
     return { ok: true, status: 'closed' };
   }
 
   /**
    * 收尾第三档：**归档**（D29）。同"停止"，外加标记放弃。
    *
-   * **不销毁任何证据**——查到的事实照旧在库里，残报告的主体正是它们（ui.md §8.4）。
+   * **不销毁任何证据**——查到的事实照旧在库里，半程报告的主体正是它们（ui.md §8.4）。
    */
   archiveCase(): CaseStatus {
     if (this.caseStatus !== 'open') return this.caseStatus;
-    // 残报告的形态**强制 open**，不看 agent 声明过什么（ui.md §8.4）：主体是排除掉的方向
-    // 与遗留疑点，没有根因栏。查到一半的案子照它自己的形态装，装出来的是一份看着完整、
+    // 半程报告的形态**强制 open**，不看 agent 声明过什么（ui.md §8.4）：主体是排除掉的方向
+    // 与遗留问题，没有根因栏。查到一半的排查照它自己的形态装，装出来的是一份看着完整、
     // 实则半截的报告——而那正是归档这一档明写要避免的
-    this.freeze('aborted', '案子已归档，', 'open');
+    this.freeze('aborted', '排查已归档，', 'open');
     return 'aborted';
   }
 
   /**
    * 收尾的公共动作：散待办 → 收会话 → 落形态 → 落状态。
    *
-   * **状态最后落**：前面几步失败不该留下个冻住的空壳；反过来，状态一落下案子就宣告冻结了，
-   * 那之后再写形态，写的是一个已经冻上的案子。
+   * **状态最后落**：前面几步失败不该留下个冻住的空壳；反过来，状态一落下排查就宣告冻结了，
+   * 那之后再写形态，写的是一个已经冻上的排查。
    */
   private freeze(status: Exclude<CaseStatus, 'open'>, why: string, shape: VerdictShape) {
     const ctx = { caseId: this.caseId, blobDir: this.blobs, now: () => Date.now() };
@@ -741,7 +741,7 @@ export class CaseRunner {
 
   /**
    * 回执是**处置成功了没有**，不是「有没有这条」。
-   * 找不到就是这条已经不在这个案子手里了（切了案子 / 已经超时作废），
+   * 找不到就是这条已经不在这次排查手里了（切了排查 / 已经超时作废），
    * 静默 return 的话人贴进去的查询结果就凭空消失，那条回填继续挂到超时。
    */
   answerOperator(reply: OperatorReply): boolean {
@@ -987,7 +987,7 @@ export class CaseRunner {
     const i = input as { tool_name?: string; tool_response?: unknown };
     if (!i.tool_name || STRUCTURAL.has(i.tool_name) || !toolUseID) return {};
     const text = outputText(i.tool_response);
-    // 已经收过尾的不再收第二次。停止/结案/归档会把还挂着的回填就地记成 `abandoned`，
+    // 已经收过尾的不再收第二次。停止/定稿/归档会把还挂着的回填就地记成 `abandoned`，
     // 而散场用的正是"给工具那侧一个结果"——它随后照样会走完 PostToolUse。
     // 不挡这一下，人按停止散掉的调用会被这条迟到的成功盖成 `done`，
     // 轨道上于是多出一次"跑完了"的调用，实际上没有任何人回答过它
@@ -1083,7 +1083,7 @@ export class CaseRunner {
    * 对话带上添一句。**落库而不是只存内存**：agent 的结论重建得出来，
    * 人当时那句"别查网关了，先看从库"重建不出来，关掉 app 就没了。
    *
-   * 会话还没开时（立完案先放着、或收尾之后的系统提示）没有 session 可挂，
+   * 会话还没开时（建完单先放着、或收尾之后的系统提示）没有 session 可挂，
    * 那几句只好留在内存里——为了一句提示把会话提前开出来，库里就多一个空会话。
    */
   private pushChat(role: ChatLine['role'], text: string) {
@@ -1115,15 +1115,15 @@ function laneOutcome(status: string): LaneOutcome {
 }
 
 /**
- * 首轮提问由立案单拼成。
+ * 首轮提问由建单信息拼成。
  *
- * 基准日与时区必须进正文：agent 在 `close_step` 里填的 `occurredAt` 常常只有时分秒，
+ * 基准日期与时区必须进正文：agent 在 `close_step` 里填的 `occurredAt` 常常只有时分秒，
  * 它得知道这些时间串属于哪一天（harness 侧也照这个基准补齐，两边要一致）。
  */
 function openingMessage(intake: CaseIntake): string {
   const lines = [intake.question.trim()];
-  lines.push(`事故基准日：${intake.incidentDate}（时区 ${intake.tzOffset}）。日志里只有时分秒的时间串按这一天理解。`);
-  if (intake.clues?.trim()) lines.push(`已知线索：${intake.clues.trim()}`);
+  lines.push(`基准日期：${intake.incidentDate}（时区 ${intake.tzOffset}）。日志里只有时分秒的时间串按这一天理解。`);
+  if (intake.clues?.trim()) lines.push(`已知现象：${intake.clues.trim()}`);
   lines.push(
     intake.projectRoot
       ? `项目起点：${intake.projectRoot}。可以读这个仓库的代码与配置；查库、跑命令、动生产数据一律用 ask_operator 交给人执行。`
@@ -1165,9 +1165,9 @@ function createInbox() {
 }
 
 /**
- * 结案缺步时派给 agent 的话。
+ * 定稿缺步时派给 agent 的话。
  *
- * 说的是"补这两步"而不是"结案吧"：这两块的内容只能由查过的人给，
+ * 说的是"补这两步"而不是"定稿吧"：这两块的内容只能由查过的人给，
  * harness 替它写一句空话进去，报告里那一栏就是编的。
  */
 /**
@@ -1204,22 +1204,22 @@ export async function applyTakeover(
  * 派回去补的那几件事。
  *
  * **修复建议与那两步不是一档**：它不是强制 step（`missing` 空着照样结得了案），
- * 所以只在这条消息已经要发的时候顺带捎上——为它单发一条会在人已经按了结案、
+ * 所以只在这条消息已经要发的时候顺带捎上——为它单发一条会在人已经按了定稿、
  * 确认条正要弹出来的时候插一句话进去。缺了它报告那一栏写「无」，是诚实的。
  */
 export function closingMessage(missing: ClosingStepKind[], needFix: boolean): string {
   const what: Record<ClosingStepKind, string> = {
     impact: '用 open_step(kind="impact") 量化影响面：影响了多少用户/请求、时间窗口多长，要有查询作证据',
-    leftover: '用 open_step(kind="leftover") 汇总还没查清的疑点；一条都没有也要开一步并写明"没有遗留"',
+    leftover: '用 open_step(kind="leftover") 汇总还没查清的问题；一条都没有也要开一步并写明"没有遗留"',
   };
   return [
-    '准备结案了。结案前还差这几步，请依次补上，每一步都要 close_step 收口：',
+    '准备定稿了。定稿前还差这几步，请依次补上，每一步都要 close_step 收口：',
     ...missing.map((k) => `- ${what[k]}`),
     ...(needFix
       ? [
           '- 报告的「修复建议」还是空的（四栏里唯一由你生成的一块）：' +
             '在给出根因的那一步重新 close_step 补上 remediation，只填这一项即可；' +
-            '没查出根因就填在汇总遗留疑点那一步，写"下一步该怎么查"',
+            '没查出根因就填在汇总遗留问题那一步，写"下一步该怎么查"',
         ]
       : []),
     '补完就停下来等我，不要顺手开新的排查方向。',

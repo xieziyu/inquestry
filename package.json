@@ -2,7 +2,7 @@
   "name": "inquestry",
   "productName": "Inquestry",
   "version": "0.0.0",
-  "description": "Online incident investigation assistant — evidence-first timeline over a live agent session",
+  "description": "Troubleshooting console for software engineers — evidence-first timeline over a live agent session",
   "private": true,
   "type": "module",
   "scripts": {

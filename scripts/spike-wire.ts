@@ -5,7 +5,7 @@
  * 前三个 spike 各验一段，这个验主干。新验的东西只有两样：
  *   1. `PostToolUse` 的 `updatedToolOutput` 能给**任意工具**的结果注入 `[call #N]` 标记，
  *      原始输出同时落 blob —— 自动归属与证据引用都压在这上面（D5）
- *   2. 事故时间线从 SQL 里长出来，agent 没有重写过任何一行
+ *   2. 系统时间线从 SQL 里长出来，agent 没有重写过任何一行
  *
  * 跑：npm run spike:wire
  */
@@ -274,8 +274,8 @@ function report(sessionId: string) {
 
   const checks: [string, boolean, string][] = [
     ['1. 每次工具调用都自动归属到 step，输出全部落 blob', calls.length > 0 && calls.every((c) => c.output_sha256 && c.status === 'done'), `${calls.length} 次调用，全部有 blob；未归类 step ${unclassified.length} 个`],
-    ['2. 事故时间线从 SQL 长出来，agent 未重写任何一行', inc.length >= 4, `${inc.length} 行，占 ${evTotal} 条证据`],
-    ['3. 事故线包含被推翻的 step 提供的证据', true, `涉及 step 状态：${[...new Set(inc.map((r) => r.step_status))].join(', ')}`],
+    ['2. 系统时间线从 SQL 长出来，agent 未重写任何一行', inc.length >= 4, `${inc.length} 行，占 ${evTotal} 条证据`],
+    ['3. 系统线包含被推翻的 step 提供的证据', true, `涉及 step 状态：${[...new Set(inc.map((r) => r.step_status))].join(', ')}`],
     ['4. events 重放重建投影一致', before === after, `${replayed} 条事件重放，指纹${before === after ? '一致' : '不一致'}`],
     ['5. 报告四栏可投影', Boolean(rep.rootCause) && Boolean(rep.impact) && rep.leftovers.length > 0, `根因${rep.rootCause ? '有' : '无'} 影响面${rep.impact ? '有' : '无'} 遗留${rep.leftovers.length} 推翻${rep.refuted.length}`],
     ['6. 锚点取回的原文确实含有该证据声称的时间串', traceable.length > 0 && hit.length === traceable.length, `${hit.length}/${traceable.length} 条可溯源；样例：${hit[0]?.excerpt.slice(0, 64) ?? '无'}`],
@@ -295,14 +295,14 @@ function report(sessionId: string) {
     console.log(`      ${r.calls} 次调用 · ${r.evidence} 条证据`);
   }
 
-  console.log('\n----- 事故时间线（ORDER BY occurred_at_ms）-----');
+  console.log('\n----- 系统时间线（ORDER BY occurred_at_ms）-----');
   for (const r of inc) {
     console.log(`  ${r.occurred_at_raw?.padEnd(14)} ${(r.actor ?? '?').padEnd(12)} ${r.claim.slice(0, 60)}  [${r.step_id}/${r.step_status}]`);
   }
 
   console.log(`\n根因：${rep.rootCause?.verdict_text?.slice(0, 120) ?? '(无)'}`);
   console.log(`影响面：${rep.impact?.verdict_text?.slice(0, 120) ?? '(无)'}`);
-  console.log(`遗留疑点：${rep.leftovers.length} 条 | 走错的分支：${rep.refuted.length} 条`);
+  console.log(`遗留问题：${rep.leftovers.length} 条 | 走错的分支：${rep.refuted.length} 条`);
   console.log(`\n库：${DB_FILE}`);
 
   return checks.every(([, ok]) => ok);

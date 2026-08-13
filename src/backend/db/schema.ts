@@ -46,21 +46,21 @@ CREATE TABLE IF NOT EXISTS blobs (
 
 -- ─────────────────────────────── 投影层 ───────────────────────────────
 
--- 收尾三档（D29）：停止仍是 open，结案 closed，归档 aborted 仍可导出残报告
+-- 收尾三档（D29）：停止仍是 open，定稿 closed，归档 aborted 仍可导出半程报告
 CREATE TABLE IF NOT EXISTS cases (
   id            TEXT    PRIMARY KEY,
-  title         TEXT    NOT NULL,        -- 案件切换栏上的短标签，由问题首行截出
-  question      TEXT,                    -- 立案时写的完整问题，新开 session 时用它起头
+  title         TEXT    NOT NULL,        -- 排查切换栏上的短标签，由问题首行截出
+  question      TEXT,                    -- 新建排查时写的完整问题，新开 session 时用它起头
   status        TEXT    NOT NULL CHECK (status IN ('open','closed','aborted')),
   -- agent 的 cwd。它决定继承哪个项目的 skill / MCP，也决定会话记录落在哪个 ~/.claude/projects 目录
   project_root  TEXT,
-  -- 基准日与时区不是"可选线索"：日志时间串多半既无日期也无时区，
-  -- 没有它们 occurred_at_ms 落不成绝对时刻，事故时间线就是空的（D11 / D27）。
-  -- NOT NULL 是有意的：没有基准的案子不该存在，缺了就该在写入时炸，
+  -- 基准日期与时区不是"可选背景"：日志时间串多半既无日期也无时区，
+  -- 没有它们 occurred_at_ms 落不成绝对时刻，系统时间线就是空的（D11 / D27）。
+  -- NOT NULL 是有意的：没有基准的排查不该存在，缺了就该在写入时炸，
   -- 而不是留个空值让下游各自现算一个"今天"
   incident_date TEXT    NOT NULL,
-  tz_offset     TEXT    NOT NULL,   -- 立案机器的本机偏移，不由用户填
-  clues         TEXT,                  -- 立案时已知的服务 / traceId / 用户 ID，拼进首轮提问
+  tz_offset     TEXT    NOT NULL,   -- 新建排查机器的本机偏移，不由用户填
+  clues         TEXT,                  -- 新建排查时已知的服务 / traceId / 用户 ID，拼进首轮提问
   -- 决定报告装哪几块（D25）。**收尾那一下才写**，在那之前是 NULL：
   -- 排查中途的形态是会变的，定死一个只会让报告按一个过期的判断装。取值见 overview §6.1.1
   verdict_shape TEXT CHECK (verdict_shape IN ('sequence','state','chain','distribution','open')),
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS cases (
 );
 
 -- backend / native_session_ref 是 D20 纪律 1：接第二个 backend 时不必迁移历史数据
--- model / effort 落这里而不是 cases（D27）：一个案子跨多会话，中途换模型是常态，
+-- model / effort 落这里而不是 cases（D27）：一次排查跨多会话，中途换模型是常态，
 -- 报告里要能标出"这一步是哪个模型跑的"
 CREATE TABLE IF NOT EXISTS sessions (
   id                 TEXT    PRIMARY KEY,
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS steps (
   expected           TEXT,
   actual             TEXT,
   -- agent 在这一步的 close_step 里声明的报告形态。**挂在 step 上而不是直接落 cases**：
-  -- 它是某一步的判定内容，这一步被推翻时声明要跟着失效，否则报告会按一份作废的判断装块
+  -- 它是某一步的结论内容，这一步被推翻时声明要跟着失效，否则报告会按一份作废的判断装块
   shape              TEXT CHECK (shape IN ('sequence','state','chain','distribution','open')),
   verdict_text       TEXT,
   verdict_confidence REAL CHECK (verdict_confidence BETWEEN 0 AND 1),
@@ -106,9 +106,9 @@ CREATE TABLE IF NOT EXISTS steps (
   -- 建议是基于这一步的判断给的，判断被推翻时它得跟着失效，否则报告里会留下一条
   -- 没有出处的修复建议。报告取哪一条见 queries.ts 的 remediation 选择器
   remediation        TEXT,
-  -- \`converged\` 只给子 agent 泳道的兜底步：它没有命题，所以不可能有判定，
-  -- 而报告那几栏（根因 / 遗留疑点 / 被推翻）都按具体 status 取，它因此哪一栏都不进。
-  -- 借用 \`inconclusive\` 会让每条跑完的支线变成一条「遗留疑点」（queries.ts 只看 status 不看 kind）
+  -- \`converged\` 只给子 agent 泳道的兜底步：它没有命题，所以不可能有结论，
+  -- 而报告那几栏（根因 / 遗留问题 / 被推翻）都按具体 status 取，它因此哪一栏都不进。
+  -- 借用 \`inconclusive\` 会让每条跑完的支线变成一条「遗留问题」（queries.ts 只看 status 不看 kind）
   status             TEXT    NOT NULL CHECK (status IN ('open','confirmed','refuted','inconclusive','superseded','converged')),
   superseded_by      TEXT REFERENCES steps(id),
   t_start            INTEGER NOT NULL,
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_step ON tool_calls(step_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_pending ON tool_calls(status) WHERE status = 'pending';
 
--- occurred_at_ms 是全设计最不能省的字段（D11）：事故时间线 = 对它的一次 ORDER BY
+-- occurred_at_ms 是全设计最不能省的字段（D11）：系统时间线 = 对它的一次 ORDER BY
 -- occurred_at_raw 必须同存 —— 时区/精度解析出错时，没有原始串就无法回溯纠正
 CREATE TABLE IF NOT EXISTS evidence_refs (
   id              TEXT    PRIMARY KEY,
@@ -177,13 +177,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS payload_fts USING fts5(
 
 -- 对话带。**它是投影，不是聊天记录的原始存储**——真相同样在 \`events\` 里（\`chat.appended\`）。
 --
--- 落库的理由与别处不同：证据、步骤、判定都重建得出来，而**"人当时怎么纠偏的"重建不出来**。
+-- 落库的理由与别处不同：证据、步骤、结论都重建得出来，而**"人当时怎么纠偏的"重建不出来**。
 -- 只存内存的话，关掉 app 就只剩 agent 的结论，看不到那句"别查网关了，先看从库"。
 -- 报告不印它（正文只认 step 与证据），但排查过程的完整性靠它。
 CREATE TABLE IF NOT EXISTS chat_lines (
   id         TEXT    PRIMARY KEY,
   case_id    TEXT    NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
-  -- 立完案还没开会话时也会有系统提示，所以可空——不是每一句都属于某一轮会话
+  -- 建完单还没开会话时也会有系统提示，所以可空——不是每一句都属于某一轮会话
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   role       TEXT    NOT NULL CHECK (role IN ('user','assistant','system')),
   text       TEXT    NOT NULL,

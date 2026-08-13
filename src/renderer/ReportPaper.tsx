@@ -42,18 +42,18 @@ export function ReportPaper({
             </span>
             <span className="sep">·</span>
             <span>
-              基准日 <code>{meta.incidentDate}</code> {meta.tzOffset}
+              基准日期 <code>{meta.incidentDate}</code> {meta.tzOffset}
             </span>
           </p>
           {/* 还没收尾时这份是**预览**：形态还会变，章节跟着变。说出来比让人以为它已经定了好 */}
           {!plan.frozen && (
             <p className="preview">
-              这个案子还没收尾，形态是按现有数据推的，报告会跟着排查一起变。结案那一下才冻。
+              这次排查还没收尾，形态是按现有数据推的，报告会跟着排查一起变。定稿那一下才冻。
             </p>
           )}
-          {/* 残报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
+          {/* 半程报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
           {plan.abortedAt !== null && (
-            <p className="aborted">调查在第 {plan.abortedAt} 步被人为终止。以下是查到为止的部分。</p>
+            <p className="aborted">排查在第 {plan.abortedAt} 步被人为终止。以下是查到为止的部分。</p>
           )}
         </header>
       )}
@@ -76,7 +76,7 @@ export function ReportPaper({
  * 页脚水印。**每一页都有**（ui.md §7.2）：长图会被转发到看不见上下文的地方，
  * 只有第一页带编号的话，被转走的那一页就成了一段无从溯源的截图。
  *
- * `generatedAt` 由调用方给（同 Markdown 那条）：自己读时钟的话同一个案子导两次的产物不同，
+ * `generatedAt` 由调用方给（同 Markdown 那条）：自己读时钟的话同一次排查导两次的产物不同，
  * 既没法比对两版报告，也没法拿检查兜住这一行。屏幕上那份不印时间——它跟着数据一直在变。
  */
 export function PaperFoot({
@@ -212,21 +212,21 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
 }
 
 /**
- * 事故时间线画成真正的时间轴：一条竖线 + 圆点（ui.md §6）。
+ * 系统时间线画成真正的时间轴：一条竖线 + 圆点（ui.md §6）。
  *
- * 与调查台的轨道同一个母题，含义不同——那条是"我按什么顺序做的"，这条是
+ * 与排查台的轨道同一个母题，含义不同——那条是"我按什么顺序做的"，这条是
  * "系统当时按什么顺序发生的"。竖线只在时间轴内部出现，与「全屏唯一的曲线表示推翻」不冲突。
  */
 function Timeline({ rows, label }: { rows: IncidentEntry[]; label: (id: string) => string }) {
   if (!rows.length) {
-    return <p className="none">一条带时间的证据都没有。事故时间线由 occurredAt 投影而来。</p>;
+    return <p className="none">一条带时间的证据都没有。系统时间线由 occurredAt 投影而来。</p>;
   }
   return (
     <ol className="axis">
       {rows.map((r, i) => (
         <li key={i} className={r.stepStatus}>
           {/* 被推翻的 step 提供的证据照样在列：结论可以被推翻，事实不会。
-              点填实 / 空心分的是"这条来自还成立的判定"还是"来自被推翻的那一步" */}
+              点填实 / 空心分的是"这条来自还成立的结论"还是"来自被推翻的那一步" */}
           <span className="dot" />
           <span className="when">{r.occurredAtRaw ?? new Date(r.occurredAtMs).toISOString()}</span>
           <span className="what">

@@ -32,7 +32,7 @@ export type LaneMessage = {
  * 所以收口只认它。
  *
  * `summary` 是**支线自己的话**：优先 `SubagentStop` 给的最后一句（那是它对主线说的结论），
- * 退回这条通知自带的摘要。harness 不替它编一句判定——收口那一步唯一能说的就是它说过什么。
+ * 退回这条通知自带的摘要。harness 不替它编一句结论——收口那一步唯一能说的就是它说过什么。
  */
 export type LaneFinish = { lane: string; agentId: string; status: string; summary: string };
 

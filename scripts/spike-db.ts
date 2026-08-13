@@ -30,7 +30,7 @@ function apply(db: Database.Database, ev: Event) {
   const p = ev.payload as never as Record<string, string & number>;
   switch (ev.type) {
     case 'case.opened':
-      // 基准日与时区是 schema v2 起的硬字段：没有它们 occurred_at_ms 落不成绝对时刻
+      // 基准日期与时区是 schema v2 起的硬字段：没有它们 occurred_at_ms 落不成绝对时刻
       db.prepare(
         `INSERT INTO cases (id,title,status,incident_date,tz_offset,created_at,updated_at)
          VALUES (?,?,'open',?,?,?,?)`,
@@ -150,7 +150,7 @@ function seed(db: Database.Database): Event[] {
   );
   e('step.closed', { id: 'st1', verdict: '前端只提交了一次，不是防抖问题', confidence: 0.9, status: 'refuted' }, 14);
 
-  // ── step 2：查写入路径。这一步查到的两条证据，在事故线上一头一尾
+  // ── step 2：查写入路径。这一步查到的两条证据，在系统线上一头一尾
   e('step.opened', { id: 'st2', sessionId: S, ordinal: 2, direction: '怀疑服务端写入被重试：同一请求写了两次' }, 20);
   e(
     'evidence.attached',
@@ -186,7 +186,7 @@ function seed(db: Database.Database): Event[] {
   e('step.closed', { id: 'st3', verdict: '根因：主从复制延迟 340ms，重试请求读从库未命中，幂等判断失效', confidence: 0.95, status: 'confirmed' }, 36);
   e('step.superseded', { id: 'st1', by: 'st3' }, 37);
 
-  // ── 结案前的两个强制节点（§6.2）
+  // ── 定稿前的两个强制节点（§6.2）
   e('step.opened', { id: 'st4', sessionId: S, ordinal: 4, kind: 'impact', direction: '量化影响面：多少用户、多长窗口' }, 40);
   e('step.closed', { id: 'st4', verdict: '11 分钟窗口内 37 个用户受影响，共 41 条重复记录', confidence: 0.8, status: 'confirmed' }, 41);
   e('step.opened', { id: 'st5', sessionId: S, ordinal: 5, kind: 'leftover', direction: '为什么客户端超时阈值是 2s，与服务端 P99 是否匹配' }, 45);
@@ -259,9 +259,9 @@ function main() {
   const discoveryOrder = inc.map((r) => r.step_id);
   const isSorted = discoveryOrder.every((v, i, a) => i === 0 || a[i - 1]! <= v);
   checks.push([
-    '2. 事故时间线的顺序 ≠ 排查顺序',
+    '2. 系统时间线的顺序 ≠ 排查顺序',
     inc.length === 6 && !isSorted,
-    `事故线 ${inc.length} 行，其证据的来源 step 序列 = [${discoveryOrder.join(', ')}]（若单调递增就说明样例没构造出错位）`,
+    `系统线 ${inc.length} 行，其证据的来源 step 序列 = [${discoveryOrder.join(', ')}]（若单调递增就说明样例没构造出错位）`,
   ]);
 
   // 3. superseded 链
@@ -295,7 +295,7 @@ function main() {
   const impact = db.prepare(`SELECT verdict_text FROM steps WHERE kind='impact'`).get() as { verdict_text: string } | undefined;
   const leftover = db.prepare(`SELECT verdict_text FROM steps WHERE status='inconclusive'`).all() as unknown[];
   checks.push([
-    '5. 报告四栏可投影（根因/影响面/遗留疑点/走错的分支）',
+    '5. 报告四栏可投影（根因/影响面/遗留问题/走错的分支）',
     Boolean(rootCause && impact) && leftover.length === 1 && sup.length === 1,
     `根因="${rootCause?.verdict_text.slice(0, 24)}…" 影响面=有 遗留=${leftover.length} 被推翻=${sup.length}`,
   ]);
@@ -312,7 +312,7 @@ function main() {
     console.log(`  ${mark} #${r.ordinal} [${r.status}${r.superseded_by ? `→${r.superseded_by}` : ''}] ${r.direction}  (${r.calls} calls)`);
   }
 
-  console.log('\n----- 事故时间线（ORDER BY occurred_at_ms，同一批数据的另一次投影）-----');
+  console.log('\n----- 系统时间线（ORDER BY occurred_at_ms，同一批数据的另一次投影）-----');
   for (const r of inc) {
     console.log(`  ${r.occurred_at_raw}  ${String(r.actor).padEnd(11)} ${r.claim}   [来自 ${r.step_id}]`);
   }

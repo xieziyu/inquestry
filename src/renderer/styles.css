@@ -89,7 +89,7 @@ body {
 .banner.confirm .shape { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .banner.confirm .shape .lead { color: var(--dim); font-size: 12px; margin-right: 4px; }
 .banner.confirm .shape .lead b { color: var(--text); margin: 0 2px; font-weight: 600; }
-/* 推断值与 agent 判定得分得出来：前者只是个不至于装错块的兜底 */
+/* 推断值与 agent 声明的要分得出来：前者只是个不至于装错块的兜底 */
 .banner.confirm .shape .lead em { color: var(--dim); font-style: normal; margin-left: 6px; opacity: 0.75; }
 .banner.confirm .shape button.on { border-color: var(--fill); color: var(--accent); }
 /* 选得了但会装出一块空的：压暗而不是禁用——人可能确实知道是这一类，而 agent 没填那一对 */
@@ -105,7 +105,7 @@ body {
 }
 .toreport em { font-style: normal; color: var(--dim); font-size: 11px; margin-left: 5px; }
 
-/* ── 案件切换栏 ──
+/* ── 排查切换栏 ──
    切换只换投影不中断任何一个；chip 上的「等你 N」是并发排查里唯一能看见
    后台支线在等人的地方（D28），所以它用暖色，和待办栏同一档 */
 .casebar {
@@ -197,7 +197,7 @@ button.primary small { opacity: .6; font-weight: 400; }
 .state.confirmed { color: var(--ok); }
 .state.refuted, .state.superseded { color: var(--bad); }
 .state.inconclusive { color: var(--warn); }
-/* 收口是"这条支线到此为止"，不是一种判定——所以给中性色，与已证实/已推翻分得开。
+/* 收口是"这条支线到此为止"，不是一种结论——所以给中性色，与已证实/已推翻分得开。
    支线在后台查东西并不找人，一律不碰暖色（ui.md §3.2） */
 .state.converged { color: var(--dim); }
 .step.converged { border-left-color: var(--line); }
@@ -236,7 +236,7 @@ button.primary small { opacity: .6; font-weight: 400; }
   white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: hidden;
 }
 
-/* ── 事故时间线 ── */
+/* ── 系统时间线 ── */
 .incident { display: flex; flex-direction: column; gap: 1px; }
 .incident .note { color: var(--dim); font-size: 12.5px; margin: 0 0 10px; }
 .incident .row {
@@ -347,7 +347,7 @@ button.primary small { opacity: .6; font-weight: 400; }
 .sheet pre { max-height: none; color: var(--text); }
 .sheet button { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 7px; cursor: pointer; }
 
-/* ── 立案面板 ── */
+/* ── 新建排查面板 ── */
 .intake { max-width: 720px; margin: 0 auto; padding: 28px 8px 60px; display: flex; flex-direction: column; gap: 18px; }
 .intake h1 { margin: 0; font-size: 20px; font-weight: 600; }
 .intake .lede { margin: -8px 0 0; color: var(--dim); font-size: 12.5px; }
@@ -379,14 +379,14 @@ button.primary small { opacity: .6; font-weight: 400; }
 .intake button em { font-style: normal; color: var(--dim); font-size: 11px; }
 .intake button.primary { background: var(--fill); color: var(--on-fill); border: 0; font-weight: 600; padding: 8px 18px; }
 
-/* 顶栏上的案子元信息：立案单里那几项要一直看得见，否则基准日填错要到报告空了才发现 */
+/* 顶栏上的排查元信息：建单信息里那几项要一直看得见，否则基准日期填错要到报告空了才发现 */
 .casemeta { display: flex; gap: 10px; align-items: center; font-size: 11.5px; color: var(--dim); }
 .casemeta code { font-family: var(--mono); }
 .intake input.bad { border-color: var(--bad); }
 .intake .hint.err { color: var(--bad); }
 
 /* ── 报告屏（D21 / D22） ─────────────────────────────────────────────
-   与调查台**同一套色板**，差别只来自密度与字号（ui.md §1 那张表）：
+   与排查台**同一套色板**，差别只来自密度与字号（ui.md §1 那张表）：
    正文 13.5→15.5px、页边距 14→60px、小节间距 44px。一深一浅会被读成两个应用。
 
    单列长页：**没有 tab、没有折叠、没有内部滚动**。滚的只有整屏这一个容器——
@@ -459,7 +459,7 @@ button.primary small { opacity: .6; font-weight: 400; }
 .paper .contrast .k { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
 .paper .contrast p { margin: 8px 0 0; }
 
-/* 事故时间线画成真正的时间轴：一条竖线 + 圆点（ui.md §6）。
+/* 系统时间线画成真正的时间轴：一条竖线 + 圆点（ui.md §6）。
    竖线只在时间轴内部出现，与「全屏唯一的曲线表示推翻」不冲突 */
 .paper .axis { list-style: none; margin: 16px 0 0; padding: 0 0 0 26px; position: relative; }
 .paper .axis::before { content: ''; position: absolute; left: 4px; top: 10px; bottom: 10px; width: 1px; background: var(--line); }
@@ -468,8 +468,8 @@ button.primary small { opacity: .6; font-weight: 400; }
   position: absolute; left: -26px; top: 14px; width: 9px; height: 9px; border-radius: 50%;
   background: var(--accent); box-shadow: 0 0 0 3px var(--bg);
 }
-/* 空心 = 这条证据来自一个已被推翻的判定。事实照旧在列（结论可以被推翻，事实不会），
-   但读者该看得出它出自哪种判定 */
+/* 空心 = 这条证据来自一个已被推翻的结论。事实照旧在列（结论可以被推翻，事实不会），
+   但读者该看得出它出自哪种结论 */
 .paper .axis li.refuted .dot, .paper .axis li.superseded .dot { background: var(--bg); border: 1px solid var(--dim); }
 .paper .axis .when { font-family: var(--mono); font-size: 13px; color: var(--dim); }
 .paper .axis .what b { margin-right: 8px; }

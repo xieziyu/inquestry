@@ -4,13 +4,13 @@
  * 不起真会话：要验的都是 harness 侧的记账、状态与投影，与模型无关，而这几处的错法都是**静默**的——
  *
  *   1. **状态变更必须走领域事件。** 直接 `UPDATE cases` 的值一重放就被 `case.opened`
- *      抹回 `open`，而重放正是换 schema 时重建投影的唯一手段——结过的案子悄悄又开着了
+ *      抹回 `open`，而重放正是换 schema 时重建投影的唯一手段——结过的排查悄悄又开着了
  *   2. **终止要把挂起的回填也收掉。** 闸门那侧一直有，回填这侧原先没有：
  *      那次 `ask_operator` 调用会永远挂在 `pending` 上，轨道上是一次"发起了但没有结果"的调用
  *   3. **散场的收尾不能被迟到的 PostToolUse 盖掉。** 散场靠的就是给工具那侧一个结果，
  *      它随后照样走完 PostToolUse——不挡这一下，`abandoned` 会被改写成 `done`
- *   4. **结案前置只认已收尾的强制 step。** 拿一个还开着的 impact step 放行，
- *      等于让报告的影响面栏空着结案
+ *   4. **定稿前置只认已收尾的强制 step。** 拿一个还开着的 impact step 放行，
+ *      等于让报告的影响面栏空着定稿
  *   5. **启动清扫必须赶在任何 runner 之前。** 那一刻库里的 pending 与 live 必然是上次残留的；
  *      建完 runner 再扫会把这一轮自己的活计一起判成放弃（这条是调用点顺序，见 main/index.ts）
  *
@@ -88,7 +88,7 @@ function makeRunner(caseId: string, title?: string): CaseRunner {
 const callStatus = (id: string) =>
   (db.prepare(`SELECT status FROM tool_calls WHERE id=?`).get(id) as { status: string } | undefined)?.status;
 
-/** 跑一步带证据的排查，用来喂结案前置与"证据不该被销毁"两条。 */
+/** 跑一步带证据的排查，用来喂定稿前置与"证据不该被销毁"两条。 */
 async function work(
   session: InvestigationSession,
   opts: {
@@ -130,7 +130,7 @@ async function main() {
   db = openDatabase(file);
   blobs = blobDir(file);
 
-  // ── ① 结案前置：两个强制 step 走完之前结不了案 ─────────────────────────
+  // ── ① 定稿前置：两个强制 step 走完之前结不了案 ─────────────────────────
   const c1 = makeRunner('case_close', '订单 502');
   const p1 = c1 as unknown as Probe;
   const s1 = p1.beginSession();
@@ -139,12 +139,12 @@ async function main() {
   const gapsAtStart = c1.closingGaps;
   const refused = await c1.closeCase();
   check(
-    '缺影响面与遗留疑点时结不了案（§6.2）',
+    '缺影响面与遗留问题时结不了案（§6.2）',
     !refused.ok && refused.missing.join(',') === 'impact,leftover' && readCaseStatus(db, 'case_close') === 'open',
     `missing=${refused.ok ? '(竟然结了)' : refused.missing.join(',')} · status=${readCaseStatus(db, 'case_close')}`,
   );
   check(
-    '缺的那几步在快照里就看得见，不用点了结案才知道',
+    '缺的那几步在快照里就看得见，不用点了定稿才知道',
     gapsAtStart.join(',') === 'impact,leftover' && c1.snapshot().closingGaps.length === 2,
     `closingGaps=${c1.snapshot().closingGaps.join(',')}`,
   );
@@ -163,7 +163,7 @@ async function main() {
 
   // ── ② 强制 step 必须是**已收尾的** ────────────────────────────────────
   //
-  // 只看"有没有这一 kind"的话，一个刚开还没结论的影响面 step 就能放行结案，
+  // 只看"有没有这一 kind"的话，一个刚开还没结论的影响面 step 就能放行定稿，
   // 而报告的影响面栏取的是它的 verdict——那时是空的
   const openImpact = await s1.store.openStep({ direction: '量化影响面', kind: 'impact' });
   check(
@@ -201,7 +201,7 @@ async function main() {
   pReport.q = {} as never;
   const execRefused = await cReport.closeCase();
   check(
-    '执行入口缺步时只回绝，不冻案子也不派活',
+    '执行入口缺步时只回绝，不冻排查也不派活',
     !execRefused.ok &&
       execRefused.missing.length === 2 &&
       readCaseStatus(db, 'case_exec') === 'open' &&
@@ -222,7 +222,7 @@ async function main() {
   //
   // 只问"历史上有没有一条收好的 impact"的话，agent 收好一条、随后新开一条打算重做
   // 还没 close，这里照样放行——而报告取的是**最新**那条，于是影响面栏印出来是空的。
-  // 结案校验与报告章节必须共用同一条"哪一步算数"的规则
+  // 定稿校验与报告章节必须共用同一条"哪一步算数"的规则
   const cRedo = makeRunner('case_redo', '影响面重做到一半');
   const sRedo = (cRedo as unknown as Probe).beginSession();
   await work(sRedo, { direction: '先查一步', callId: 'call_r1', occurredAt: '10:00:00' });
@@ -237,7 +237,7 @@ async function main() {
   const lo2 = await sRedo.store.openStep({ direction: '遗留', kind: 'leftover' });
   await sRedo.store.closeStep({ stepId: lo2.stepId, status: 'inconclusive', verdict: '无', confidence: 0.2, evidence: [] });
   check(
-    '重做之前：两步都齐，可以结案',
+    '重做之前：两步都齐，可以定稿',
     missingClosingSteps(db, 'case_redo').length === 0 && cRedo.snapshot().report.impact === '约 300 次请求受影响',
     `missing=${missingClosingSteps(db, 'case_redo').join(',') || '(无)'} · 报告影响面=${cRedo.snapshot().report.impact}`,
   );
@@ -255,7 +255,7 @@ async function main() {
   // `superseded` 的意思是这条结论已被明确推翻。被**同类**的新 step 顶掉不影响（新的自己补上了），
   // 真正漏的是被别的 kind 推翻：章节看着齐全，而报告那一栏（`reportSections` 不按 status 过滤）
   // 取到的是一份已经作废的影响面
-  // 单独一个案子：case_close 里已经有一个收好的 impact step 了，在那儿验会被它顶掉
+  // 单独一次排查：case_close 里已经有一个收好的 impact step 了，在那儿验会被它顶掉
   const cs = makeRunner('case_super', '影响面被推翻');
   const ss = (cs as unknown as Probe).beginSession();
   await work(ss, { direction: '重试放大', callId: 'call_s1', occurredAt: '12:41:07' });
@@ -283,7 +283,7 @@ async function main() {
     evidence: [{ callRef: '#1', claim: '下游账本口径', occurredAt: '12:46:00' }],
   });
   check(
-    '强制 step 被别的 kind 推翻之后，缺口重新出现（不能拿作废的结论结案）',
+    '强制 step 被别的 kind 推翻之后，缺口重新出现（不能拿作废的结论定稿）',
     missingClosingSteps(db, 'case_super').includes('impact'),
     `missing=${missingClosingSteps(db, 'case_super').join(',') || '(无 —— superseded 被当成走完了)'}`,
   );
@@ -295,29 +295,29 @@ async function main() {
   );
   cs.close();
 
-  // ── ③ 补齐之后结案成立，且状态走的是事件 ────────────────────────────────
+  // ── ③ 补齐之后定稿成立，且状态走的是事件 ────────────────────────────────
   check(
-    '结案之前不写形态：排查中途的形态还会变，定死一个只会让报告按过期判断装',
+    '定稿之前不写形态：排查中途的形态还会变，定死一个只会让报告按过期判断装',
     shapeOf('case_close') === null,
     `verdict_shape=${shapeOf('case_close')}`,
   );
   const closed = await c1.closeCase();
   const evidenceBefore = (db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c;
   check(
-    '两步走完就能结案，case 落到 closed',
+    '两步走完就能定稿，case 落到 closed',
     closed.ok && readCaseStatus(db, 'case_close') === 'closed',
     `status=${readCaseStatus(db, 'case_close')}`,
   );
-  // 这个案子 agent 一次形态都没声明过，走的是推断那条：有已证实的根因，没有应然实然，
-  // 事故时间线上只有一条证据（影响面那一步的 callRef 落空了，所以排不出"顺序"）→ chain。
+  // 这次排查 agent 一次形态都没声明过，走的是推断那条：有已证实的根因，没有应然实然，
+  // 系统时间线上只有一条证据（影响面那一步的 callRef 落空了，所以排不出"顺序"）→ chain。
   // 换成 open 会把一条真实结论从报告里抹掉，换成 sequence 是装一块空的
   check(
-    '没人声明形态时结案也得落一个装得出来的：chain，不是 open 也不是 sequence',
+    '没人声明形态时定稿也得落一个装得出来的：chain，不是 open 也不是 sequence',
     shapeOf('case_close') === 'chain',
     `verdict_shape=${shapeOf('case_close')}（带时间的证据 ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs e JOIN steps s ON s.id=e.step_id JOIN sessions se ON se.id=s.session_id WHERE se.case_id='case_close' AND e.occurred_at_ms IS NOT NULL`).get() as { c: number }).c} 条）`,
   );
   check(
-    '结案顺手把会话收了，库里不留永远 live 的 session',
+    '定稿顺手把会话收了，库里不留永远 live 的 session',
     (db.prepare(`SELECT status FROM sessions WHERE case_id='case_close'`).get() as { status: string }).status ===
       'ended',
     `session=${(db.prepare(`SELECT status FROM sessions WHERE case_id='case_close'`).get() as { status: string }).status}`,
@@ -330,14 +330,14 @@ async function main() {
   await c1.start();
   const sent = await c1.send('再帮我看一眼');
   check(
-    '结案后 start() 不再新起会话，send() 也回 false',
+    '定稿后 start() 不再新起会话，send() 也回 false',
     sent === false &&
       (db.prepare(`SELECT COUNT(*) c FROM sessions WHERE case_id='case_close'`).get() as { c: number }).c ===
         sessionsBefore,
     `sessions=${sessionsBefore} → ${(db.prepare(`SELECT COUNT(*) c FROM sessions WHERE case_id='case_close'`).get() as { c: number }).c} · send=${sent}`,
   );
   check(
-    '重开 app 不会自动回到已结案的案子',
+    '重开 app 不会自动回到已定稿的排查',
     (db.prepare(`SELECT id FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 1`).get() as
       | { id: string }
       | undefined)?.id !== 'case_close',
@@ -403,7 +403,7 @@ async function main() {
     `末条=${c2.snapshot().chat.at(-1)?.text}`,
   );
   check(
-    '停止不改案子状态：随时能接着查',
+    '停止不改排查状态：随时能接着查',
     readCaseStatus(db, 'case_stop') === 'open',
     `status=${readCaseStatus(db, 'case_stop')}`,
   );
@@ -432,7 +432,7 @@ async function main() {
   // ── ⑥ 迟到的 PostToolUse 不能把 abandoned 盖成 done ──────────────────────
   //
   // 散场靠的正是"给工具那侧一个结果"，所以它随后照样会走完 PostToolUse
-  p2.onToolEnd({ tool_name: ASK, tool_response: '(案子已关闭，这条回填作废)' }, 'call_b');
+  p2.onToolEnd({ tool_name: ASK, tool_response: '(排查已关闭，这条回填作废)' }, 'call_b');
   check(
     '散场之后迟到的成功收尾不算数，abandoned 保持原样',
     callStatus('call_b') === 'abandoned',
@@ -443,7 +443,7 @@ async function main() {
   const c3 = makeRunner('case_abort', '支付回调丢单');
   const p3 = c3 as unknown as Probe;
   const s3 = p3.beginSession();
-  // agent 在这儿声明过形态：归档要能盖掉它（残报告一律未决型）
+  // agent 在这儿声明过形态：归档要能盖掉它（半程报告一律未决型）
   await work(s3, {
     direction: '回调签名校验把重放挡了',
     callId: 'call_x1',
@@ -467,12 +467,12 @@ async function main() {
     steps: c3.snapshot().steps.length,
   };
   check(
-    '归档不销毁任何证据：证据、事故时间线、步骤一条不少',
+    '归档不销毁任何证据：证据、系统时间线、步骤一条不少',
     readCaseStatus(db, 'case_abort') === 'aborted' &&
       afterAbort.evidence === beforeAbort.evidence &&
       afterAbort.incident === beforeAbort.incident &&
       afterAbort.steps === beforeAbort.steps,
-    `status=${readCaseStatus(db, 'case_abort')} · 证据 ${beforeAbort.evidence}→${afterAbort.evidence} · 事故线 ${beforeAbort.incident}→${afterAbort.incident}`,
+    `status=${readCaseStatus(db, 'case_abort')} · 证据 ${beforeAbort.evidence}→${afterAbort.evidence} · 系统线 ${beforeAbort.incident}→${afterAbort.incident}`,
   );
   // `consume()` 的 finally 认的是 `this.q === q`，而 close() 上一行刚把 q 置空——
   // 收尾这条路上没有别人会来清 busy
@@ -492,7 +492,7 @@ async function main() {
     `仍差 ${missingClosingSteps(db, 'case_abort').join(',')}`,
   );
   check(
-    '归档一律落未决型，盖掉 agent 声明过的形态（残报告没有根因栏）',
+    '归档一律落未决型，盖掉 agent 声明过的形态（半程报告没有根因栏）',
     shapeOf('case_abort') === 'open',
     `verdict_shape=${shapeOf('case_abort')}（照 agent 声明的 sequence 装，会得到一份看着完整实则半截的报告）`,
   );
@@ -512,7 +512,7 @@ async function main() {
   // ── ⑦.5 报告形态与应然实然（D25 / overview §6.1.1） ─────────────────────
   //
   // 这一带的错法全是**静默装错块**：形态填了不生效、被推翻的声明照旧算数、
-  // 推断值把一条真实结论抹掉——三种在界面上都表现为"结案了，然后报告某一栏是空的"
+  // 推断值把一条真实结论抹掉——三种在界面上都表现为"定稿了，然后报告某一栏是空的"
 
   // 声明生效，且人在确认条上的选择优先于它
   const cShape = makeRunner('case_shape', '形态由 agent 声明');
@@ -530,14 +530,14 @@ async function main() {
     `steps.shape=${(db.prepare(`SELECT shape FROM steps WHERE id=?`).get(rootShape.stepId) as { shape: string | null }).shape} · cases.verdict_shape=${shapeOf('case_shape')}`,
   );
   check(
-    '有声明就用声明，并且说得出这是 agent 判定的（推断值只是兜底，不能混为一谈）',
+    '有声明就用声明，并且说得出这是 agent 声明的（推断值只是兜底，不能混为一谈）',
     suggestVerdictShape(db, 'case_shape').shape === 'sequence' &&
       suggestVerdictShape(db, 'case_shape').source === 'agent',
     JSON.stringify(suggestVerdictShape(db, 'case_shape')),
   );
   // 形态与「状态型填不填得出来」必须同次算出，且说得出是按哪一步算的：
   // 界面按 rootStepId 判断手上冻的那份还说不说得上话，认错步就会拿新根因的形态
-  // 配旧根因的判定——预选 state 却一句"这一块会是空的"都没有
+  // 配旧根因的结论——预选 state 却一句"这一块会是空的"都没有
   check(
     '建议里带着它是按哪一条根因算的，以及那一步填不填得出应然实然',
     suggestVerdictShape(db, 'case_shape').rootStepId === rootShape.stepId &&
@@ -574,7 +574,7 @@ async function main() {
     !strayWarn.warnings.some((t) => t.includes('报告认定的那条根因的声明')),
     `warnings=${JSON.stringify(strayWarn.warnings)}`,
   );
-  const lo = await sShape.store.openStep({ direction: '汇总未查清的疑点', kind: 'leftover' });
+  const lo = await sShape.store.openStep({ direction: '汇总未查清的问题', kind: 'leftover' });
   await sShape.store.closeStep({
     stepId: lo.stepId,
     status: 'inconclusive',
@@ -689,7 +689,7 @@ async function main() {
   cDead.close();
 
   // 填了但不生效的三种，必须当场说——不说的话 agent 以为自己交代过了，
-  // 而报告要到结案那天才发现那一块是空的
+  // 而报告要到定稿那天才发现那一块是空的
   const cWarn = makeRunner('case_shape_warn', '形态的三条当场提醒');
   const sWarn = (cWarn as unknown as Probe).beginSession();
   const halfBaked = await sWarn.store.openStep({ direction: '这个假设不成立' });
@@ -774,8 +774,8 @@ async function main() {
   // ── ⑦.6 修复建议：报告四栏里唯一由 agent 生成的那一块（overview §6.1） ────
   //
   // 它一度**没有写入方**，报告上恒为「无」。补上之后这一带的错法有两个形状：
-  // ① 跟着根因取 —— 未决型与归档的残报告会永远少一栏，而那种案子最该留下"下一步怎么查"
-  // ② 不跟着判定失效 —— 报告里躺一条基于作废判断的修复方案，且没有任何地方看得出来
+  // ① 跟着根因取 —— 未决型与归档的半程报告会永远少一栏，而那种排查最该留下"下一步怎么查"
+  // ② 不跟着结论失效 —— 报告里躺一条基于作废判断的修复方案，且没有任何地方看得出来
   const cFix = makeRunner('case_fix', '修复建议');
   const sFix = (cFix as unknown as Probe).beginSession();
   const fixRoot = await work(sFix, {
@@ -834,7 +834,7 @@ async function main() {
     `快照=${cFix.snapshot().report.remediation}（照旧印的话，报告里躺的是一条基于作废判断的修复方案）`,
   );
   // 根因成型而全案一条建议都没有时，close_step 要当场说一句——不说的话
-  // agent 交代完就走了，那一栏要到结案那天才发现是空的
+  // agent 交代完就走了，那一栏要到定稿那天才发现是空的
   const fixWarn = await sFix.store.closeStep({
     stepId: fixNewRoot.stepId,
     status: 'confirmed',
@@ -866,7 +866,7 @@ async function main() {
   // **不跟着根因走**：一条已证实的结论都没有时，"下一步该怎么查"照样进得了报告
   const cFixOpen = makeRunner('case_fix_open', '没查出来但有下一步');
   const sFixOpen = (cFixOpen as unknown as Probe).beginSession();
-  const openLeft = await sFixOpen.store.openStep({ direction: '汇总未查清的疑点', kind: 'leftover' });
+  const openLeft = await sFixOpen.store.openStep({ direction: '汇总未查清的问题', kind: 'leftover' });
   await sFixOpen.store.closeStep({
     stepId: openLeft.stepId,
     status: 'inconclusive',
@@ -922,7 +922,7 @@ async function main() {
     `建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_open'))}`,
   );
   // 界面版本对不上、或从别处调进来时会带一个不认识的值。落 NULL 的话报告没有装法，
-  // 而那是结案之后才发现的——必须当场退回建议值
+  // 而那是定稿之后才发现的——必须当场退回建议值
   const gaps = missingClosingSteps(db, 'case_shape_open');
   for (const kind of gaps) {
     const st = await sOpen.store.openStep({ direction: `补 ${kind}`, kind });
@@ -1004,13 +1004,13 @@ async function main() {
     callStatus('call_z1') === 'abandoned' && callStatus('call_b') === 'abandoned' && callStatus('call_g') === 'abandoned',
     `call_z1=${callStatus('call_z1')} · call_b=${callStatus('call_b')} · call_g=${callStatus('call_g')}`,
   );
-  // 比的是重放前后而不是一个写死的条数：后者每加一个案子就要跟着改，
+  // 比的是重放前后而不是一个写死的条数：后者每加一次排查就要跟着改，
   // 而它真正要验的是「收尾没有销毁事实，重放也没有」
   check(
     '重放之后证据仍在：收尾从来不销毁事实',
     (db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c === evidenceBeforeReplay &&
       evidenceBeforeReplay > evidenceBefore,
-    `证据 ${evidenceBefore}（结案时）→ ${evidenceBeforeReplay}（重放前）→ ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c}`,
+    `证据 ${evidenceBefore}（定稿时）→ ${evidenceBeforeReplay}（重放前）→ ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c}`,
   );
 
   console.log('\n===== Spike Close 结果 =====');

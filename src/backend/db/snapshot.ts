@@ -26,7 +26,7 @@ import {
 } from '../store/sqlite-store.js';
 
 const PREVIEW_LINES = 6;
-/** 对话带一次推多少句。全量推的话，一个跨了几轮会话的案子每 60ms 就要搬一遍整段对话。 */
+/** 对话带一次推多少句。全量推的话，一个跨了几轮会话的排查每 60ms 就要搬一遍整段对话。 */
 const CHAT_TAIL = 200;
 
 export function buildSnapshot(
@@ -50,8 +50,8 @@ export function buildSnapshot(
 
   /**
    * **两条时间线都按 case 取，不按 session 取。**
-   * 一个案子跨多会话（overview §4.1），按 session 取的话重开旧案主区就是空的——
-   * 排查了三轮的东西看不见，只有事故时间线还在，读起来像是数据丢了。
+   * 一次排查跨多会话（overview §4.1），按 session 取的话重开旧排查主区就是空的——
+   * 排查了三轮的东西看不见，只有系统时间线还在，读起来像是数据丢了。
    */
   const sessionIndex = new Map(
     (
@@ -123,9 +123,9 @@ export function buildSnapshot(
     actor: string | null;
   }[];
 
-  // 按 step 先分好组再映射。按 case 取之后这两份是整个案子的历史，
+  // 按 step 先分好组再映射。按 case 取之后这两份是整个排查的历史，
   // 每一步再各扫一遍就是 O(steps × (calls + evidence))——而快照每 60ms 就重建一次，
-  // 跨多轮会话的长案子会把 main 卡住。分组保持原查询的顺序，`callNumber` 因此不变
+  // 跨多轮会话的长排查会把 main 卡住。分组保持原查询的顺序，`callNumber` 因此不变
   const callsByStep = groupBy(calls, (c) => c.step_id);
   const evidenceByStep = groupBy(evidence, (e) => e.step_id);
 
@@ -190,7 +190,7 @@ export function buildSnapshot(
   return {
     case: meta,
     ...extra,
-    // **对话带按 case 取，不按会话取**（同两条时间线）：重开旧案时按会话取只能看到空的，
+    // **对话带按 case 取，不按会话取**（同两条时间线）：重开旧排查时按会话取只能看到空的，
     // 而人上一轮说过什么正是重开时最该看见的东西。`extra.chat` 是还没落库的那几句
     // （会话没开时没有 session 可挂），接在后面
     chat: [...chatLines(db, ctx.caseId), ...extra.chat],
@@ -223,7 +223,7 @@ export function buildSnapshot(
         : null,
       impact: rep.impact?.verdict_text ?? null,
       // 修复建议**不跟着根因走**（选择器见 queries.effectiveRemediation）：未决型与归档的
-      // 残报告都没有根因，而它们恰恰最该留下"下一步该怎么查"
+      // 半程报告都没有根因，而它们恰恰最该留下"下一步该怎么查"
       remediation: rep.remediation?.text.trim() || null,
       // 应然实然跟着根因那一步走：根因换人了，这对也跟着换，不会留下一段没有出处的对照
       // 纯空白按没有算，否则报告里那一栏是视觉上的空白，而不是"没有这一栏"
@@ -236,7 +236,7 @@ export function buildSnapshot(
 }
 
 /**
- * 对话带。**取最近 `CHAT_TAIL` 句而不是全部**：一个跨了几轮会话的案子能攒出很长一条，
+ * 对话带。**取最近 `CHAT_TAIL` 句而不是全部**：一个跨了几轮会话的排查能攒出很长一条，
  * 而每 60ms 推一次全量快照。取的是**末尾**——底部那条带本来就只滚动展示最近的。
  */
 function chatLines(db: Db, caseId: string): ChatLine[] {
@@ -250,7 +250,7 @@ function chatLines(db: Db, caseId: string): ChatLine[] {
 
 /**
  * agent 三项由 runner 给，不从 sessions 表读：会话要到真的开跑时才建，
- * 而立完案还没开跑时顶栏也得显示"待会儿用哪个模型"。
+ * 而建完单还没开跑时顶栏也得显示"待会儿用哪个模型"。
  */
 function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
   const intake = readIntake(db, caseId);
@@ -265,7 +265,7 @@ function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
   );
 }
 
-/** 报告的遗留疑点与排除矩阵只用到这几项；`superseded_by` 只有排除矩阵那份有。 */
+/** 报告的遗留问题与排除矩阵只用到这几项；`superseded_by` 只有排除矩阵那份有。 */
 function stepRef(r: {
   step_id: string;
   direction: string | null;
@@ -294,8 +294,8 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
 /**
  * preview 缓存。**blob 是内容寻址的，同一个 sha256 的内容永不改变**，所以缓存不会过期。
  *
- * 没有它的话，按 case 取历史之后每次快照都要把整个案子每一次调用的原始输出重读一遍，
- * 而快照最快 60ms 一轮——长案子会把 main 线程钉在同步 I/O 上。
+ * 没有它的话，按 case 取历史之后每次快照都要把整个排查每一次调用的原始输出重读一遍，
+ * 而快照最快 60ms 一轮——长排查会把 main 线程钉在同步 I/O 上。
  */
 const previewCache = new Map<string, string>();
 const PREVIEW_CACHE_MAX = 2000;

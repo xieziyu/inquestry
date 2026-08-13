@@ -23,7 +23,7 @@ export type SessionContext = {
   sessionId: string;
   backend: 'claude' | 'codex';
   blobDir: string;
-  /** 落 sessions 而非 cases（D27）：一个案子跨多会话，中途换模型是常态。 */
+  /** 落 sessions 而非 cases（D27）：一次排查跨多会话，中途换模型是常态。 */
   model?: string | null;
   effort?: string | null;
   /** 哪些工具的输出自带时间戳 —— 决定 occurredAt 强制到什么程度（tools.md §3）。 */
@@ -35,11 +35,11 @@ export type SessionContext = {
 };
 
 /**
- * 立案单（ui.md §8.1）。
+ * 建单信息（ui.md §8.1）。
  *
- * `incidentDate` / `tzOffset` 是硬字段不是可选线索：日志里常常只有 `12:03:01.220`
- * 这种既无日期也无时区的时间串，没有基准日 occurredAt 就落不成绝对时刻，
- * 事故时间线也就排不出来。
+ * `incidentDate` / `tzOffset` 是硬字段不是可选背景：日志里常常只有 `12:03:01.220`
+ * 这种既无日期也无时区的时间串，没有基准日期 occurredAt 就落不成绝对时刻，
+ * 系统时间线也就排不出来。
  */
 export type CaseIntake = {
   title: string;
@@ -62,7 +62,7 @@ export type GateOutcome = {
 
 export type InvestigationSession = {
   store: InvestigationStore;
-  /** 案子的立案单。已存在的 case 以库里那份为准，不被本次调用方覆盖。 */
+  /** 排查的建单信息。已存在的 case 以库里那份为准，不被本次调用方覆盖。 */
   intake: CaseIntake;
   /** 由 PreToolUse hook 调用：把任意工具调用归属到当前 open 的 step 上。 */
   recordToolStart(input: {
@@ -112,12 +112,12 @@ export type LaneOutcome = 'completed' | 'failed' | 'stopped' | 'orphaned';
 type CaseContext = Pick<SessionContext, 'caseId' | 'blobDir'> & { now: () => number };
 
 /**
- * 立案：case 只开一次（overview §4.1）。
+ * 新建排查：case 只开一次（overview §4.1）。
  *
- * **与开会话分开**，因为两者的时机不同：立案是人点「立案」那一刻，
+ * **与开会话分开**，因为两者的时机不同：新建排查是人点「新建排查」那一刻，
  * 开会话是真的要跑第一轮的时候。合在一起会让"打开 app 看一眼"也留下一个空 session。
  *
- * 返回生效的立案单——已存在的 case 以库里那份为准：基准日一旦变过，
+ * 返回生效的建单信息——已存在的 case 以库里那份为准：基准日期一旦变过，
  * 已落库的 occurred_at_ms 就对不上了。
  */
 export function openCase(db: Db, ctx: CaseContext, intake: CaseIntake): CaseIntake {
@@ -143,8 +143,8 @@ export function setCaseStatus(db: Db, ctx: CaseContext, status: CaseStatus): voi
 
 /**
  * 报告形态落库（D25）。与 `setCaseStatus` 分开发两条事件：形态是「报告长什么样」，
- * 状态是「案子还能不能动」。收尾时形态先落、状态最后落——
- * 状态是那道冻结闸，它一落下之后再写别的东西，写的就是一个已经宣告冻结的案子。
+ * 状态是「排查还能不能动」。收尾时形态先落、状态最后落——
+ * 状态是那道冻结闸，它一落下之后再写别的东西，写的就是一个已经宣告冻结的排查。
  */
 export function setVerdictShape(db: Db, ctx: CaseContext, shape: VerdictShape): void {
   if (readVerdictShape(db, ctx.caseId) === shape) return;
@@ -165,9 +165,9 @@ export const isVerdictShape = (v: unknown): v is VerdictShape =>
   VERDICT_SHAPES.includes(v as VerdictShape);
 
 /**
- * 结案确认条的预选形态。
+ * 定稿确认条的预选形态。
  *
- * **只认根因那一步的声明**：形态说的是"这个案子的根因属于哪一类故障"，只有报告认定的
+ * **只认根因那一步的声明**：形态说的是"这次排查的根因属于哪一类故障"，只有报告认定的
  * 那条根因说得出这句话。别处（比如一条误填了 shape 的 impact step）说了不算，
  * 否则报告会按 A 步的形态装块、却填 B 步的内容。
  *
@@ -175,9 +175,9 @@ export const isVerdictShape = (v: unknown): v is VerdictShape =>
  *
  * - 没有已证实的根因 → `open`。这不是猜：没查出来就是没查出来，报告里本就不该有根因栏
  * - 根因那一步给了应然/实然 → `state`。这对字段正是状态型的主体，它在就说明是这一类
- * - 事故时间线上有两条以上证据 → `sequence`。少于两条排不出"顺序"，那一块会是一行孤零零的记录
+ * - 系统时间线上有两条以上证据 → `sequence`。少于两条排不出"顺序"，那一块会是一行孤零零的记录
  * - 其余 → `chain`。它的主体（每环带置信度的因果链 + 最弱一环）能从 step 树直接投影，
- *   任何案子都装得出来；换成 `open` 会把一条真实结论从报告里抹掉，换成 `sequence` 是一块空的
+ *   任何排查都装得出来；换成 `open` 会把一条真实结论从报告里抹掉，换成 `sequence` 是一块空的
  */
 export function suggestVerdictShape(db: Db, caseId: string): ShapeSuggestion {
   const root = reportSections(db, caseId).rootCause;
@@ -211,18 +211,18 @@ export function readCaseStatus(db: Db, caseId: string): CaseStatus | null {
 }
 
 /**
- * 结案前必须走完的两步（overview §6.2）：影响面要量化，遗留疑点必须明写。
+ * 定稿前必须走完的两步（overview §6.2）：影响面要量化，遗留问题必须明写。
  * 取值本身是 renderer 也要认的契约，所以类型在 `shared/ipc` 里，这里只给清单。
  */
 export const CLOSING_STEP_KINDS: readonly ClosingStepKind[] = ['impact', 'leftover'];
 
 /**
- * 还差哪几步才能结案。
+ * 还差哪几步才能定稿。
  *
  * 判的是**当前生效的那一步**（`effectiveStep`），不是"历史上出现过没有"：
  *
  * - 只问"有没有一条收好的 impact"的话，agent 收好一条之后又新开一条打算重做、还没 close，
- *   这里照样放行——而报告取的是最新那条，于是影响面栏是空的。结案校验与报告章节
+ *   这里照样放行——而报告取的是最新那条，于是影响面栏是空的。定稿校验与报告章节
  *   必须共用同一条"哪一步算数"的规则，否则两边各说各话
  * - 已被推翻的一律不算数：结论被明确否掉了。被同类的新 step 顶掉时新的自然接上，
  *   漏的是被**别的 kind** 推翻那种——章节看着齐全，报告那栏却是一份作废的影响面
@@ -413,7 +413,7 @@ export function createInvestigationSession(
       const warnings: string[] = [];
       // **`parent_step_id` 上有开着的外键**，照原样发出去的话，一个手写错的 id 不是"退回主干"
       // 而是 `FOREIGN KEY constraint failed` —— 整个事务回滚，这一步压根开不出来。
-      // 按 case 认而不是只认存在：别的案子的 step 能过外键，却不在这条轨道上，
+      // 按 case 认而不是只认存在：别的排查的 step 能过外键，却不在这条轨道上，
       // 落库之后照样只能当主干显示，而 agent 以为自己分叉了
       let parentStepId = args.parentStepId;
       if (parentStepId) {
@@ -425,7 +425,7 @@ export function createInvestigationSession(
           .get(parentStepId, ctx.caseId);
         if (!known) {
           // 静默丢掉不算修好：agent 会以为分叉已经记下了（ui.md §3）
-          warnings.push(`parentStepId ${parentStepId} 不是本案子里的 step，这一步按主干记。`);
+          warnings.push(`parentStepId ${parentStepId} 不是本次排查里的 step，这一步按主干记。`);
           parentStepId = undefined;
         }
       }
@@ -494,7 +494,7 @@ export function createInvestigationSession(
           warnings.push(
             e.occurredAt
               ? `证据「${e.claim.slice(0, 16)}…」的 occurredAt "${e.occurredAt}" 解析不了。`
-              : `证据「${e.claim.slice(0, 16)}…」来自 ${call.tool_name} 却缺 occurredAt，事故时间线会断在这里。`,
+              : `证据「${e.claim.slice(0, 16)}…」来自 ${call.tool_name} 却缺 occurredAt，系统时间线会断在这里。`,
           );
         }
         // 行号只是提示：工具输出常自带另一套编号，直接按物理行高亮会悄悄指错行（blobs.ts）
@@ -544,7 +544,7 @@ export function createInvestigationSession(
       // 这一条只有落库之后才判得了：形态取的是**报告认定的那条根因**的声明，
       // 而谁是根因要等这一步的置信度也进了库才比得出来。
       //
-      // 只对**够得着根因资格**的那些说（confirmed 的 normal）：影响面、遗留疑点、
+      // 只对**够得着根因资格**的那些说（confirmed 的 normal）：影响面、遗留问题、
       // 被推翻的结论压根不可能成为根因，它们上面那句"不生效"已经说完了。
       // 再补一句"现在的根因是谁"只会把 agent 引向一条它不该走的路。
       //
@@ -562,7 +562,7 @@ export function createInvestigationSession(
         // 修复建议是**报告四栏里唯一没有投影来源的那一栏**，不填就永远是「无」。
         // 只在这一步真的成了根因、而全案一条建议都还没有时说一次：说早了（还没根因）
         // 建议无从谈起，逐条都说则会变成每次 close 都挨一句的噪声。
-        // 只提醒不阻挡——它不是强制 step（那要动 kind 的 CHECK），归档的残报告
+        // 只提醒不阻挡——它不是强制 step（那要动 kind 的 CHECK），归档的半程报告
         // 少这一栏也是诚实的
         if (root?.step_id === args.stepId && !sections.remediation) {
           warnings.push(
@@ -691,7 +691,7 @@ export function readIntake(db: Db, caseId: string): CaseIntake | null {
 }
 /**
  * 形态与应然实然的当场提醒。三条都是「填了但不生效」那一类——
- * 不当场说，agent 以为自己已经交代过了，而报告到结案那天才发现那一块是空的。
+ * 不当场说，agent 以为自己已经交代过了，而报告到定稿那天才发现那一块是空的。
  */
 function shapeWarnings(
   /** **合成之后的最终值**，不是本次入参：投影是 patch 语义，两者在重新 close 时会分叉。 */
@@ -706,7 +706,7 @@ function shapeWarnings(
         '只有已证实的结论说得出这句话。',
     );
   }
-  // 形态只由根因那一步说得算，而根因一定是 normal。声明在影响面/遗留疑点上不报的话，
+  // 形态只由根因那一步说得算，而根因一定是 normal。声明在影响面/遗留问题上不报的话，
   // 它会被静默忽略——比"错误地采纳"好，但同样是 agent 以为自己交代过了
   if (final.shape && kind !== 'normal') {
     out.push(
@@ -732,7 +732,7 @@ function anchorKind(anchor?: string): 'lines' | 'jsonpath' | 'whole' {
 }
 
 /**
- * 日志时间串大多既无日期也无时区，必须靠 case 的基准日与时区补齐；
+ * 日志时间串大多既无日期也无时区，必须靠 case 的基准日期与时区补齐；
  * 原始串照样存进 `occurred_at_raw`，解析错了才有得回溯（data-model.md §2）。
  */
 export function parseOccurredAt(raw: string | undefined, ctx: TimeBase) {

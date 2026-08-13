@@ -12,7 +12,7 @@
  *   3. **推翻者不在轨道上时那一行照样划掉。** 曲线画不出来只是少个指向，
  *      划线没了则是把一个已经作废的结论显示成仍然成立的
  *
- * 大头是纯函数，末尾另有一条要碰库的：轨道认"父不在本案子就当主干"，
+ * 大头是纯函数，末尾另有一条要碰库的：轨道认"父不在本次排查就当主干"，
  * 而 `steps.parent_step_id` 上有开着的外键——写入侧不先归一，那条契约在库那一层就先炸了。
  *
  * 跑：npm run rebuild:node && npm run spike:track
@@ -232,16 +232,16 @@ async function storeChecks() {
       : `warnings=${JSON.stringify(bogus.warnings)} —— 不说的话 agent 以为分叉已经记下了`,
   );
 
-  // 别的案子的 step 过得了外键，却不在这条轨道上——落库也只能当主干显示
+  // 别的排查的 step 过得了外键，却不在这条轨道上——落库也只能当主干显示
   const other = createInvestigationSession(
     db,
     { ...ctx, caseId: 'c2', sessionId: 'se_2' } as never,
     intake,
   );
-  const foreign = await other.store.openStep({ direction: '别的案子里的一步' });
+  const foreign = await other.store.openStep({ direction: '别的排查里的一步' });
   const crossCase = await s1.store.openStep({ direction: '认了别案的父', parentStepId: foreign.stepId });
   check(
-    '父在别的案子里同样按主干记（外键放行，但轨道上看不见它）',
+    '父在别的排查里同样按主干记（外键放行，但轨道上看不见它）',
     (db.prepare(`SELECT parent_step_id p FROM steps WHERE id=?`).get(crossCase.stepId) as { p: string | null })
       .p === null && crossCase.warnings.length > 0,
     '只校验"这个 id 存在吗"就会放它过去，agent 以为分叉了，轨道上却是一条主干',

@@ -43,7 +43,7 @@ export function investigationTimeline(db: Db, sessionId: string): InvestigationR
 }
 
 /**
- * 事故时间线：系统当时到底发生了什么。
+ * 系统时间线：系统当时到底发生了什么。
  *
  * **不按 step.status 过滤。** 结论可以被推翻，事实不会——被 superseded 的 step
  * 查到的证据照样是真实发生过的事件（data-model.md §3）。step_status 只带出来供 UI 标注。
@@ -75,11 +75,11 @@ const byCaseOrder = (a: CaseRow, b: CaseRow) =>
   Number(b.status === 'open') - Number(a.status === 'open') || b.updated_at - a.updated_at;
 
 /**
- * 案件切换栏的库侧一半（D28）：进行中的排在前面，同档按最近活动倒序。
+ * 排查切换栏的库侧一半（D28）：进行中的排在前面，同档按最近活动倒序。
  * 「跑动中 / 等你 N」是运行时状态，库里没有，由 main 合上去。
  *
- * `pinned` 里的案子**一定在结果里**，哪怕排在 limit 之外。它装的是 main 还持有运行时的那些，
- * 而待办只存在于运行时里：被 limit 截掉的话，那个案子会连同它「等你 N」一起从切换栏
+ * `pinned` 里的排查**一定在结果里**，哪怕排在 limit 之外。它装的是 main 还持有运行时的那些，
+ * 而待办只存在于运行时里：被 limit 截掉的话，那次排查会连同它「等你 N」一起从切换栏
  * 和全局汇总里消失——人看不见，也切不回去处理，正好废掉 D28 要保的东西。
  */
 export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {}): CaseRow[] {
@@ -102,7 +102,7 @@ export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {
 
 export type ReportSections = {
   /**
-   * 根因那一步。**形态声明也从这里取**（`shape`）：形态说的是"这个案子的根因属于哪一类故障"，
+   * 根因那一步。**形态声明也从这里取**（`shape`）：形态说的是"这次排查的根因属于哪一类故障"，
    * 它只能由**报告认定的那条根因**说出来。另起一条选择器（比如"全案最新那条带声明的"）的后果是
    * 一条误填了 shape 的 impact step 就能决定报告装哪几块，而根因与应然实然仍来自另一步——
    * 报告的结构与内容自相矛盾，且毫无报错。这与影响面共用 `effectiveStep` 是同一条纪律。
@@ -126,7 +126,7 @@ export type ReportSections = {
 
 const STEP_BASE = `FROM steps s JOIN sessions se ON se.id = s.session_id WHERE se.case_id = ?`;
 /**
- * **跨会话的顺序不能只看 `ordinal`**：它是会话内序号，一个案子重开一次就从 1 重来。
+ * **跨会话的顺序不能只看 `ordinal`**：它是会话内序号，一次排查重开一次就从 1 重来。
  * 只按它排的话，旧会话 ordinal=10 的影响面会压过新会话 ordinal=3 的更新结论，
  * 报告静静地展示过期信息。凡是要「最新那条」的章节都得先按会话先后排。
  */
@@ -138,8 +138,8 @@ export type EffectiveStep = { step_id: string; status: string; verdict_text: str
 /**
  * 某一 kind **当前生效**的那一步：排除已被推翻的，取时间上最新的一条。
  *
- * 结案校验与报告章节必须共用这一条规则，否则两边各算各的：
- * 「历史上出现过一个收好的影响面」会放行结案，而报告取的是最新那条——
+ * 定稿校验与报告章节必须共用这一条规则，否则两边各算各的：
+ * 「历史上出现过一个收好的影响面」会放行定稿，而报告取的是最新那条——
  * 那可能是 agent 正在重做、还没 close 的空壳，于是影响面栏是空的。
  * 同一族的错还有一种：最新那条已被推翻，报告照样把它印出来。
  */
@@ -153,7 +153,7 @@ export function effectiveStep(db: Db, caseId: string, kind: string): EffectiveSt
     .get(caseId, kind) as EffectiveStep | undefined;
 }
 
-/** 有几条证据落到了事故时间线上 —— 没人声明形态时，它决定时序型装不装得出来。 */
+/** 有几条证据落到了系统时间线上 —— 没人声明形态时，它决定时序型装不装得出来。 */
 export function timestampedEvidenceCount(db: Db, caseId: string): number {
   return (
     db
@@ -175,8 +175,8 @@ export function timestampedEvidenceCount(db: Db, caseId: string): number {
  *
  * **与根因不共用一条选择器，是有意的**（那条纪律说的是"形态必须与根因取自同一步"，
  * 因为形态描述的正是那条根因）。这一栏不能跟着根因走：未决型报告压根没有根因，
- * 而"没查出来，下一步先加这几个观测"恰恰是那种案子最该留下的东西——跟着根因走的话，
- * 归档的残报告与整个未决型都会永远少一栏，正是这次要修的那个空。
+ * 而"没查出来，下一步先加这几个观测"恰恰是那种排查最该留下的东西——跟着根因走的话，
+ * 归档的半程报告与整个未决型都会永远少一栏，正是这次要修的那个空。
  *
  * 排除 `superseded` 与 `refuted`：前者的判断被后来的 step 顶掉了，后者的假设自己被否掉了，
  * 两种情况下那条建议都失去了出处。留着它报告里会躺一条基于作废判断的修复方案，且毫无报错。
@@ -199,7 +199,7 @@ export function reportSections(db: Db, caseId: string): ReportSections {
   const chrono = CHRONO;
   const chronoDesc = CHRONO_DESC;
   // 影响面取当前生效的那一步，且**必须已经收尾**——还开着的那条 verdict 是空的，
-  // 印出来就是一栏空白；而结案校验用的是同一个函数，两边不会各说各话
+  // 印出来就是一栏空白；而定稿校验用的是同一个函数，两边不会各说各话
   const impact = effectiveStep(db, caseId, 'impact');
   return {
     rootCause: q<ReportSections['rootCause'] & object>(
@@ -233,9 +233,9 @@ export type NarrativeHit = { ref_id: string; ref_kind: string; case_id: string; 
  * 走 MATCH 走出 5 万行、30ms 全在 main 线程上；加了 LIMIT 之后 0.2ms）。
  * 而这条查询是**人每打一个字就跑一次**的同步 IPC，对话带越攒越长，代价只增不减。
  *
- * 截断的代价是"常见词只看得到前 N 条命中里出现过的案子"，这是检索框的正常契约；
+ * 截断的代价是"常见词只看得到前 N 条命中里出现过的排查"，这是检索框的正常契约；
  * 而它换来的是**代价与库的大小脱钩**。取值远大于切换栏那 20 行，
- * 好让归并之后仍有足够多的案子可排。
+ * 好让归并之后仍有足够多的排查可排。
  */
 export const MAX_HITS = 2000;
 
@@ -249,7 +249,7 @@ export const MAX_HITS = 2000;
  * 🔴 **`ESCAPE` 子句会把 trigram 的 LIKE 优化整个关掉**（实测：`INDEX 0:L3` 变成
  * `INDEX 0:`，一次罕见词查询从 0.1ms 涨到 5.1ms，且随表增长）。所以只在查询串**真的
  * 含通配符**时才带它——那种查询很少，慢一点认了；其余一律走得到索引的那条路。
- * 不能一律不带：`%` `_` 是通配符，搜一个 `_` 会把全部案子翻出来。
+ * 不能一律不带：`%` `_` 是通配符，搜一个 `_` 会把全部排查翻出来。
  */
 export function searchNarrative(db: Db, term: string): NarrativeHit[] {
   const t = term.trim();
@@ -270,8 +270,8 @@ export function searchNarrative(db: Db, term: string): NarrativeHit[] {
 }
 
 /**
- * 命中出自哪一类文本。**顺序就是优先级**：找旧案子的心智是"上次那个从库延迟的"，
- * 而人记得的多半是自己写的问题，其次才是最后的判定；对话带排最后——它最长也最杂，
+ * 命中出自哪一类文本。**顺序就是优先级**：找旧排查的心智是"上次那个从库延迟的"，
+ * 而人记得的多半是自己写的问题，其次才是最后的结论；对话带排最后——它最长也最杂，
  * 拿它当摘要，一屏结果里全是"好的，我这就查"。
  */
 const HIT_KINDS = ['case', 'verdict', 'direction', 'evidence', 'lane', 'chat'] as const;
@@ -298,7 +298,7 @@ function snippetAround(text: string, term: string): string {
  * 切换栏上的检索（ui.md §8.3）：把 `narrative_fts` 的命中按 case 归并。
  *
  * **排序与 `caseList` 同一条规则**（进行中的在前、同档按最近活动倒序），不按命中条数排：
- * 两处各排各的话，同一个案子在"最近 20 个"里排第一、搜出来却排第七，人会以为搜到的是另一个。
+ * 两处各排各的话，同一次排查在"最近 20 个"里排第一、搜出来却排第七，人会以为搜到的是另一个。
  * 命中条数只作为附带信息给出来，不参与排序。
  *
  * 归并要**在 JS 里做**而不是 `GROUP BY`：摘要得挑优先级最高的那一条，
@@ -322,11 +322,11 @@ export function searchCases(db: Db, term: string, opts: { limit?: number } = {})
   }
   if (!best.size) return [];
 
-  // 案子数被 `MAX_HITS` 顶死（一条命中最多贡献一个案子），所以这串占位符不会撞上
-  // SQLite 的变量上限——上限那一头不必再单独截，截了反而是按 Map 的插入顺序丢案子
+  // 排查数被 `MAX_HITS` 顶死（一条命中最多贡献一次排查），所以这串占位符不会撞上
+  // SQLite 的变量上限——上限那一头不必再单独截，截了反而是按 Map 的插入顺序丢排查
   const ids = [...best.keys()];
   // INNER JOIN 是有意的：`narrative_fts` 上没有外键，指不到 `cases` 的命中就是脏索引，
-  // 拿它渲染出的 chip 点下去会切到一个不存在的案子（`switchTo` 回 false，界面一动不动）
+  // 拿它渲染出的 chip 点下去会切到一个不存在的排查（`switchTo` 回 false，界面一动不动）
   const rows = db
     .prepare(
       `SELECT id, title, status, updated_at FROM cases WHERE id IN (${ids.map(() => '?').join(',')}) ${CASE_ORDER}`,

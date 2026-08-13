@@ -11,20 +11,20 @@ const DEFAULT_ROW = 'default';
  */
 function checkDate(v: string): string | null {
   const s = v.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s ? '格式要是 YYYY-MM-DD' : '基准日必填';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s ? '格式要是 YYYY-MM-DD' : '基准日期必填';
   const ms = Date.parse(`${s}T00:00:00Z`);
   if (Number.isNaN(ms)) return '这一天不存在';
   return new Date(ms).toISOString().slice(0, 10) === s ? null : '这一天不存在';
 }
 
 /**
- * 立案面板（ui.md §8.1）。
+ * 新建排查面板（ui.md §8.1）。
  *
  * 字段顺序是**先项目起点再写问题**：起点决定 agent 继承哪套 skill / MCP，
  * 先选它，问题才写得有的放矢。
  *
- * 基准日不放在「可选线索」里，因为它不是线索：没有它 `occurred_at_ms`
- * 落不成绝对时刻，事故时间线就是空的（D11 / D27）。时区不收，取本机的。
+ * 基准日期不放在「已知现象」那一档可选项里，因为它不是背景信息：没有它 `occurred_at_ms`
+ * 落不成绝对时刻，系统时间线就是空的（D11 / D27）。时区不收，取本机的。
  */
 export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<IntakeResult> }) {
   const [opts, setOpts] = useState<IntakeOptions | null>(null);
@@ -48,7 +48,7 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
   const model = opts?.models.find((m) => m.value === (agent.model ?? DEFAULT_ROW));
   // 模型不支持 effort 就整项不出现，而不是给个拧了不生效的假开关（D19）
   const efforts = model?.efforts ?? [];
-  // 基准日错了不会有任何报错，只会让整条事故时间线排乱，
+  // 基准日期错了不会有任何报错，只会让整条系统时间线排乱，
   // 所以在这里拦住，而不是在下游悄悄替换成一个默认值
   const dateError = checkDate(incidentDate);
   const ready = question.trim().length > 0 && !dateError && !submitting;
@@ -66,7 +66,7 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
         clues: clues.trim() || null,
         agent,
       });
-      // 成功时不复位 submitting：立完案整屏就换掉了，复位只会让按钮闪一下
+      // 成功时不复位 submitting：建完单整屏就换掉了，复位只会让按钮闪一下
       if (!r.ok) {
         setRootError(r.error);
         setSubmitting(false);
@@ -87,10 +87,10 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
 
   return (
     <div className="intake">
-      <h1>立案</h1>
+      <h1>新建排查</h1>
       <p className="lede">
-        一次事故一个案子。案子可以跨多个会话，中途换模型是常态——所以 agent 三项记在会话上，
-        项目起点与基准日记在案子上。
+        一个问题一次排查。一次排查可以跨多个会话，中途换模型是常态——所以 agent 三项记在会话上，
+        项目起点与基准日期记在排查上。
       </p>
 
       <label className="field">
@@ -98,7 +98,7 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
         <div className="row">
           <input
             value={root}
-            placeholder="不填 = 演示事故（挂内置玩具数据源）"
+            placeholder="不填 = 演示模式（挂内置玩具数据源）"
             className={rootError ? 'bad' : ''}
             onChange={(e) => {
               setRoot(e.target.value);
@@ -139,7 +139,7 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
       </label>
 
       <label className="field">
-        <span className="k">事故基准日</span>
+        <span className="k">基准日期</span>
         <input
           className={dateError ? 'bad' : ''}
           value={incidentDate}
@@ -149,7 +149,7 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
         <span className={dateError ? 'hint err' : 'hint'}>
           {dateError ?? (
             <>
-              日志时间串多半只有 <code>12:03:01.220</code>，没有这一天就排不出事故时间线。不带时区的时间串按这一天的本机时区{' '}
+              日志时间串多半只有 <code>12:03:01.220</code>，没有这一天就排不出系统时间线。不带时区的时间串按这一天的本机时区{' '}
               <code>{tzOffset ?? '…'}</code> 解释。
             </>
           )}
@@ -158,7 +158,7 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
 
       <label className="field">
         <span className="k">
-          已知线索 <em>可选</em>
+          已知现象 <em>可选</em>
         </span>
         <input
           value={clues}
@@ -232,10 +232,10 @@ export function Intake({ onSubmit }: { onSubmit: (d: IntakeDraft) => Promise<Int
 
       <div className="actions">
         <button onClick={useDemo} disabled={!opts || submitting}>
-          用演示事故填一份
+          用演示数据填一份
         </button>
         <button className="primary" disabled={!ready} onClick={() => void submit()}>
-          立案
+          创建排查
         </button>
       </div>
     </div>

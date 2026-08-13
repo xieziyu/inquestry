@@ -24,7 +24,7 @@ export const evidenceItemShape = {
     .optional()
     .describe(
       '这条证据描述的事件**真实发生的时间**（不是你查到它的时间）。原样抄日志里的时间串，别自己换算时区。' +
-        '日志类证据必须填——事故时间线完全靠它重建。',
+        '日志类证据必须填——系统时间线完全靠它重建。',
     ),
   actor: z.string().optional().describe('谁/哪个组件做的：gateway / db-primary / client / app …'),
 };
@@ -41,8 +41,8 @@ export const openStepShape = {
     .enum(['normal', 'impact', 'leftover'])
     .optional()
     .describe(
-      'normal = 普通排查方向；impact = 结案前量化影响面的那一步；leftover = 汇总没查清的疑点。' +
-        '后两者结案前各需要至少一次。',
+      'normal = 普通排查方向；impact = 定稿前量化影响面的那一步；leftover = 汇总没查清的问题。' +
+        '后两者定稿前各需要至少一次。',
     ),
   parentStepId: z.string().optional().describe('若这一步是在某个已有 step 之下细分，填其 id。'),
 };
@@ -62,8 +62,8 @@ export const closeStepShape = {
     .enum(['sequence', 'state', 'chain', 'distribution', 'open'])
     .optional()
     .describe(
-      '这是哪一类故障——它决定最终报告装哪几块。**只在这一步给出了整个案子的根因时才填**。' +
-        'sequence = 顺序/竞态错了，主体是事故时间线；' +
+      '这是哪一类故障——它决定最终报告装哪几块。**只在这一步给出了整个排查的根因时才填**。' +
+        'sequence = 顺序/竞态错了，主体是系统时间线；' +
         'state = 某个东西一直就是错的（配置写错、索引缺失、证书过期），主体是应然/实然对照，没有时间线；' +
         'chain = 一处变更连锁放大，主体是因果链；' +
         'distribution = 问题只出在某一小撮上，主体是归因切分；' +
@@ -79,7 +79,7 @@ export const closeStepShape = {
     .optional()
     .describe(
       '**该怎么修**——最终报告四栏里唯一由你生成的那一块，不填报告里就写「无」。' +
-        '在给出根因的那一步填；没查出根因就在汇总遗留疑点那一步填「下一步该怎么查、先加哪些观测」。' +
+        '在给出根因的那一步填；没查出根因就在汇总遗留问题那一步填「下一步该怎么查、先加哪些观测」。' +
         '写得可执行：改哪个配置 / 加哪个索引 / 谁来做，别写「建议加强监控」这种落不了地的话。' +
         '**这一步的结论被后来的 step 推翻时，这条建议跟着失效**——所以要挂在给出判断的那一步上。',
     ),

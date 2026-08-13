@@ -702,7 +702,7 @@ async function runAsync() {
         `Agent 调用的 tool_use_id=${gammaTaskId}`,
     ],
     [
-      // 收口那一步写的就是这两样（ui.md §3.2）。**没有它们，收口只能由 harness 编一句判定**——
+      // 收口那一步写的就是这两样（ui.md §3.2）。**没有它们，收口只能由 harness 编一句结论**——
       // 而报告里会因此多出一条没有人下过的结论。两样都要，因为被人停掉的那条不发 SubagentStop
       '20. 收口拿得到支线自己的话：SubagentStop 的最后一句 + 通知自带的摘要',
       Boolean(rec.subagentStop.find((s) => s.agentId === payload.agentId)?.lastMessage?.trim()) &&

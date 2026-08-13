@@ -243,14 +243,14 @@ async function main() {
   // ── ⑤ 收口：跑完的支线不能永远停在「进行中」（ui.md §3.2） ────────────────────
   //
   // 收口只认 `task_notification`（被人停掉的那条不发 `SubagentStop`），内容一律是**支线自己的话**：
-  // harness 替它编一句判定的话，报告里会多出一条没有人下过的结论。
+  // harness 替它编一句结论的话，报告里会多出一条没有人下过的结论。
 
   probe.lanes.noteSubagentStop('ag_alpha', '  三次日志都指向同一个实例，alpha 这条查完了  ');
   const finA = probe.lanes.absorb(notify('ag_alpha', 'completed', '（通知自带的摘要）', 'task_alpha') as never);
   if (finA) probe.convergeLane(finA);
   const aRow = stepRow(stepOf('inner_a1'));
   check(
-    '16. 支线跑完，它那一步收成 converged（不是 open，也不是任何一种判定）',
+    '16. 支线跑完，它那一步收成 converged（不是 open，也不是任何一种结论）',
     aRow?.status === 'converged' && !!aRow?.t_end,
     `alpha 那一步 status=${aRow?.status} t_end=${aRow?.t_end}`,
   );
@@ -334,13 +334,13 @@ async function main() {
     `返回 ${nothing}`,
   );
 
-  // converged 是"这条支线到此为止"，不是一种判定。**借 inconclusive 的话每条跑完的支线
-  // 都会变成报告里的一条「遗留疑点」**（queries.ts 只看 status 不看 kind），而它谁都没落下
+  // converged 是"这条支线到此为止"，不是一种结论。**借 inconclusive 的话每条跑完的支线
+  // 都会变成报告里的一条「遗留问题」**（queries.ts 只看 status 不看 kind），而它谁都没落下
   const sections = reportSections(db, 'case_branch');
   check(
-    '22. 收口的支线哪一栏报告都不进（尤其不是「遗留疑点」）',
+    '22. 收口的支线哪一栏报告都不进（尤其不是「遗留问题」）',
     sections.leftovers.length === 0 && sections.refuted.length === 0 && !sections.rootCause,
-    `遗留疑点 ${sections.leftovers.length} 条 / 被推翻 ${sections.refuted.length} 条 / 根因 ${sections.rootCause?.step_id ?? '无'}`,
+    `遗留问题 ${sections.leftovers.length} 条 / 被推翻 ${sections.refuted.length} 条 / 根因 ${sections.rootCause?.step_id ?? '无'}`,
   );
 
   // 停一条支线认的是 `agent_id`（A.1：`task_id` 就是它）。认不出来就不该发 stopTask——
@@ -378,7 +378,7 @@ async function main() {
   probe.lanes.absorb(forwarded('task_orph', 'inner_o1') as never);
   start('inner_o1', 'ag_orph');
 
-  // ── ⑤ 后台电平：主线不忙了不等于这个案子闲下来了 ──────────────────────────
+  // ── ⑤ 后台电平：主线不忙了不等于这次排查闲下来了 ──────────────────────────
   const bridge = new LaneBridge();
   check('12. 没有支线时电平是 0', bridge.backgroundLanes === 0, `实得 ${bridge.backgroundLanes}`);
   bridge.absorb({ type: 'system', subtype: 'background_tasks_changed', tasks: [{}, {}] });
@@ -406,7 +406,7 @@ async function main() {
   const busyWithLane = runner.isBusy;
   runner.close('自检收尾。');
   check(
-    '15. 只剩支线在后台时这个案子仍算「在跑」，收尾之后归零',
+    '15. 只剩支线在后台时这次排查仍算「在跑」，收尾之后归零',
     busyWithLane && !runner.isBusy,
     `支线在跑时 ${busyWithLane}，close 之后 ${runner.isBusy}`,
   );

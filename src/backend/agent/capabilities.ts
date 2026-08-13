@@ -1,5 +1,5 @@
 /**
- * 立案面板要列的模型与思考强度（D19 能力协商）。
+ * 新建排查面板要列的模型与思考强度（D19 能力协商）。
  *
  * 不写死一张表：backend 自己报得出来的东西就问它要。问不到才退回内置表，
  * 并让 UI 明说这是兜底 —— 假装知道比承认不知道更糟（effort 尤其：
@@ -28,7 +28,7 @@ export const BACKENDS: IntakeOptions['backends'] = [
 type Cache = { at: number; models: ModelOption[] };
 
 /**
- * 缓存进 `ui_settings`：探测代价是一次进程 spawn，不该每次开立案面板都付。
+ * 缓存进 `ui_settings`：探测代价是一次进程 spawn，不该每次开新建排查面板都付。
  * 读写用回调传进来，这个模块不认识 DB。
  */
 export async function loadModelOptions(io: {

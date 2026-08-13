@@ -1,5 +1,5 @@
 /**
- * Spike Tools —— 让真 agent 排查一个玩具事故，验**遵从性**（tools.md）。
+ * Spike Tools —— 让真 agent 排查一个玩具故障，验**遵从性**（tools.md）。
  *
  * 前两个 spike 验的是「能不能做到」，这个验的是「这套设计到底成不成立」：
  * 「agent 填 direction 敷衍」一度是头号风险，只有真跑一次才能证伪（tools.md §4）。
@@ -7,9 +7,9 @@
  * 观测：
  *   1. 是否每个方向都先 open_step，且 direction 是可证伪命题（不是「我要进一步分析」）
  *   2. close_step 是否挂了证据，callRef 是否指得回真实调用
- *   3. occurredAt 填充率 —— 事故时间线的唯一来源，最容易被略过
+ *   3. occurredAt 填充率 —— 系统时间线的唯一来源，最容易被略过
  *   4. ask_operator 是否先写 expect；语句被人改写后是否学到真实 schema
- *   5. 结案前是否出现 impact / leftover 两个固定 step
+ *   5. 定稿前是否出现 impact / leftover 两个固定 step
  *   6. 收到 close_step 的 warnings 后是否会补
  *
  * 跑：npm run spike:tools
@@ -30,7 +30,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROMPT = readFileSync(path.join(HERE, '../src/backend/prompt/investigation.md'), 'utf8');
 const MAX_TURNS = 40;
 
-// ───────────────────────── 玩具事故的数据源 ─────────────────────────
+// ───────────────────────── 玩具故障的数据源 ─────────────────────────
 
 const LOGS: Record<string, string[]> = {
   gateway: [
@@ -181,9 +181,9 @@ const store: InvestigationStore = {
       }
       // 只对**自带时间戳、且本次确实有命中**的调用要求 occurredAt。
       // 一刀切会逼 agent 往 schema 事实、聚合结论、零命中这类没有事件时间的证据里
-      // 塞查询执行时间——第一轮就这么污染了事故时间线。
+      // 塞查询执行时间——第一轮就这么污染了系统时间线。
       if (TIMESTAMPED_SOURCES.has(call.tool) && !call.empty && !e.occurredAt) {
-        warnings.push(`证据「${e.claim.slice(0, 20)}…」来自 ${call.tool} 却缺 occurredAt，事故时间线会断在这里。`);
+        warnings.push(`证据「${e.claim.slice(0, 20)}…」来自 ${call.tool} 却缺 occurredAt，系统时间线会断在这里。`);
       }
     }
     rec.closed = args;
@@ -295,7 +295,7 @@ function report(final: string) {
   const badRefs = closed.flatMap((s) =>
     s.closed!.evidence.filter((e) => !s.calls.some((c) => c.n === refNum(e.callRef))),
   );
-  // leftover 是汇总，本就不是假设（提示词里明说了），不参与可证伪性判定
+  // leftover 是汇总，本就不是假设（提示词里明说了），不参与可证伪性结论
   const vague = real
     .filter((s) => s.kind !== 'leftover')
     .filter((s) => VAGUE.test(s.direction.trim()) || !FALSIFIABLE_MARK.test(s.direction));
@@ -310,7 +310,7 @@ function report(final: string) {
     ['4. callRef 指得回真实调用', badRefs.length === 0, badRefs.length ? `无效引用 ${badRefs.length} 条：${badRefs.map((e) => e.callRef).join(',')}` : '全部有效'],
     ['5. 有命中的日志类调用，证据都填了 occurredAt', logEvidence.length > 0 && withOccurred.length === logEvidence.length, `${withOccurred.length}/${logEvidence.length}`],
     ['6. ask_operator 写了 expect，且学到了被改写的真实 schema', asks.length > 0 && asks.every((a) => a.expect?.length > 5) && (asks.length === 1 || learnedSchema), `调用 ${asks.length} 次；后续语句用 t_order：${learnedSchema}`],
-    ['7. 结案前出现 impact 与 leftover 两个固定 step', real.some((s) => s.kind === 'impact') && real.some((s) => s.kind === 'leftover'), `kind 分布：${JSON.stringify(real.reduce<Record<string, number>>((m, s) => ((m[s.kind] = (m[s.kind] ?? 0) + 1), m), {}))}`],
+    ['7. 定稿前出现 impact 与 leftover 两个固定 step', real.some((s) => s.kind === 'impact') && real.some((s) => s.kind === 'leftover'), `kind 分布：${JSON.stringify(real.reduce<Record<string, number>>((m, s) => ((m[s.kind] = (m[s.kind] ?? 0) + 1), m), {}))}`],
   ];
 
   console.log('\n===== Spike Tools 结果 =====');
@@ -333,7 +333,7 @@ function report(final: string) {
     if (s.warnings?.length) console.log(`      ⚠ harness 回给 agent 的警告: ${s.warnings.join(' / ')}`);
   }
 
-  console.log('\n----- 事故时间线（把 agent 填的 occurredAt 排一次序）-----');
+  console.log('\n----- 系统时间线（把 agent 填的 occurredAt 排一次序）-----');
   for (const e of allEvidence.filter((x) => x.occurredAt).sort((a, b) => String(a.occurredAt).localeCompare(String(b.occurredAt)))) {
     console.log(`  ${e.occurredAt}  ${(e.actor ?? '?').padEnd(11)} ${e.claim}`);
   }

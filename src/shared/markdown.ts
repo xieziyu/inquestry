@@ -9,7 +9,7 @@
  * 一旦不渲染就是一大团噪音），mermaid 只作为末尾 `<details>` 里的附加。
  * 除那一个 `<details>` 外全篇纯 Markdown。
  *
- * **纯函数，不读时钟**：生成时间由调用方给。自己取 `Date.now()` 的话同一个案子导两次的产物
+ * **纯函数，不读时钟**：生成时间由调用方给。自己取 `Date.now()` 的话同一次排查导两次的产物
  * 不一致，也就没法拿检查兜住"页脚水印到底印了没有"。
  */
 
@@ -55,7 +55,7 @@ export function reportMarkdown(input: ReportInput, opts: MarkdownOptions): strin
   const blocks: string[] = [`# ${inline(input.case.title)}`, lede(input, ctx), meta(input, ctx)];
 
   for (const section of plan.sections) {
-    // 根因判定已经在置顶的引用块里了（§7.1：很多平台的预览只显示前几行，
+    // 根因已经在置顶的引用块里了（§7.1：很多平台的预览只显示前几行，
     // 第一屏必须是结论本身）。再印一节就是同一句话说两遍
     if (section.id === 'verdict') continue;
     blocks.push(sectionMd(section, ctx));
@@ -73,7 +73,7 @@ export function reportMarkdown(input: ReportInput, opts: MarkdownOptions): strin
 /**
  * 置顶的引用块：**第一屏必须是结论本身**（§7.1）。
  *
- * 装不装根因这一条**只认 `plan`**，不看 `report.rootCause` 有没有值——未决型的残报告
+ * 装不装根因这一条**只认 `plan`**，不看 `report.rootCause` 有没有值——未决型的半程报告
  * 库里往往正躺着一条已证实的结论，按"有就装"写的话第一行就会印上它，
  * 而这份报告明写的是"没查出来"（同 `reportPlan()` 里那一条，这次换到了渲染侧）。
  */
@@ -89,15 +89,15 @@ function lede(input: ReportInput, ctx: Ctx): string {
     ].filter(Boolean);
     if (tags.length) lines.push(tags.join(' · '));
   } else {
-    lines.push('**未决**：这次调查没有得出根因。以下是查过的方向与留下的疑点。');
+    lines.push('**未决**：这次排查没有得出根因。以下是查过的方向与留下的问题。');
   }
 
   // 这两条是对整份结论的限定，必须与结论同屏——挪到正文里就等于让人先读完再知道它不算数
   if (ctx.plan.abortedAt !== null) {
-    lines.push(`⚠️ 调查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
+    lines.push(`⚠️ 排查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
   }
   if (!ctx.plan.frozen) {
-    lines.push('⚠️ 这个案子还没收尾：形态是按现有数据推的，报告会跟着排查一起变。');
+    lines.push('⚠️ 这次排查还没收尾：形态是按现有数据推的，报告会跟着排查一起变。');
   }
 
   return lines.map((l) => `> ${l}`).join('\n>\n');
@@ -109,7 +109,7 @@ function meta(input: ReportInput, ctx: Ctx): string {
   return [
     `- **问的是**：${inline(c.question)}`,
     `- **按${shape.label}装** · 主体是${shape.body}`,
-    `- **基准日**：${codeSpan(c.incidentDate)} ${c.tzOffset}`,
+    `- **基准日期**：${codeSpan(c.incidentDate)} ${c.tzOffset}`,
   ].join('\n');
 }
 
@@ -154,7 +154,7 @@ function body(section: ReportSection, ctx: Ctx): string {
       return b.rows.length ? b.rows.map((r) => `- ${stepRefMd(r, ctx)}`).join('\n') : '无。';
 
     case 'prose':
-      // 空的一栏照旧写「无」：整节消失读起来像"没这回事"（§7.1 那条对遗留疑点的要求同样适用）
+      // 空的一栏照旧写「无」：整节消失读起来像"没这回事"（§7.1 那条对遗留问题的要求同样适用）
       return b.text ? inline(b.text) : '无。';
 
     case 'absent':
@@ -163,20 +163,20 @@ function body(section: ReportSection, ctx: Ctx): string {
 }
 
 /**
- * 事故时间线退化成表格：竖线加圆点画不进 Markdown（§7.1），而这也正是长图存在的理由之一。
+ * 系统时间线退化成表格：竖线加圆点画不进 Markdown（§7.1），而这也正是长图存在的理由之一。
  *
  * 被推翻的 step 提供的证据照样在列——结论可以被推翻，事实不会。**但不划删除线**：
- * 划掉的是"这条判定不算数"，而这一行说的是当时真的发生过的事。改成在出处上标一句。
+ * 划掉的是"这条结论不算数"，而这一行说的是当时真的发生过的事。改成在出处上标一句。
  */
 function timelineMd(rows: IncidentEntry[], ctx: Ctx): string {
-  if (!rows.length) return '一条带时间的证据都没有。事故时间线由 occurredAt 投影而来。';
+  if (!rows.length) return '一条带时间的证据都没有。系统时间线由 occurredAt 投影而来。';
   const head = ['| 时间 | 主体 | 事实 | 出处 |', '| --- | --- | --- | --- |'];
   const body = rows.map((r) => {
     const when = r.occurredAtRaw ?? new Date(r.occurredAtMs).toISOString();
     // 出处这一格全是我们自己排的（编号 + 一句标注），不走内容那条转义——
     // `#1` 过一遍 blockGuard 会变成 `\#1`，每一行都带一个多余的反斜杠
     const from = refutedStatus(r.stepStatus)
-      ? `${ctx.label(r.stepId)}（判定已被推翻）`
+      ? `${ctx.label(r.stepId)}（结论已被推翻）`
       : ctx.label(r.stepId);
     return `| ${valueCell(when)} | ${cell(r.actor ?? '——')} | ${cell(r.claim)}${cite(r.evidenceId, ctx)} | ${from} |`;
   });
@@ -248,7 +248,7 @@ function pathMd(rows: StepNode[], ctx: Ctx): string {
     .join('\n');
 }
 
-/** 遗留疑点与排除矩阵共用：命题 + 被谁推翻，推翻的划掉。 */
+/** 遗留问题与排除矩阵共用：命题 + 被谁推翻，推翻的划掉。 */
 function stepRefMd(r: ReportStepRef, ctx: Ctx): string {
   const text = strike(inline(r.text), r.supersededBy !== null);
   const head = r.direction && !r.supersededBy ? `**${inline(r.direction)}** ` : '';
@@ -293,11 +293,11 @@ function footnotes(input: ReportInput, ctx: Ctx): string {
         // 认不出那次调用也要出声：静默印成"工具未知"以外的任何写法都会让人以为溯源是全的
         call
           ? `${codeSpan(call.toolName)} 第 ${call.callNumber} 次调用`
-          : `调用 ${codeSpan(e.callId)}（本案里找不到这次调用）`,
+          : `调用 ${codeSpan(e.callId)}（本次排查里找不到这次调用）`,
         e.anchor ? `锚点 ${codeSpan(e.anchor)}` : '无锚点（整份输出）',
         e.occurredAtRaw
           ? `时间戳 ${codeSpan(e.occurredAtRaw)}`
-          : '无时间戳（不进事故时间线）',
+          : '无时间戳（不进系统时间线）',
         e.actor ? `主体 ${cell(e.actor)}` : null,
         `出自 ${ctx.label(s.id)}`,
       ].filter(Boolean);
@@ -308,7 +308,7 @@ function footnotes(input: ReportInput, ctx: Ctx): string {
 }
 
 /**
- * mermaid 只作为**附加**，且只在这份报告真的装了事故时间线时才给（§7.1）。
+ * mermaid 只作为**附加**，且只在这份报告真的装了系统时间线时才给（§7.1）。
  *
  * 形态说不投影时间线（状态型、分布型）就一张都没有——从这条侧门把它塞回去，
  * 等于让"不投影"那一列在导出里失效。
@@ -324,7 +324,7 @@ function mermaid(plan: ReportPlan, ctx: Ctx): string | null {
   const edges = section.body.rows.slice(1).map((_, i) => `  n${i} --> n${i + 1}`);
   return [
     '<details>',
-    '<summary>事故时间线（mermaid，渲染不出来时看上面那张表）</summary>',
+    '<summary>系统时间线（mermaid，渲染不出来时看上面那张表）</summary>',
     '',
     '```mermaid',
     'flowchart TD',
@@ -342,7 +342,7 @@ const cites = (evidence: EvidenceNode[], ctx: Ctx) =>
 
 const refutedStatus = (status: string) => status === 'refuted' || status === 'superseded';
 
-/** 删除线只用在"这条判定不算数"上，事实不划（见 `timelineMd`）。 */
+/** 删除线只用在"这条结论不算数"上，事实不划（见 `timelineMd`）。 */
 const strike = (text: string, on: boolean) => (on && text ? `~~${text}~~` : text);
 
 /**
@@ -355,14 +355,14 @@ const cell = (text: string) => inline(text).replace(/\|/g, '\\|');
 /**
  * 折掉空白，并把内容里的 **Markdown 元字符全部转义**。
  *
- * **这是唯一的转义点**：标题、问题、判定、证据、影响面都从这儿过一遍，而它们全都来自
+ * **这是唯一的转义点**：标题、问题、结论、证据、影响面都从这儿过一遍，而它们全都来自
  * agent 与工具输出（日志原文），在界面上只是纯文本，进了 `.md` 就会被渲染器当语法解释。
  * 那不只是排版走形，这份文档是要贴进 PR 与 wiki 的，几种后果各不相同：
  *
  * - `<img onerror=…>` —— 允许 raw HTML 的渲染器上是一条注入
  * - `![x](http://…)` —— 别人一打开报告就替攻击者拉一次外链（追踪像素），链接文字还能伪造去处
  * - 反引号 —— 从代码块里逃出去。**我们自己就把时间戳裹在反引号里**，证据里带一个就撑破它
- * - `~~…~~` / `**…**` —— 在这份文档里**是有语义的**（划掉 = 判定被推翻、粗体 = 根因 / 最弱一环），
+ * - `~~…~~` / `**…**` —— 在这份文档里**是有语义的**（划掉 = 结论被推翻、粗体 = 根因 / 最弱一环），
  *   伪造得出来就等于伪造结论
  * - `[^e1]` —— 伪造一条脚注引用，指到别人的证据上去
  *
@@ -390,7 +390,7 @@ const oneLine = (text: string) => text.replace(/\r\n|[\r\n]/g, ' ');
 
 /**
  * 行首那几个记号只有在**行首**才有意义，而内容确实会占满一整行（影响面那一节就是）。
- * 一段以 `#` 开头的判定会变成一级标题，以 `-` 开头会变成列表——都不是注入，但读者看到的
+ * 一段以 `#` 开头的结论会变成一级标题，以 `-` 开头会变成列表——都不是注入，但读者看到的
  * 结构不是我们排的那个。**`1.` 这种要转的是那个点**：反斜杠加数字在 CommonMark 里不是转义，
  * 会留下一个多余的反斜杠。
  */
@@ -398,7 +398,7 @@ const blockGuard = (text: string) =>
   text.replace(/^([#\-+=])/, '\\$1').replace(/^(\d{1,9})([.)])/, '$1\\$2');
 
 /**
- * 把一个**值**包成完整的 code span（锚点、工具名、基准日——来自 agent 与工具输出）。
+ * 把一个**值**包成完整的 code span（锚点、工具名、基准日期——来自 agent 与工具输出）。
  * **返回的是连围栏在内的整段**，调用方不要再自己加反引号。
  *
  * 这三个字段是读者回查原始日志的依据，**一个字符都不能改**：

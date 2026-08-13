@@ -7,7 +7,7 @@
  * 这一带的错法有三个形状：
  *
  *   1. **绕过 `reportPlan()` 自己拿数据**。渲染侧一句 `if (report.rootCause)` 就能让
- *      未决型的残报告在第一行印上一条根因——那份报告明写的是"没查出来"。
+ *      未决型的半程报告在第一行印上一条根因——那份报告明写的是"没查出来"。
  *      mermaid 那张附加图是同一个门：形态说不投影时间线，从侧门塞回去等于让规则失效
  *   2. **脚注只在被引用时才渲染**。多数渲染器（GitHub 等）不渲染没被正文引到的定义，
  *      于是"少引一条"的表现是那条证据在导出的文档里整条消失，而页脚水印照旧写着
@@ -89,7 +89,7 @@ check(
 check(
   '未决型第一屏不印根因，哪怕库里正躺着一条已证实的',
   !md({ shape: 'open' }).includes(ROOT_TEXT),
-  '渲染侧一句 `if (report.rootCause)` 就够了：归档的残报告会顶着一条根因，而它明写的是没查出来。装不装只认 reportPlan 给的章节',
+  '渲染侧一句 `if (report.rootCause)` 就够了：归档的半程报告会顶着一条根因，而它明写的是没查出来。装不装只认 reportPlan 给的章节',
 );
 
 check(
@@ -119,8 +119,8 @@ check(
 );
 
 check(
-  '根因判定不再单独印一节',
-  !md().includes('## 根因判定'),
+  '根因不再单独印一节',
+  !md().includes('## 根因'),
   '置顶引用块已经是它了：再印一节就是同一句话说两遍，读者会去找两者的差别',
 );
 
@@ -146,7 +146,7 @@ check(
 // ── 时间线用表格，mermaid 只是附加 ──────────────────────────────────────
 
 check(
-  '事故时间线是表格，不是 mermaid',
+  '系统时间线是表格，不是 mermaid',
   (() => {
     const out = prose(md());
     return out.includes('| 时间 | 主体 | 事实 | 出处 |') && !out.includes('```mermaid');
@@ -166,7 +166,7 @@ check(
 check(
   '形态不投影时间线时，一张 mermaid 都不给',
   ['state', 'distribution'].every((shape) => !md({ shape: shape as never }).includes('mermaid')),
-  '夹具里事故时间线有两条：从这条侧门塞回去，等于让形态表里「不投影」那一列在导出里失效',
+  '夹具里系统时间线有两条：从这条侧门塞回去，等于让形态表里「不投影」那一列在导出里失效',
 );
 
 check(
@@ -175,11 +175,11 @@ check(
     const out = md({ incident: [] });
     return !out.includes('mermaid') && out.includes('一条带时间的证据都没有');
   })(),
-  '空 flowchart 在渲染器里是一个空白框；而整节消失读起来像"这个案子没有时间线"',
+  '空 flowchart 在渲染器里是一个空白框；而整节消失读起来像"这次排查没有时间线"',
 );
 
 check(
-  '状态型写出为什么没有事故时间线',
+  '状态型写出为什么没有系统时间线',
   md({ shape: 'state' }).includes('状态型故障没有"事发瞬间"'),
   '默默少一节的话，读者分不出是本来就没有还是漏了（同 spike:report 那条，这次验的是它真的印出来了）',
 );
@@ -214,7 +214,7 @@ check(
       out.includes('\\<img src=x onerror=alert(1)\\>')
     );
   })(),
-  '证据、判定、问题这些文本来自工具输出与 agent：原样写进去，在允许 raw HTML 的渲染器里就是一条注入，而这份文档正是要拿去到处贴的',
+  '证据、结论、问题这些文本来自工具输出与 agent：原样写进去，在允许 raw HTML 的渲染器里就是一条注入，而这份文档正是要拿去到处贴的',
 );
 
 check(
@@ -351,7 +351,7 @@ check(
 check(
   '认不出那次调用时出声，不装作溯源是全的',
   md().split('\n').find((l) => l.startsWith('[^e3]:'))?.includes('找不到这次调用') === true,
-  '夹具里 e3 的 callId 故意不在本案里：静默印成一个空工具名会让人以为点开就能回到原始日志',
+  '夹具里 e3 的 callId 故意不在本次排查里：静默印成一个空工具名会让人以为点开就能回到原始日志',
 );
 
 check(
@@ -360,13 +360,13 @@ check(
     const defs = md({ shape: 'distribution' }).split('\n').filter((l) => l.startsWith('[^'));
     return defs.map((l) => l.slice(0, 6)).join() === '[^e1]:,[^e2]:,[^e3]:';
   })(),
-  '按引用顺序编的话，同一个案子换个形态导出就换一套编号——两份文档之间没法互相对',
+  '按引用顺序编的话，同一次排查换个形态导出就换一套编号——两份文档之间没法互相对',
 );
 
 // ── 被推翻的划掉，事实不划 ──────────────────────────────────────────────
 
 check(
-  '被推翻的判定划删除线，留在原处',
+  '被推翻的结论划删除线，留在原处',
   (() => {
     const out = md({ shape: 'open' });
     return out.includes('~~上游全程正常~~') && out.includes('← 被 #4 推翻');
@@ -375,11 +375,11 @@ check(
 );
 
 check(
-  '事故时间线里，被推翻的 step 提供的证据不划删除线',
+  '系统时间线里，被推翻的 step 提供的证据不划删除线',
   (() => {
     const rows: IncidentEntry[] = [{ ...incident[0]!, stepStatus: 'superseded' }];
     const row = dataRow(md({ incident: rows }));
-    return !row.includes('~~') && row.includes('判定已被推翻');
+    return !row.includes('~~') && row.includes('结论已被推翻');
   })(),
   '结论可以被推翻，事实不会。划掉它等于说这件事没发生过——改成在出处上标一句',
 );
@@ -405,7 +405,7 @@ check(
     const foot = md().split('\n').find((l) => l.startsWith('Case ')) ?? '';
     return foot.includes('case_1') && foot.includes('2026-08-12 15:04') && foot.includes('3 条证据');
   })(),
-  '拿事故时间线的条数当总数会把证据量报少（夹具里 e3 没有时间戳）；没有生成时间则分不出手上这份是哪一版',
+  '拿系统时间线的条数当总数会把证据量报少（夹具里 e3 没有时间戳）；没有生成时间则分不出手上这份是哪一版',
 );
 
 check(
@@ -415,10 +415,10 @@ check(
 );
 
 check(
-  '空的遗留疑点写「无」，整节照旧在',
+  '空的遗留问题写「无」，整节照旧在',
   (() => {
     const out = md({ report: { ...report, leftovers: [] } });
-    return out.includes('## 遗留疑点') && sectionOf(out, '遗留疑点').includes('无。');
+    return out.includes('## 遗留问题') && sectionOf(out, '遗留问题').includes('无。');
   })(),
   '整节消失读起来像"没这回事"；写「无」才是"查过，没有"（§7.1 点名了这一节）',
 );
@@ -435,7 +435,7 @@ check(
     const out = md({ report: { ...report, remediation: null } });
     return out.includes('## 修复建议') && sectionOf(out, '修复建议').includes('无。');
   })(),
-  '与遗留疑点同一条理由：整节消失读起来像"没这回事"',
+  '与遗留问题同一条理由：整节消失读起来像"没这回事"',
 );
 
 check(

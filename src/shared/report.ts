@@ -16,11 +16,11 @@ import type { CaseMeta, IncidentEntry, ReportStepRef, Snapshot, StepNode, Verdic
  * 报告屏上就该看到同一句话，两处各写一份的话，选的时候说的和装出来的会对不上。
  */
 export const SHAPE_COPY: Record<VerdictShape, { label: string; when: string; body: string }> = {
-  sequence: { label: '时序型', when: '顺序 / 竞态错了', body: '事故时间线' },
+  sequence: { label: '时序型', when: '顺序 / 竞态错了', body: '系统时间线' },
   state: { label: '状态型', when: '某个东西一直就是错的', body: '应然 / 实然对照' },
   chain: { label: '因果链型', when: '一处变更连锁放大', body: '因果链 + 最弱一环' },
   distribution: { label: '分布型', when: '问题只在某一小撮上', body: '归因切分' },
-  open: { label: '未决型', when: '没查出来', body: '排除矩阵 + 遗留疑点' },
+  open: { label: '未决型', when: '没查出来', body: '排除矩阵 + 遗留问题' },
 };
 
 export type ChainLink = {
@@ -78,21 +78,21 @@ export type ReportPlan = {
   shape: VerdictShape;
   frozen: boolean;
   /**
-   * stepId → 读者看得见的编号。**`ordinal` 是会话内序号，一个案子重开一次就从 1 重来**，
+   * stepId → 读者看得见的编号。**`ordinal` 是会话内序号，一次排查重开一次就从 1 重来**，
    * 直接印的话跨会话的报告里会有两个 `#1`，而"被 stX 推翻"这类引用也就无处可对。
    * 多会话时带上会话号（`S2#1`），单会话时保持 `#N` 不加噪声。
    *
-   * 报告是冻住的文档，不受调查台那条"序号不许回头改写"的约束（[ui] §3）——
+   * 报告是冻住的文档，不受排查台那条"序号不许回头改写"的约束（[ui] §3）——
    * 那一条防的是实时图里已读节点位移，这里没有实时。
    */
   labels: Record<string, string>;
   /**
-   * 全案证据数，页脚水印用（[ui] §7.2）。**不是事故时间线的条数**：
+   * 全案证据数，页脚水印用（[ui] §7.2）。**不是系统时间线的条数**：
    * 后者只留了带时间戳的那些，拿它当总数会把报告的证据量报少。
    */
   evidenceCount: number;
   /**
-   * 归档的残报告顶上那句「调查在第 N 步被人为终止」（ui.md §8.4）。
+   * 归档的半程报告顶上那句「排查在第 N 步被人为终止」（ui.md §8.4）。
    * 其余一律为 null——它是**人为放弃**的标记，不是"步数"这个中性事实。
    */
   abortedAt: number | null;
@@ -100,15 +100,15 @@ export type ReportPlan = {
 };
 
 const TITLES: Record<string, string> = {
-  verdict: '根因判定',
-  timeline: '事故时间线',
+  verdict: '根因',
+  timeline: '系统时间线',
   contrast: '应然 / 实然',
   chain: '因果链',
   split: '归因切分',
   matrix: '排除矩阵',
   impact: '影响面',
   path: '排查路径',
-  leftover: '遗留疑点',
+  leftover: '遗留问题',
   fix: '修复建议',
 };
 
@@ -133,8 +133,8 @@ export function reportPlan(input: ReportInput): ReportPlan {
 
   /**
    * **未决型没有根因栏，哪怕库里正躺着一条已证实的结论**（ui.md §8.4）。
-   * 归档强制未决型，而被归档的案子多半已经查出了点什么——按"有就装"写的话，
-   * 残报告会顶着一条根因，而它明写的是"没查出来"。
+   * 归档强制未决型，而被归档的排查多半已经查出了点什么——按"有就装"写的话，
+   * 半程报告会顶着一条根因，而它明写的是"没查出来"。
    */
   if (shape !== 'open' && report.rootCause) {
     sections.push(
@@ -147,10 +147,10 @@ export function reportPlan(input: ReportInput): ReportPlan {
   }
 
   sections.push(...mainBody(input));
-  // 四块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留疑点提成了主体，
+  // 四块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留问题提成了主体，
   // 于是它在这儿会撞上——**同一节不装两遍**，位置以先出现的那次为准
   sections.push(
-    sec('impact', '投影 · 影响面 step 的判定', { kind: 'prose', text: report.impact }),
+    sec('impact', '投影 · 影响面 step 的结论', { kind: 'prose', text: report.impact }),
     sec('path', '投影 · step 树，含走错的分支', { kind: 'path', rows: input.steps }),
     sec('leftover', '投影 · 未查清的 step', { kind: 'notes', rows: report.leftovers }),
     // 四栏里唯一没有投影来源的一块：`close_step` 的 `remediation`，取最新一条仍然成立的声明
@@ -180,7 +180,7 @@ function mainBody(input: ReportInput): ReportSection[] {
           expected: report.expected,
           actual: report.actual,
         }),
-        // 状态型**显式写出为什么没有事故时间线**，而不是默默少一节（overview.md §6.1.1）
+        // 状态型**显式写出为什么没有系统时间线**，而不是默默少一节（overview.md §6.1.1）
         sec('timeline', '——', {
           kind: 'absent',
           why: '状态型故障没有"事发瞬间"：它一直就是错的，直到被发现。硬排一条时间线只会得到「某天变更、某天发现」两行，还会把真正该看的应然 / 实然对照挤到后面去。',
@@ -244,7 +244,7 @@ function chainBody(input: ReportInput): ReportBody {
 /**
  * 归因切分：证据按 `actor` 归组，多的排前面——分布型要看的正是"问题压在谁身上"。
  *
- * 取的是**所有**证据，不是事故时间线那一份：后者只留了带时间戳的，
+ * 取的是**所有**证据，不是系统时间线那一份：后者只留了带时间戳的，
  * 而"只在某一小撮上"这件事与有没有时间戳无关，按它切会凭空少掉一批。
  * 被推翻的 step 提供的证据照样在列——结论可以被推翻，事实不会。
  */
@@ -263,7 +263,7 @@ function splitGroups(steps: StepNode[]): SplitGroup[] {
 }
 
 /**
- * 只有真的跨了会话才加 `S{n}` 前缀：单会话的案子是绝大多数，
+ * 只有真的跨了会话才加 `S{n}` 前缀：单会话的排查是绝大多数，
  * 给每一行都挂个恒等于 `S1` 的前缀只是噪声。
  */
 function stepLabels(steps: StepNode[]): Record<string, string> {

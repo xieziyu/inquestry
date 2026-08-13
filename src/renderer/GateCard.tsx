@@ -22,7 +22,7 @@ export function GateCard({
   focused: boolean;
   /**
    * 改过的参数与写好的拒绝理由**存在 App 那边**，不放这张卡的局部 state。
-   * 一切案子这张卡就卸载，写好的理由会跟着没——而它正是拒绝这个动作的全部内容。
+   * 一换排查这张卡就卸载，写好的理由会跟着没——而它正是拒绝这个动作的全部内容。
    */
   draft: Record<string, string>;
   onDraft: (patch: Record<string, string | undefined>) => void;

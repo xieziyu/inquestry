@@ -9,7 +9,7 @@
  */
 
 export type DomainEvents = {
-  /** 立案单（D27）。基准日与时区是必填：没有它们事故时间线排不出来。 */
+  /** 建单信息（D27）。基准日期与时区是必填：没有它们系统时间线排不出来。 */
   'case.opened': {
     caseId: string;
     title: string;
@@ -29,7 +29,7 @@ export type DomainEvents = {
   'case.status_changed': { caseId: string; status: 'open' | 'closed' | 'aborted'; at: number };
   /**
    * 报告按哪种形态装（D25）。与状态分成两条事件：形态是「报告长什么样」，
-   * 状态是「案子还能不能动」，归档那一档两者同时发生但含义不同——
+   * 状态是「排查还能不能动」，归档那一档两者同时发生但含义不同——
    * 合成一条的话，日后想在冻结之后单独改形态就没有事件表示得出来。
    */
   'case.verdict_decided': {
@@ -71,7 +71,7 @@ export type DomainEvents = {
     /** 状态型故障的报告主体：应然与实然的一对，成对才有意义（D25）。 */
     expected?: string;
     actual?: string;
-    /** agent 对报告形态的声明。结案那一下由 harness 取当前生效的那条（overview §6.1.1）。 */
+    /** agent 对报告形态的声明。定稿那一下由 harness 取当前生效的那条（overview §6.1.1）。 */
     shape?: 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
     /**
      * 修复建议：报告四栏里唯一由 agent 生成的那一块（overview §6.1）。
@@ -84,12 +84,12 @@ export type DomainEvents = {
   /**
    * 一条子 agent 支线跑完，它的兜底步就此收口（data-model.md 的 `converged` 一节）。
    *
-   * **与 `step.closed` 分成两条**：那一条记的是 agent 对一个命题下的判定，而支线的兜底步
-   * 压根没有命题——收口只说「这条支线到此为止，账收在这儿」。合成一条的话，报告与结案
+   * **与 `step.closed` 分成两条**：那一条记的是 agent 对一个命题下的结论，而支线的兜底步
+   * 压根没有命题——收口只说「这条支线到此为止，账收在这儿」。合成一条的话，报告与定稿
    * 校验就得在同一个 status 上分辨两种含义，而它们只看得见 status。
    *
    * `summary` 是**支线自己的话**（SubagentStop 的最后一句，退回 task_notification 的摘要），
-   * 不是 harness 编的判定：这一步唯一能说的就是它自己说过什么。
+   * 不是 harness 编的结论：这一步唯一能说的就是它自己说过什么。
    */
   'lane.converged': {
     stepId: string;
@@ -102,8 +102,8 @@ export type DomainEvents = {
   /**
    * 对话带上的一句话（人说的 / agent 说的 / harness 的系统提示）。
    *
-   * **只有它是重建不出来的**：步骤、证据、判定都能从别的事件投影出来，而"人当时怎么纠偏的"
-   * 不留就永远没了。`sessionId` 可空——立完案还没开会话时也会有系统提示。
+   * **只有它是重建不出来的**：步骤、证据、结论都能从别的事件投影出来，而"人当时怎么纠偏的"
+   * 不留就永远没了。`sessionId` 可空——建完单还没开会话时也会有系统提示。
    */
   'chat.appended': {
     lineId: string;

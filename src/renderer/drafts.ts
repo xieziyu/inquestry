@@ -1,7 +1,7 @@
 import type { CaseBrief, CaseHit, ShapeSuggestion } from '../shared/ipc.js';
 
 /**
- * 结案确认条上「状态型的主体填不填得出来」该信哪一份。
+ * 定稿确认条上「状态型的主体填不填得出来」该信哪一份。
  *
  * 确认条冻的是弹出那一刻 main 算出来的整份建议，而快照每 60ms 换一次。两难在于：
  *
@@ -18,9 +18,9 @@ export function stateFillable(frozen: ShapeSuggestion | undefined, live: ShapeSu
 }
 
 /**
- * 待办卡里人已经敲进去的东西，按「案子 + 条目 id」存。
+ * 待办卡里人已经敲进去的东西，按「排查 + 条目 id」存。
  *
- * 提到 App 级是因为卡片跟着快照渲染：一切案子旧卡片就卸载，局部 state 随之蒸发，
+ * 提到 App 级是因为卡片跟着快照渲染：一换排查旧卡片就卸载，局部 state 随之蒸发，
  * 粘贴的查询结果、写好的拒绝理由全没。存在这里，切回去还在。
  */
 export type CardDrafts = Record<string, Record<string, string>>;
@@ -28,14 +28,14 @@ export type CardDrafts = Record<string, Record<string, string>>;
 export const draftKey = (caseId: string, itemId: string) => `${caseId}:${itemId}`;
 
 /**
- * 对账：某个案子里已经不在快照上的条目，草稿也该跟着走。
+ * 对账：某个排查里已经不在快照上的条目，草稿也该跟着走。
  *
  * 草稿本身只在处置落地时才删得掉，但卡片消失的路径不止那一条——闸门到点自动放行、
  * 回填超时作废、停止或重开把待办整批散掉、后台 runner 被回收，都会让卡片从快照上消失。
  * 条目 id 每次都不同、App 又是长驻的，不对账的话这些记录只增不减，
  * 里面还可能躺着人粘进去的整段查询结果。
  *
- * **只对账传进来的那一个案子。** 别的案子的待办这会儿根本不在快照里，
+ * **只对账传进来的那一次排查。** 别的排查的待办这会儿根本不在快照里，
  * 拿不到它们的 id；一并清掉就等于把「切回去草稿还在」这件事又废了。
  */
 export function pruneDrafts(drafts: CardDrafts, caseId: string, aliveIds: Iterable<string>): CardDrafts {
@@ -60,10 +60,10 @@ export function pruneDrafts(drafts: CardDrafts, caseId: string, aliveIds: Iterab
  *
  * 🔴 **不在 `cases` 里的按"静的"算，不是保留命中里那份旧值。** 这不是猜：
  * 切换栏那份列表把「当前的 / 还跑着的 / 挂着待办的」全部钉住（`CaseRegistry.pinnedIds`），
- * 所以一个案子**不在里面** ⟺ 它三样都不是。留着旧值的话，一条刚被处理掉的待办
+ * 所以一次排查**不在里面** ⟺ 它三样都不是。留着旧值的话，一条刚被处理掉的待办
  * 会在检索结果上一直挂着「等你 3」。
  *
- * `loaded` 同理归零：它只影响"已停 / 未打开"那句话，而没被钉住的案子本就不该显示成在跑。
+ * `loaded` 同理归零：它只影响"已停 / 未打开"那句话，而没被钉住的排查本就不该显示成在跑。
  */
 export function freshenHits(hits: CaseHit[], cases: CaseBrief[]): CaseHit[] {
   const live = new Map(cases.map((c) => [c.id, c]));

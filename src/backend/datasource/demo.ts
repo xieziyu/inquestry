@@ -2,7 +2,7 @@
  * 演示数据源。
  *
  * 真实用法是继承用户已有的 skill / MCP（overview §2 的「白送能力」），
- * 但那要求装机环境齐备；这个玩具事故让 app 装上就能跑通一整条链路。
+ * 但那要求装机环境齐备；这个玩具故障让 app 装上就能跑通一整条链路。
  */
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';

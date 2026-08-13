@@ -33,16 +33,16 @@ declare global {
 export function App() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   /**
-   * 报告开着的是**哪个案子**的（D21：调查台与报告是两个屏，不是同屏两个 tab）。
+   * 报告开着的是**哪个排查**的（D21：排查台与报告是两个屏，不是同屏两个 tab）。
    *
-   * 记案子而不是记一个 `screen` 枚举：切到别的案子时报告屏得自己让开——
-   * 留着的话，屏幕上是 B 案的标题配 A 案的章节，而报告正是这个工具唯一交出去的东西。
+   * 记排查而不是记一个 `screen` 枚举：切到别的排查时报告屏得自己让开——
+   * 留着的话，屏幕上是排查 B 的标题配排查 A 的章节，而报告正是这个工具唯一交出去的东西。
    * 与确认条按 caseId 记是同一条理由，只是那一条的代价大得多。
    */
   const [reportOf, setReportOf] = useState<string | null>(null);
   /**
-   * 输入草稿**按案子分开存**。共用一个的话，在 A 案写到一半切到 B 案，输入框里还是那段字，
-   * 一发送就把 A 的线索写进了 B 的会话——串案而且毫无提示。
+   * 输入草稿**按排查分开存**。共用一个的话，在排查 A 写到一半切到排查 B ，输入框里还是那段字，
+   * 一发送就把 A 写到一半的输入发进了 B 的会话——串到别的排查上，而且毫无提示。
    * 分开存还顺带保住了草稿：切回去它还在。
    */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -51,15 +51,15 @@ export function App() {
   /**
    * 待办处置没落地时的提示。
    *
-   * 挂在应用级而不是卡片上：处置失败多半正是因为案子切走了，那张卡这会儿根本不在屏幕上。
+   * 挂在应用级而不是卡片上：处置失败多半正是因为排查切走了，那张卡这会儿根本不在屏幕上。
    */
   const [notice, setNotice] = useState<string | null>(null);
   /**
    * 收尾里要人再点一下的那两档（D29）。停止不在此列——它随时能接着查，拦一道只是碍事；
-   * 结案与归档都会把案子冻上，冻错了没有回头路，所以要说清后果再确认。
+   * 定稿与归档都会把排查冻上，冻错了没有回头路，所以要说清后果再确认。
    *
-   * **必须连 caseId 一起记。** 只记动作的话，在 A 案弹出确认条之后切到 B 案，
-   * 这条 state 还在，而按钮那一下取的是**当时**的 `openCase`——于是把 B 案不可逆地收掉了，
+   * **必须连 caseId 一起记。** 只记动作的话，在排查 A 弹出确认条之后切到排查 B ，
+   * 这条 state 还在，而按钮那一下取的是**当时**的 `openCase`——于是把排查 B 不可逆地收掉了，
    * 确认文案讲的还是 A 的事。这是本页唯一一个"点下去就没有回头路"的手势，
    * 它是唯一必须自己带上下文的。
    */
@@ -69,28 +69,28 @@ export function App() {
     /**
      * 报告按哪种形态装（D25）。**跟着这条 state 走，不每帧从快照取**：
      * 快照每 60ms 一轮，而人正在这条确认条上挑——取快照的话手上选的会被下一轮冲掉。
-     * 归档那一档没有它：残报告强制是未决型，不给选（ui.md §8.4）。
+     * 归档那一档没有它：半程报告强制是未决型，不给选（ui.md §8.4）。
      */
     shape?: VerdictShape;
     /**
      * 弹出那一刻 main 算出来的**整份**建议，原样冻住。
      *
      * 只冻形态、别的（出处、状态型填不填得出来）现取的话，各项会指着不同的根因：
-     * 屏幕上是弹出时那个推断值，标签却成了"agent 判定"——而 agent 声明的是另一种形态；
+     * 屏幕上是弹出时那个推断值，标签却成了"agent 声明的"——而 agent 声明的是另一种形态；
      * 更糟的一种是根因整个换了人，预选跟着换成了新根因的 `state`，
      * "这一块会是空的"却按旧根因判定成不必提醒，人于是在毫不知情下冻出一份空主体报告。
      */
     suggestion?: ShapeSuggestion;
     /**
      * 人动过手没有。**必须显式记，不能拿"当前值 ≠ 建议值"推**：挑过别的又切回建议值那一档
-     * 会重新显示成 agent 判定，而建议值自己变了的话，人一下没碰过也会被标成"你选的"。
+     * 会重新显示成 agent 声明的，而建议值自己变了的话，人一下没碰过也会被标成"你选的"。
      */
     picked?: true;
   } | null>(null);
   /**
    * 待办卡里人已经敲进去的东西（改过的语句 / 粘贴的结果 / 执行时间 / 拒绝理由）。
    *
-   * **按「案子 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一切案子旧卡片就卸载，
+   * **按「排查 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一换排查旧卡片就卸载，
    * 局部 state 随之蒸发——切回来时它会按 ask/gate 的初值重新挂上，人贴的结果、
    * 写好的拒绝理由全没了。只有处置真的落地才清掉。
    */
@@ -111,7 +111,7 @@ export function App() {
    * 输入框却还能发，消息进的是一个已经没人消费的队列。
    */
   const live = snap.sessionStatus === 'live';
-  /** 结案 / 归档之后只能看和导出：开新会话会往一个已下结论的案子里追加步骤。 */
+  /** 定稿 / 归档之后只能看和导出：开新会话会往一个已下结论的排查里追加步骤。 */
   const frozen = !!snap.case && snap.case.status !== 'open';
   /** 接管开关按人最后按的那一下画：回执与快照都要一会儿才到，中间那一下不能显示成没按 */
   const takeover = wanted ?? snap.takeover;
@@ -120,7 +120,7 @@ export function App() {
     () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
     [snap.pending, snap.gates],
   );
-  /** 别处等着人的案子。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
+  /** 别处等着人的排查。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
   const elsewhere = useMemo(() => snap.cases.filter((c) => !c.current && c.todos > 0), [snap.cases]);
   const [focus, setFocus] = useState<string | null>(null);
   /** 焦点那条消失后要接上它的**位置**，所以光记 id 不够——id 这时已经不在列表里了。 */
@@ -149,11 +149,11 @@ export function App() {
     });
   }, [todos]);
 
-  // 换了案子就把没点完的确认收掉。渲染那侧还会再核一次 caseId：
+  // 换了排查就把没点完的确认收掉。渲染那侧还会再核一次 caseId：
   // effect 要等这一帧渲染完才跑，中间那一下按钮照样点得到
   useEffect(() => {
     setConfirm(null);
-    // 接管的意图也不跨案子：留着的话新案子的开关会先画上一个案子按下的那一下
+    // 接管的意图也不跨排查：留着的话新排查的开关会先画上一次排查按下的那一下
     wantSeq.current += 1;
     setWanted(null);
   }, [snap.case?.id]);
@@ -191,7 +191,7 @@ export function App() {
   const setInput = (text: string) => caseId && setDrafts((d) => ({ ...d, [caseId]: text }));
 
   /**
-   * 送不出去就把草稿留着。切案子 / 点「＋ 新案件」之后 main 那边当时就没有当前案子了，
+   * 送不出去就把草稿留着。切排查 / 点「＋ 新排查」之后 main 那边当时就没有当前排查了，
    * 而这一屏还要等下一次快照才换——先清空再发的话，那段字直接消失。
    */
   const submit = async () => {
@@ -200,8 +200,8 @@ export function App() {
     if (await window.inquestry.send(caseId, text)) setDrafts((d) => ({ ...d, [caseId]: '' }));
   };
 
-  // 没选中案子时整屏只有立案面板：没有基准日与问题，后面所有东西都无从谈起。
-  // 切换栏照常在——立到一半改主意，得能回到原来那个案子
+  // 没选中排查时整屏只有新建排查面板：没有基准日期与问题，后面所有东西都无从谈起。
+  // 切换栏照常在——建到一半改主意，得能回到原来那次排查
   if (!snap.case) {
     return (
       <div className="app">
@@ -234,15 +234,15 @@ export function App() {
     });
 
   /**
-   * 点「结案」。**先问 main 现在还差什么，再决定弹确认还是派活**——
+   * 点「定稿」。**先问 main 现在还差什么，再决定弹确认还是派活**——
    * 不拿快照上的 `closingGaps` 做这个判断：它是 60ms 合流推来的，
    * agent 可能刚补完最后一步而这一屏还没收到，那时按钮上写着"差 1 步"、
-   * 点下去却会走进执行路径，把案子不可逆地冻上且完全没经过确认。
+   * 点下去却会走进执行路径，把排查不可逆地冻上且完全没经过确认。
    *
    * 缺步时不是报个错就完：那两步的内容只有查过的人给得出来，所以派给 agent 去补。
    */
   /**
-   * 开 / 关接管。**没切成要说出来**：切了案子之后 main 那边回绝，
+   * 开 / 关接管。**没切成要说出来**：切了排查之后 main 那边回绝，
    * 而开关是跟着快照渲染的——不说的话屏幕上什么都没变，看起来像按钮坏了。
    */
   const takeCharge = async (on: boolean) => {
@@ -257,7 +257,7 @@ export function App() {
     // 几种没切成要说成不同的话，且**要说清这一轮到底在哪一档**：
     // 都说成"再点一次就行"的话，人会在没有接管的情况下继续查；而把 `unsaved` 说成没切成，
     // 人再按的那一次正好把已经生效的这一档切回去
-    if (r === 'gone') setNotice('没切成接管模式，这个案子刚切走或已经收尾了。切回去再点一次。');
+    if (r === 'gone') setNotice('没切成接管模式，这次排查刚切走或已经收尾了。切回去再点一次。');
     else if (r === 'failed')
       setNotice(
         on
@@ -274,7 +274,7 @@ export function App() {
 
   const requestClose = async () => {
     const r = await window.inquestry.requestClosing(openCase).catch(() => null);
-    if (!r) return setNotice('没问到这个案子的状态，可能它已经切走了。切回去再点一次。');
+    if (!r) return setNotice('没问到这次排查的状态，可能它已经切走了。切回去再点一次。');
     if (!r.missing.length) {
       // 冻的是 **main 刚刚算出来的那一份**，不是这一屏快照上的。
       // 后者是点击那一帧的闭包值，隔着这次 await——main 按最新状态放行了弹窗，
@@ -289,18 +289,18 @@ export function App() {
     const what = r.missing.map(closingLabel).join('与');
     setNotice(
       r.asked
-        ? `结案前还差${what}，已经让 agent 去补了。补完再点一次结案。`
-        : `结案前还差${what}。先点「${startLabel(snap)}」让 agent 补上这两步；就此收手请用归档。`,
+        ? `定稿前还差${what}，已经让 agent 去补了。补完再点一次定稿。`
+        : `定稿前还差${what}。先点「${startLabel(snap)}」让 agent 补上这两步；就此收手请用归档。`,
     );
   };
 
   /**
    * 确认那一下的落地回执。**没落地就别把确认条收掉**——确认条挂在屏幕上的这段时间里，
-   * 强制 step 可能被推翻、案子可能被切走，两种情况 main 都会回绝；
-   * 收掉确认条而什么都没发生的话，人会以为已经结案了。
+   * 强制 step 可能被推翻、排查可能被切走，两种情况 main 都会回绝；
+   * 收掉确认条而什么都没发生的话，人会以为已经定稿了。
    */
   const doClose = async (kind: 'closed' | 'aborted', id: string, shape: VerdictShape) => {
-    // 落地之后直接翻到报告屏：收尾之后这个案子能做的只剩看和导出，
+    // 落地之后直接翻到报告屏：收尾之后这次排查能做的只剩看和导出，
     // 而报告装成什么样正是刚才那一下决定的——让人当场看见自己按下去的后果
     if (kind === 'aborted') {
       const ok = await window.inquestry.archiveCase(id).catch(() => false);
@@ -308,7 +308,7 @@ export function App() {
         setConfirm(null);
         return setReportOf(id);
       }
-      return setNotice('归档没执行：这个案子已经不是当前案子了。切回去再试一次。');
+      return setNotice('归档没执行：这次排查已经不是当前排查了。切回去再试一次。');
     }
     const r = await window.inquestry.closeCase(id, shape).catch(() => null);
     if (r?.ok) {
@@ -317,8 +317,8 @@ export function App() {
     }
     setNotice(
       r && !r.ok && r.missing.length
-        ? `结案没执行：刚才这会儿又缺了${r.missing.map(closingLabel).join('与')}——多半是那一步刚被推翻。补上再来。`
-        : '结案没执行：这个案子已经不是当前案子了。切回去再试一次。',
+        ? `定稿没执行：刚才这会儿又缺了${r.missing.map(closingLabel).join('与')}——多半是那一步刚被推翻。补上再来。`
+        : '定稿没执行：这次排查已经不是当前排查了。切回去再试一次。',
     );
   };
 
@@ -335,13 +335,13 @@ export function App() {
       });
       return;
     }
-    setNotice('刚才那条没处置成功：可能案子已经切走了，也可能它已经到点自动放行。切回那个案子再看一眼，刚才填的还在。');
+    setNotice('刚才那条没处置成功：可能排查已经切走了，也可能它已经到点自动放行。切回那次排查再看一眼，刚才填的还在。');
   };
 
   /**
    * 报告是**另一个屏**，整屏换掉（D21）：主角、密度、能做的事都不一样。
-   * 挂在这儿而不是塞进主区，是为了让调查台的顶栏与底部输入带一并让开——
-   * 报告上只有导出，留着"停止 / 结案 / 归档"会让人以为这份还能改。
+   * 挂在这儿而不是塞进主区，是为了让排查台的顶栏与底部输入带一并让开——
+   * 报告上只有导出，留着"停止 / 定稿 / 归档"会让人以为这份还能改。
    */
   if (reportOf === openCase) {
     return <Report snap={snap} onBack={() => setReportOf(null)} />;
@@ -355,12 +355,12 @@ export function App() {
           <span className="case">{snap.case.title}</span>
         </div>
         <CaseMetaStrip meta={snap.case} />
-        {/* 两条时间线不是顶栏的两个 tab：排查线属于调查台，事故线属于报告（ui.md §1）。
+        {/* 两条时间线不是顶栏的两个 tab：排查线属于排查台，系统线属于报告（ui.md §1）。
             它们是同一批证据的两次投影，这是数据模型的事实，不该翻译成一对开关 */}
         <div className="status">
           <button
             className="toreport"
-            title={frozen ? '这个案子已经收尾，报告是冻住的那一份' : '按现有数据预览报告；结案那一下才冻'}
+            title={frozen ? '这次排查已经收尾，报告是冻住的那一份' : '按现有数据预览报告；定稿那一下才冻'}
             onClick={() => setReportOf(openCase)}
           >
             报告{!frozen && <em>预览</em>}
@@ -372,7 +372,7 @@ export function App() {
               title={elsewhere.map((c) => `${c.title}（${c.todos}）`).join('\n')}
               onClick={() => void window.inquestry.switchCase(elsewhere[0]!.id)}
             >
-              别的案子 {elsewhere.reduce((n, c) => n + c.todos, 0)}
+              别的排查 {elsewhere.reduce((n, c) => n + c.todos, 0)}
             </button>
           )}
           <span className={`pill ${snap.busy ? 'busy' : snap.sessionStatus}`}>
@@ -404,23 +404,23 @@ export function App() {
             </button>
           )}
           {/* 收尾三档各是一个动作，不合成一个「结束」（D29）：
-              停止随时能接着查、结案要走完两个强制 step、归档是明写的放弃 */}
+              停止随时能接着查、定稿要走完两个强制 step、归档是明写的放弃 */}
           {!frozen && (
             <>
               {snap.busy && (
-                <button title="中断当前轮，案子照旧开着" onClick={() => void window.inquestry.interrupt(openCase)}>
+                <button title="中断当前轮，排查照旧开着" onClick={() => void window.inquestry.interrupt(openCase)}>
                   停止
                 </button>
               )}
               <button
                 title={
                   snap.closingGaps.length
-                    ? `结案前还差：${snap.closingGaps.map(closingLabel).join(' / ')}`
-                    : '下结论并冻结这个案子'
+                    ? `定稿前还差：${snap.closingGaps.map(closingLabel).join(' / ')}`
+                    : '下结论并冻结这次排查'
                 }
                 onClick={() => void requestClose()}
               >
-                结案{snap.closingGaps.length ? `（差 ${snap.closingGaps.length} 步）` : ''}
+                定稿{snap.closingGaps.length ? `（差 ${snap.closingGaps.length} 步）` : ''}
               </button>
               <button
                 title="放弃这次排查；证据全部保留"
@@ -453,12 +453,12 @@ export function App() {
           <span>{confirmText(confirm.kind, snap)}</span>
           <button
             className="primary"
-            // 收的是**弹出确认时**那个案子，不是此刻屏幕上的那个。
+            // 收的是**弹出确认时**那次排查，不是此刻屏幕上的那个。
             // main 那侧还会用 `currentIf` 再核一次：切走了就整个不执行，
-            // 而不是落到新案子头上——而回绝了这边要说出来，见 doClose
+            // 而不是落到新排查头上——而回绝了这边要说出来，见 doClose
             onClick={() => void doClose(confirm.kind, confirm.caseId, confirm.shape ?? 'open')}
           >
-            {confirm.kind === 'closed' ? '确认结案' : '确认归档'}
+            {confirm.kind === 'closed' ? '确认定稿' : '确认归档'}
           </button>
           <button onClick={() => setConfirm(null)}>再想想</button>
           {confirm.kind === 'closed' && (
@@ -481,7 +481,7 @@ export function App() {
         </div>
       )}
 
-      {/* 冻结之后这条只剩陈述：`restart()` 最终走 `start()`，而它对已收尾的案子直接返回，
+      {/* 冻结之后这条只剩陈述：`restart()` 最终走 `start()`，而它对已收尾的排查直接返回，
           按钮点了没有任何反应。留着错误本身是有用的——多半正是当初放弃的原因 */}
       {snap.lastError && !snap.busy && (
         <div className="banner err">
@@ -540,7 +540,7 @@ export function App() {
             value={input}
             disabled={frozen}
             placeholder={
-              frozen ? '这个案子已经收尾了，接着查请另立案件。' : live ? '补充线索、纠偏方向，或让它换个假设…' : `先点「${startLabel(snap)}」`
+              frozen ? '这次排查已经收尾了，接着查请另建一次排查。' : live ? '补充信息、纠偏方向，或让它换个假设…' : `先点「${startLabel(snap)}」`
             }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -570,7 +570,7 @@ export function App() {
 }
 
 /**
- * 案件切换栏（D28 / ui.md §8.3）。进行中的排在前面，各带一个徽标。
+ * 排查切换栏（D28 / ui.md §8.3）。进行中的排在前面，各带一个徽标。
  *
  * 切换不中断任何一个：main 持有全部运行时，这里只是换个投影看。
  * 徽标上的「等你 N」是并发排查里唯一能看见后台支线在等人的地方。
@@ -583,7 +583,7 @@ const SEARCH_DEBOUNCE_SHORT_MS = 400;
 /** 命中出自哪儿。**别把 `ref_kind` 直接印出来**：那是索引的内部分类，不是给人读的。 */
 const HIT_WHERE: Record<CaseHit['where'], string> = {
   case: '问题',
-  verdict: '判定',
+  verdict: '结论',
   direction: '方向',
   evidence: '证据',
   lane: '支线',
@@ -591,9 +591,9 @@ const HIT_WHERE: Record<CaseHit['where'], string> = {
 };
 
 /**
- * 案件切换栏（D28 / ui.md §8.3）+ 跨 case 检索。
+ * 排查切换栏（D28 / ui.md §8.3）+ 跨 case 检索。
  *
- * 检索**换掉的是这一排 chip，不是另开一个面板**：找旧案子的下一步动作就是切过去，
+ * 检索**换掉的是这一排 chip，不是另开一个面板**：找旧排查的下一步动作就是切过去，
  * 而切过去的入口本来就在这儿。另开面板等于让人在两个长得一样的列表之间挑一个。
  */
 function CaseBar({ cases }: { cases: CaseBrief[] }) {
@@ -604,7 +604,7 @@ function CaseBar({ cases }: { cases: CaseBrief[] }) {
    * ——人会照着一个跟当前输入毫无关系的列表切走。
    *
    * `hits: null` 是**查砸了**，与"查完了、零命中"是两回事：库坏了、FTS 语法不成立、
-   * IPC 断了都会落到这里，一律说成"没有命中"的话，人拿到的是"历史里确实没有这个案子"这个错结论。
+   * IPC 断了都会落到这里，一律说成"没有命中"的话，人拿到的是"历史里确实没有这次排查"这个错结论。
    */
   const [found, setFound] = useState<{ term: string; hits: CaseHit[] | null } | null>(null);
   /**
@@ -648,7 +648,7 @@ function CaseBar({ cases }: { cases: CaseBrief[] }) {
   }, [term]);
 
   // 切过去就是这次检索的终点：留着搜索词的话，切换栏会继续显示结果列表，
-  // 而人此刻要看的是手上这个案子在最近列表里的位置
+  // 而人此刻要看的是手上这次排查在最近列表里的位置
   const go = (id: string) => {
     setTerm('');
     void window.inquestry.switchCase(id);
@@ -667,7 +667,7 @@ function CaseBar({ cases }: { cases: CaseBrief[] }) {
       <input
         className="casesearch"
         value={term}
-        placeholder="搜旧案子"
+        placeholder="搜历史排查"
         onChange={(e) => setTerm(e.target.value)}
         onKeyDown={(e) => e.key === 'Escape' && setTerm('')}
       />
@@ -698,15 +698,15 @@ function CaseBar({ cases }: { cases: CaseBrief[] }) {
               ) : (
                 <span className="b idle">{caseStateLabel(c)}</span>
               )}
-              {/* 检索结果里的待办徽标不能少：一个正等着人的案子被搜出来时，
-                  只显示"命中在判定里"会把它说成一个静止的旧案子 */}
+              {/* 检索结果里的待办徽标不能少：一个正等着人的排查被搜出来时，
+                  只显示"命中在结论里"会把它说成一个静止的旧排查 */}
               {hit && c.todos > 0 && <span className="b todo">等你 {c.todos}</span>}
             </button>
           );
         })}
         {!hits && (
           <button className="chip new" onClick={() => void window.inquestry.newCase()}>
-            ＋ 新案件
+            ＋ 新排查
           </button>
         )}
       </div>
@@ -721,14 +721,14 @@ function startLabel(snap: Snapshot) {
 }
 
 function closingLabel(k: ClosingStepKind) {
-  return ({ impact: '影响面', leftover: '遗留疑点' } as const)[k];
+  return ({ impact: '影响面', leftover: '遗留问题' } as const)[k];
 }
 
 /**
- * 结案那一下选报告形态。**它是这一步唯一需要人做的判断**——
+ * 定稿那一下选报告形态。**它是这一步唯一需要人做的判断**——
  * agent 声明过就预选它的，没声明就预选推断值，人不动手也能一路按到底。
  *
- * 摆在确认条里而不是单开一屏：形态决定报告装哪几块，而"确认结案"正是唯一
+ * 摆在确认条里而不是单开一屏：形态决定报告装哪几块，而"确认定稿"正是唯一
  * 看得见后果的那一下；分开的话，人会在不知道要选什么的时候先被问一次。
  */
 function ShapePicker({
@@ -775,36 +775,36 @@ function ShapePicker({
 
 /** 推断值只是个不至于装错块的兜底，不是一次判断——两者必须让人一眼分得出来。 */
 function shapeSourceLabel(source: 'agent' | 'inferred' | 'operator') {
-  return { agent: 'agent 判定', inferred: '没人判定过，按现有数据推的', operator: '你选的' }[source];
+  return { agent: 'agent 声明的', inferred: '没人声明过，按现有数据推的', operator: '你选的' }[source];
 }
 
 /** 确认那一下要说的是**后果**，不是"你确定吗"——两档的后果不一样，说反了就白确认了。 */
 function confirmText(kind: 'closed' | 'aborted', snap: Snapshot) {
   if (kind === 'closed') {
-    return `结案会冻结这个案子：不能再开会话，只能导出。根因取的是当前置信度最高的那条结论${
+    return `定稿会冻结这次排查：不能再开会话，只能导出。根因取的是当前置信度最高的那条结论${
       snap.report.rootCause ? `（${snap.report.rootCause.text.slice(0, 40)}…）` : '——目前一条已证实的都没有'
     }。`;
   }
-  return '归档 = 明写放弃这次排查。已经查到的证据一条都不删，仍能导出残报告——但那份报告没有根因栏，主体是排除掉的方向与遗留疑点。';
+  return '归档 = 明写放弃这次排查。已经查到的证据一条都不删，仍能导出半程报告——但那份报告没有根因栏，主体是排除掉的方向与遗留问题。';
 }
 
 /** 冻结之后要把**当时定下的形态**说出来：报告装成什么样是那一下决定的，事后没有入口再改。 */
 function frozenText(meta: CaseMeta) {
   const shape = meta.verdictShape ? `报告按${SHAPE_COPY[meta.verdictShape].label}装。` : '';
   return meta.status === 'closed'
-    ? `本案已结案并冻结。${shape}证据与结论都还在，接着查请另立案件。`
-    : `本案已归档（人为终止）。${shape}证据一条没少，可导出残报告——它没有根因栏，因为没查出来就是没查出来。`;
+    ? `本次排查已定稿并冻结。${shape}证据与结论都还在，接着查请另建一次排查。`
+    : `本次排查已归档（人为终止）。${shape}证据一条没少，可导出半程报告——它没有根因栏，因为没查出来就是没查出来。`;
 }
 
 function caseStateLabel(c: CaseBrief) {
-  if (c.status === 'closed') return '已结案';
+  if (c.status === 'closed') return '已定稿';
   if (c.status === 'aborted') return '已归档';
   return c.loaded ? '已停' : '未打开';
 }
 
 /**
- * 排查时间线**按 case 取而非按 session 取**：一个案子跨多会话，按 session 取的话
- * 重开旧案主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
+ * 排查时间线**按 case 取而非按 session 取**：一次排查跨多会话，按 session 取的话
+ * 重开旧排查主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
  *
  * 轨道的形状是主干 + 分叉（D23 / ui.md §3）：顺序逐字是到达顺序，分叉只往右缩进。
  * x 由 `trackLayout` 算，y 交给文档流——绝对定位的 y 得先量高度，而卡片展开工具调用时
@@ -908,12 +908,12 @@ function InvestigationTimeline({
   );
 }
 
-/** 基准日填错时报告会静静地空掉，所以它得一直在屏幕上，而不是藏在立案那一刻。 */
+/** 基准日期填错时报告会静静地空掉，所以它得一直在屏幕上，而不是藏在新建排查那一刻。 */
 function CaseMetaStrip({ meta }: { meta: CaseMeta }) {
   return (
     <div className="casemeta">
       <span>
-        基准日 <code>{meta.incidentDate}</code> {meta.tzOffset}
+        基准日期 <code>{meta.incidentDate}</code> {meta.tzOffset}
       </span>
       <span>{meta.projectRoot ? <code>{meta.projectRoot.split('/').slice(-1)[0]}</code> : '演示数据源'}</span>
       <span>
@@ -1084,7 +1084,7 @@ function gateLabel(gate: CallNode['gate']) {
 }
 
 function kindLabel(k: StepNode['kind']) {
-  return ({ normal: '排查', unclassified: '未归类', impact: '影响面', leftover: '遗留疑点' } as const)[k];
+  return ({ normal: '排查', unclassified: '未归类', impact: '影响面', leftover: '遗留问题' } as const)[k];
 }
 
 export type { PendingAsk };

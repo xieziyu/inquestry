@@ -9,7 +9,7 @@
 import type { ReportInput } from './report.js';
 
 /**
- * 立案面板收集的东西（ui.md §8.1）。
+ * 新建排查面板收集的东西（ui.md §8.1）。
  *
  * agent 三项与其余分开：前者落 `sessions`，后者落 `cases`（D27）。
  */
@@ -20,8 +20,8 @@ export type AgentChoice = {
 };
 
 /**
- * 时区不在这里：它由 main 取立案机器的本机偏移，用户不填也改不了。
- * 因此本工具的前提是**日志时区 = 立案机器时区**——排查异地系统时这条会错，
+ * 时区不在这里：它由 main 取新建排查机器的本机偏移，用户不填也改不了。
+ * 因此本工具的前提是**日志时区 = 新建排查机器时区**——排查异地系统时这条会错，
  * 而且错法是整体偏移几小时，见 ui.md §8.1。
  */
 export type IntakeDraft = {
@@ -32,7 +32,7 @@ export type IntakeDraft = {
   agent: AgentChoice;
 };
 
-/** 立案的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
+/** 新建排查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
 export type IntakeResult = { ok: true } | { ok: false; field: 'projectRoot'; error: string };
 
 export type ModelOption = {
@@ -43,7 +43,7 @@ export type ModelOption = {
   efforts: string[];
 };
 
-/** 立案面板的可选项。model 一栏是真探测出来的，探测不到才退回内置列表。 */
+/** 新建排查面板的可选项。model 一栏是真探测出来的，探测不到才退回内置列表。 */
 export type IntakeOptions = {
   backends: { value: 'claude' | 'codex'; label: string; enabled: boolean; note?: string }[];
   models: ModelOption[];
@@ -51,11 +51,11 @@ export type IntakeOptions = {
   recentRoots: string[];
   /** `tzOffset` 只用于显示"按哪个时区解释"，不是可编辑项。 */
   defaults: { incidentDate: string; tzOffset: string };
-  /** 内置演示事故的预填。选它就是「不给项目起点」，玩具数据源才会挂上去。 */
+  /** 内置演示模式的预填。选它就是「不给项目起点」，玩具数据源才会挂上去。 */
   demo: { question: string; incidentDate: string };
 };
 
-/** 案件切换栏的一行（D28）。 */
+/** 排查切换栏的一行（D28）。 */
 export type CaseBrief = {
   id: string;
   title: string;
@@ -64,7 +64,7 @@ export type CaseBrief = {
   current: boolean;
   /**
    * 等你处理的条数。**跨 case 汇总的价值全在这一个字段上**：
-   * 你在 A 案上工作时 B 案卡在 ask_operator 上等人，只在当前案子显示的话那条支线会静静挂死。
+   * 你在排查 A 上工作时排查 B 卡在 ask_operator 上等人，只在当前排查显示的话那条支线会静静挂死。
    */
   todos: number;
   /** 有一轮正在跑。 */
@@ -74,14 +74,14 @@ export type CaseBrief = {
 };
 
 /**
- * 检索命中的一个案子（ui.md §8.3 的「历史」那一半）。
+ * 检索命中的一次排查（ui.md §8.3 的「历史」那一半）。
  *
  * 与 `CaseBrief` 是同一种东西加三项"为什么命中"——**不另起一种类型**：
  * 切换栏上两种列表长得一样、点下去做的也是同一件事，分成两种的话
  * 徽标（等你 N / 跑动中）迟早只在其中一边跟得上。
  */
 export type CaseHit = CaseBrief & {
-  /** 这个案子里命中了几条。只作展示，不参与排序（排序与最近列表同一条规则）。 */
+  /** 这次排查里命中了几条。只作展示，不参与排序（排序与最近列表同一条规则）。 */
   hits: number;
   /** 命中处附近的原文，已截断。 */
   snippet: string;
@@ -114,17 +114,17 @@ export type EvidenceNode = {
 export type StepNode = {
   id: string;
   /**
-   * 会话内序号，**不是案子内的**：一个案子跨多会话，重开一次它就从 1 重来。
+   * 会话内序号，**不是排查内的**：一次排查跨多会话，重开一次它就从 1 重来。
    * 轨道上因此会出现两个 #1，得靠 `sessionIndex` 标出断点。
    */
   ordinal: number;
   sessionId: string;
-  /** 这是本案子的第几次会话，从 1 起。 */
+  /** 这是本次排查的第几次会话，从 1 起。 */
   sessionIndex: number;
   /**
    * 在哪一步之下细分（`open_step` 的可选入参）。轨道靠它把分叉往右缩进。
    * 认不得的父 id 在写入侧就归一成了 null 并回一条 warning（`parent_step_id` 上有外键，
-   * 原样落库会直接炸），所以这里到手的要么是本案子里的真 step，要么就是 null。
+   * 原样落库会直接炸），所以这里到手的要么是本次排查里的真 step，要么就是 null。
    */
   parentStepId: string | null;
   /**
@@ -136,7 +136,7 @@ export type StepNode = {
   lane: string | null;
   kind: 'normal' | 'unclassified' | 'impact' | 'leftover';
   /**
-   * `converged` 只出现在支线的兜底步上（ui.md §3.2）：那一步没有命题，所以它不是一种判定，
+   * `converged` 只出现在支线的兜底步上（ui.md §3.2）：那一步没有命题，所以它不是一种结论，
    * 只是说"这条支线到此为止"。报告那几栏按具体 status 取，它因此哪一栏都不进。
    */
   status: 'open' | 'confirmed' | 'refuted' | 'inconclusive' | 'superseded' | 'converged';
@@ -210,7 +210,7 @@ export type GateDecision =
 
 export type ChatLine = { role: 'user' | 'assistant' | 'system'; text: string; at: number };
 
-/** 结案前的两个强制 step（overview §6.2）。 */
+/** 定稿前的两个强制 step（overview §6.2）。 */
 export type ClosingStepKind = 'impact' | 'leftover';
 
 /**
@@ -231,7 +231,7 @@ export const VERDICT_SHAPES: readonly VerdictShape[] = [
 ];
 
 /**
- * 结案确认条上的预选值。
+ * 定稿确认条上的预选值。
  *
  * `agent` = 某一步的 `close_step` 里声明过；`inferred` = 没人声明，harness 按现有数据推的。
  * **两者必须让人分得出来**：推断值只是个不至于装错块的兜底，不是一次判断。
@@ -269,17 +269,17 @@ export type ClosingRequest = {
 };
 
 /**
- * 结案的结果。**不成立时要说清差什么**，否则界面只能给一句"还不能结案"，人无从下手。
+ * 定稿的结果。**不成立时要说清差什么**，否则界面只能给一句"还不能定稿"，人无从下手。
  *
  * 与 `ClosingRequest` 分开是因为两者的语义天差地别：那个只问，这个**执行且不可逆**。
  * 合成一个的话，界面就得靠快照决定"这一下是问还是执行"——而快照是 60ms 合流推的，
- * 隔着这一拍，一次本以为"去补两步"的点击会直接把案子冻上，且完全没经过确认。
+ * 隔着这一拍，一次本以为"去补两步"的点击会直接把排查冻上，且完全没经过确认。
  */
 export type ClosingOutcome =
   | { ok: true; status: 'open' | 'closed' | 'aborted' }
   | { ok: false; missing: ClosingStepKind[] };
 
-/** 当前案子的立案单投影。为 null 表示还没立案，UI 该显示立案面板。 */
+/** 当前排查的建单信息投影。为 null 表示还没新建排查，UI 该显示新建排查面板。 */
 export type CaseMeta = {
   id: string;
   title: string;
@@ -293,12 +293,12 @@ export type CaseMeta = {
   status: 'open' | 'closed' | 'aborted';
   /**
    * 报告按哪种形态装（D25）。**收尾那一下才落**，在那之前是 null。
-   * 归档一律是 `open`：残报告没有根因栏（ui.md §8.4）。
+   * 归档一律是 `open`：半程报告没有根因栏（ui.md §8.4）。
    */
   verdictShape: VerdictShape | null;
 };
 
-/** 报告里只用到一步的判定与命题时的窄投影（遗留疑点 / 排除矩阵）。 */
+/** 报告里只用到一步的结论与命题时的窄投影（遗留问题 / 排除矩阵）。 */
 export type ReportStepRef = {
   stepId: string;
   direction: string | null;
@@ -308,7 +308,7 @@ export type ReportStepRef = {
 
 export type Snapshot = {
   case: CaseMeta | null;
-  /** 所有案子，含别处的待办数。为 null 的 `case` 配非空 `cases` = 正在立新案，切换栏照常在。 */
+  /** 所有排查，含别处的待办数。为 null 的 `case` 配非空 `cases` = 正在立新案，切换栏照常在。 */
   cases: CaseBrief[];
   sessionStatus: 'idle' | 'live' | 'ended' | 'crashed';
   /**
@@ -343,11 +343,11 @@ export type Snapshot = {
   gates: PendingGate[];
   chat: ChatLine[];
   /**
-   * 结案还差哪几步（§6.2）。**放快照里而不是等点了结案再问**：
+   * 定稿还差哪几步（§6.2）。**放快照里而不是等点了定稿再问**：
    * 「还差影响面」是排查中途就该看得见的进度，不是按钮弹出来的一句错误。
    */
   closingGaps: ClosingStepKind[];
-  /** 结案确认条的预选形态。案子已冻结时它没有意义——那时看 `case.verdictShape`。 */
+  /** 定稿确认条的预选形态。排查已冻结时它没有意义——那时看 `case.verdictShape`。 */
   shapeSuggestion: ShapeSuggestion;
   /**
    * 报告那几栏的投影。**装的是「哪一步算数」的答案，不是原料**：
@@ -360,7 +360,7 @@ export type Snapshot = {
     impact: string | null;
     /**
      * 修复建议：四栏里唯一由 agent 生成、没有投影来源的那一块（overview §6.1）。
-     * 取的是**最新一条仍然成立的声明**，不跟着根因走——未决型与归档的残报告没有根因，
+     * 取的是**最新一条仍然成立的声明**，不跟着根因走——未决型与归档的半程报告没有根因，
      * 而它们恰恰最该留下"下一步该怎么查"。选择器只有 `queries.effectiveRemediation` 一条。
      */
     remediation: string | null;
@@ -396,10 +396,10 @@ export type ExportResult =
 
 /**
  * 长图渲染视图（`?export=image`）要的东西。**由 main 备好一份交过去**，
- * 不让那一屏自己去查快照：它是离屏开的，等它开起来时当前案子可能已经切走了，
- * 而导出的产物与文件名会因此指着两个案子。
+ * 不让那一屏自己去查快照：它是离屏开的，等它开起来时当前排查可能已经切走了，
+ * 而导出的产物与文件名会因此指着两个排查。
  *
- * `generatedAt` 同 Markdown 那条由调用方给：渲染侧读时钟的话同一个案子导两次的产物不同。
+ * `generatedAt` 同 Markdown 那条由调用方给：渲染侧读时钟的话同一次排查导两次的产物不同。
  */
 export type ExportPayload = { input: ReportInput; generatedAt: string };
 
@@ -435,7 +435,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
 /**
  * 接管切没切成，以及没切成时是哪一种。**几种失败的下一步动作各不相同，不能合成一个 false**：
  *
- * - `gone`：状态冲突（切了案子 / 已收尾）。案子不在手上，切回去再点一次就行
+ * - `gone`：状态冲突（切了排查 / 已收尾）。排查不在手上，切回去再点一次就行
  * - `failed`：这一轮维持原样。要么 backend 的权限模式没切动，要么切动了但落不了库、
  *   已经切回来了——两种都是"什么都没变"，人必须知道自己**没有**拿到想要的那一档，
  *   否则会拿一个并不存在的保护继续查下去
@@ -450,9 +450,9 @@ export type InquestryApi = {
   /** 打开系统目录选择器；用户取消返回 null。 */
   pickProjectRoot(): Promise<string | null>;
   createCase(draft: IntakeDraft): Promise<IntakeResult>;
-  /** 切到另一个案子。**不中断任何一个**：main 持有全部运行时，这里只是换个投影看。 */
+  /** 切到另一次排查。**不中断任何一个**：main 持有全部运行时，这里只是换个投影看。 */
   switchCase(caseId: string): Promise<void>;
-  /** 去立案面板开新案子；当前案子照旧在后台跑。 */
+  /** 去新建排查面板开新排查；当前排查照旧在后台跑。 */
   newCase(): Promise<void>;
   /**
    * 跨 case 检索（D28 / [data-model](data-model.md) §5）。空串回空数组，不回"全部"——
@@ -465,15 +465,15 @@ export type InquestryApi = {
   /**
    * 下面这四个都要带上**这一屏看到的 caseId**。
    *
-   * 切案子那一瞬 main 那边当时就换了当前案子，而这一屏要等下一次快照（最多 60ms）才换——
-   * 不带的话，在 A 案里按下的发送/停止会落到 B 案头上。对不上就不执行。
+   * 切排查那一瞬 main 那边当时就换了当前排查，而这一屏要等下一次快照（最多 60ms）才换——
+   * 不带的话，在排查 A 里按下的发送/停止会落到排查 B 头上。对不上就不执行。
    */
   start(caseId: string, question?: string): Promise<void>;
   /** 收掉当前会话再起一轮。会话卡在 `live` 却每轮都失败时，这是唯一出路。 */
   restart(caseId: string): Promise<void>;
   /**
    * 开 / 关接管模式（overview §3.5）：开着时每次调用都过闸门，由人当场放行 / 改写 / 拒绝。
-   * 回执是切没切成——冻结的案子切不了，静默 return 会让开关在界面上翻过去却什么都没做。
+   * 回执是切没切成——冻结的排查切不了，静默 return 会让开关在界面上翻过去却什么都没做。
    */
   setTakeover(caseId: string, on: boolean): Promise<TakeoverResult>;
   /** 返回是否真的送出去了；没送出去 renderer 要把草稿留着。 */
@@ -487,17 +487,17 @@ export type InquestryApi = {
   stopLane(caseId: string, lane: string): Promise<boolean>;
   /**
    * 问「现在还差哪几步」，缺了就顺手派给 agent。**不执行任何收尾**——
-   * 点「结案」先走这条，拿到空缺口才弹确认条，于是快照过期也绕不过那道确认。
+   * 点「定稿」先走这条，拿到空缺口才弹确认条，于是快照过期也绕不过那道确认。
    */
   requestClosing(caseId: string): Promise<ClosingRequest | null>;
   /**
-   * 结案：**执行且不可逆**，只该由确认按钮调。仍会再校验一次强制 step。
+   * 定稿：**执行且不可逆**，只该由确认按钮调。仍会再校验一次强制 step。
    *
    * `shape` 与 caseId 同理，取的是**确认条弹出时**那一份：它决定报告装哪几块，
    * 是人在确认条上看着后果按下去的那个选择，不该被这中间到的新快照换掉。
    */
   closeCase(caseId: string, shape: VerdictShape): Promise<ClosingOutcome>;
-  /** 归档：同「停止」，外加标记放弃。证据一条不销毁，残报告照旧能导。回执是执行了没有。 */
+  /** 归档：同「停止」，外加标记放弃。证据一条不销毁，半程报告照旧能导。回执是执行了没有。 */
   archiveCase(caseId: string): Promise<boolean>;
   /**
    * 待办的两个处置同样要带 caseId，理由同上；回执是**处置成功了没有**。
@@ -508,7 +508,7 @@ export type InquestryApi = {
   excerpt(callId: string, anchor: string | null): Promise<string>;
   /**
    * 导出 Markdown（D26）。**带 caseId 同上**：导出的是一份要交出去的文档，
-   * 落到别的案子头上会得到一个文件名与内容对不上、且没人会察觉的产物。
+   * 落到别的排查头上会得到一个文件名与内容对不上、且没人会察觉的产物。
    *
    * 章节由 `shared/report.ts` 组装、`shared/markdown.ts` 渲染，与报告屏同一份。
    */
