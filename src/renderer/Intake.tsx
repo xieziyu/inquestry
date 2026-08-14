@@ -1,34 +1,52 @@
 import { useEffect, useState } from 'react';
 import type { AgentChoice, IntakeDraft, IntakeOptions, IntakeResult, ModelOption } from '../shared/ipc.js';
-import { rootLabel } from './caseline.js';
+import { rootLabel, rootParent } from './caseline.js';
+import { Picker, type PickerItem } from './Picker.js';
+
+/** 与 rail 那几枚同一套（`Rail.tsx` 的 `S`）：24 的 viewBox、1.7 的描边。 */
+const FolderIcon = () => (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M3 7.5a2 2 0 0 1 2-2h3.7l2 2.4H19a2 2 0 0 1 2 2v6.6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </svg>
+);
+
+const PlusIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round">
+    <path d="M12 5.5v13M5.5 12h13" />
+  </svg>
+);
 
 /** backend 报出来的「不指定模型」那一档的 value。 */
 const DEFAULT_ROW = 'default';
 
-/** 「不指定」在 `<select>` 里的 value：`null` 不是合法的 option value。 */
+/** 「不指定」那一档的 value：`null` 不能当选项的值。 */
 const NONE = '';
 
-/**
- * 下拉里一行模型怎么写。
- *
- * **版本号要露出来**：backend 报的 `label` 只有系列名（`Sonnet`），而同一个系列换代之后
- * 界面上一个字都不会变——报告里却要标"这一步是哪个模型跑的"。`resolvedModel` 是 backend
- * 自己说的那个 id，没有它（内置兜底表）就只写系列名，不自己拼一个版本号出来。
- */
-function modelText(m: ModelOption): string {
-  return m.resolvedModel ? `${m.label} · ${m.resolvedModel}` : m.label;
+/** 「更多选项」收起时那一行写什么：这次拿什么跑。 */
+function optionSummary(
+  opts: IntakeOptions | null,
+  agent: AgentChoice,
+  model: ModelOption | undefined,
+  takeover: boolean,
+): string {
+  const backend = opts?.backends.find((b) => b.value === agent.backend)?.label ?? agent.backend;
+  const name = model?.label ?? agent.model ?? '默认模型';
+  return [backend, name, agent.effort, takeover ? '全程接管' : '自动模式'].filter(Boolean).join(' · ');
 }
 
 /**
- * 新建排查的合成器（ui.md §8.1），住在首页左栏。
+ * 新建排查的合成器（ui.md §8.1），首页上面那一带。
  *
- * 三件事按**必须先做的在上面**排：选工作区 → 写问题 → 开始排查。
- * 工作区一度挂在页头，已否决——顶栏读起来像状态栏，人不会把那儿当成"第一步"，
- * 而它恰恰是不做就没法往下走的那一步。
- *
- * 其余填一次就不再动的收进「更多选项」。agent 三项（backend / 模型 / 思考强度）都用原生下拉：
- * 探测出来的模型是十几个的量级，摊成一排按钮会把这个面板撑成一堵墙；
- * backend 用按钮则读起来像"点一下就执行"，而它是个单选。
+ * 三件事按**必须先做的在上面**排：选工作区 → 写问题 → 启动。
  */
 export function Intake({
   opts,
@@ -102,49 +120,56 @@ export function Intake({
     }
   };
 
-  // 从别处挑来的路径不在最近列表里，也要能显示成选中的那一个
+  // 从别处挑来的路径不在最近列表里，也要能在菜单里显示成选中的那一个
   const recents = opts?.recentRoots ?? [];
-  const chips = [...(root && !recents.includes(root) ? [root] : []), ...recents.slice(0, 5)];
+  const roots: PickerItem[] = [...(root && !recents.includes(root) ? [root] : []), ...recents].map((p) => ({
+    value: p,
+    label: rootLabel(p),
+    note: rootParent(p),
+    title: p,
+  }));
+
+  const backends: PickerItem[] = (opts?.backends ?? []).map((b) => ({
+    value: b.value,
+    label: b.label,
+    note: b.note,
+    disabled: !b.enabled,
+  }));
+
+  const models: PickerItem[] = [
+    { value: NONE, label: defaultRow?.label ?? '默认模型', note: defaultRow?.resolvedModel },
+    // backend 报的 default 那一档就是上面那条「不指定」，不再列一遍
+    ...(opts?.models ?? [])
+      .filter((m) => m.value !== DEFAULT_ROW)
+      .map((m) => ({ value: m.value, label: m.label, note: m.resolvedModel, title: m.description })),
+    // 设置里挑的那个探测不到时也要显示成选中的，否则按钮上会跳回默认那一档
+    ...(modelMissing ? [{ value: agent.model!, label: agent.model! }] : []),
+  ];
 
   return (
     <div className="compose">
-      <div className="f ws">
+      <div className="target">
         <span className="k">工作区</span>
-        <div className="row">
-          <button className={`dir ${root ? '' : 'need'}`} onClick={pick}>
-            {root ? '更换目录…' : '选择目录…'}
-          </button>
-          {root && (
-            // 截断要从头上截（末级目录才是认得出是哪个项目的那一段），所以外层走 rtl；
-            // 路径本身必须留在 ltr 的隔离里，否则开头那个 `/` 会被 bidi 挪到末尾
-            <span className="path" title={root}>
-              <bdi>{root}</bdi>
-            </span>
-          )}
-        </div>
-        {chips.length > 0 && (
-          <div className="row wrap chips">
-            {chips.map((p) => (
-              <button
-                key={p}
-                className={p === root ? 'on' : ''}
-                title={p}
-                onClick={() => choose(p)}
-              >
-                {rootLabel(p)}
-              </button>
-            ))}
-          </div>
-        )}
+        <Picker
+          label="工作区"
+          value={root}
+          items={roots}
+          onPick={choose}
+          placeholder="选择目录…"
+          icon={<FolderIcon />}
+          need={!root}
+          noteTruncate="head"
+          action={{ label: '打开其他目录…', icon: <PlusIcon />, onSelect: pick }}
+        />
         {/* 只在提交时才知道目录不合法（可能刚被删掉），那条错误要回到这一格上 */}
         {rootError && <p className="hint err">{rootError}</p>}
       </div>
 
-      <label className="f">
-        <span className="k">问题描述</span>
+      <div className="qwrap">
         <textarea
+          className="qbox"
           value={question}
-          placeholder="线上发生了什么、谁受影响、你已经知道的现象（涉及服务 / traceId / 用户 ID / 报错码都写进来）…"
+          placeholder="请描述需要排查的具体问题或者调研任务"
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ready) {
@@ -153,32 +178,52 @@ export function Intake({
             }
           }}
         />
-      </label>
-
-      <div className="row">
-        <button className="more" onClick={() => setMore(!more)}>
-          {more ? '收起选项 ▴' : '更多选项 ▾'}
-        </button>
       </div>
 
       {more && (
         <div className="adv">
-          <label className="f">
+          <div className="f">
             <span className="k">Agent</span>
-            <select
+            <Picker
+              label="Agent"
               value={agent.backend}
-              onChange={(e) =>
-                setAgent({ backend: e.target.value as AgentChoice['backend'], model: null, effort: null })
-              }
-            >
-              {opts?.backends.map((b) => (
-                <option key={b.value} value={b.value} disabled={!b.enabled}>
-                  {b.label}
-                  {b.note ? `（${b.note}）` : ''}
-                </option>
-              ))}
-            </select>
-          </label>
+              items={backends}
+              onPick={(v) => setAgent({ backend: v as AgentChoice['backend'], model: null, effort: null })}
+            />
+          </div>
+
+          <div className="f">
+            <span className="k">模型</span>
+            <Picker
+              label="模型"
+              value={agent.model ?? NONE}
+              items={models}
+              bad={modelMissing}
+              onPick={(v) => setAgent((a) => ({ ...a, model: v || null, effort: null }))}
+            />
+            {modelMissing && (
+              <span className="hint err">
+                设置里挑的 <code>{agent.model}</code> 这会儿没探测到，跑起来会退回默认模型。
+              </span>
+            )}
+            {opts && !opts.modelsProbed && (
+              <span className="hint">
+                没能从 backend 问到模型列表（可能是还没登录），这几项是内置兜底，因此也报不出版本号。
+              </span>
+            )}
+          </div>
+
+          {efforts.length > 0 && (
+            <div className="f">
+              <span className="k">思考强度</span>
+              <Picker
+                label="思考强度"
+                value={agent.effort ?? NONE}
+                items={[{ value: NONE, label: '默认' }, ...efforts.map((e) => ({ value: e, label: e }))]}
+                onPick={(v) => setAgent((a) => ({ ...a, effort: v || null }))}
+              />
+            </div>
+          )}
 
           <div className="f">
             <span className="k">权限模式</span>
@@ -191,63 +236,25 @@ export function Intake({
               </button>
             </div>
           </div>
-
-          <label className="f wide">
-            <span className="k">模型</span>
-            <select
-              value={agent.model ?? NONE}
-              onChange={(e) =>
-                setAgent((a) => ({ ...a, model: e.target.value || null, effort: null }))
-              }
-            >
-              <option value={NONE}>{defaultRow ? modelText(defaultRow) : '默认模型'}</option>
-              {opts?.models
-                // backend 报的 default 那一档就是上面那条「不指定」，不再列一遍
-                .filter((m) => m.value !== DEFAULT_ROW)
-                .map((m) => (
-                  <option key={m.value} value={m.value} title={m.description}>
-                    {modelText(m)}
-                  </option>
-                ))}
-              {/* 设置里挑的那个探测不到时也要显示成选中的，否则下拉会自己跳回默认那一档 */}
-              {modelMissing && <option value={agent.model!}>{agent.model}</option>}
-            </select>
-            {modelMissing && (
-              <span className="hint err">
-                设置里挑的 <code>{agent.model}</code> 这会儿没探测到，跑起来会退回默认模型。
-              </span>
-            )}
-            {opts && !opts.modelsProbed && (
-              <span className="hint">
-                没能从 backend 问到模型列表（可能是还没登录），这几项是内置兜底，因此也报不出版本号。
-              </span>
-            )}
-          </label>
-
-          {efforts.length > 0 && (
-            <label className="f">
-              <span className="k">思考强度</span>
-              <select
-                value={agent.effort ?? NONE}
-                onChange={(e) => setAgent((a) => ({ ...a, effort: e.target.value || null }))}
-              >
-                <option value={NONE}>默认</option>
-                {efforts.map((e) => (
-                  <option key={e} value={e}>
-                    {e}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
         </div>
       )}
 
-      <div className="acts">
-        <button className="primary" disabled={!ready} onClick={() => void submit()}>
-          开始排查 <small>⌘↵</small>
+      <div className="bar">
+        <button
+          className={`opts${modelMissing ? ' bad' : ''}`}
+          aria-expanded={more}
+          title="更多选项"
+          onClick={() => setMore(!more)}
+        >
+          {optionSummary(opts, agent, model, takeover)}
+          <span className="caret">{more ? '▴' : '▾'}</span>
         </button>
-        {!root.trim() && <span className="hint">先选一个工作区目录。</span>}
+        <span className="right">
+          {!root.trim() && <span className="hint">先选一个工作区目录。</span>}
+          <button className="go" disabled={!ready} onClick={() => void submit()}>
+            启动 <small>⌘↵</small>
+          </button>
+        </span>
       </div>
     </div>
   );

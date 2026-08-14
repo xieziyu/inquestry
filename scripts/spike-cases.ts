@@ -31,6 +31,7 @@ import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/sha
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
+import { rootParent } from '../src/renderer/caseline.js';
 import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 
 /** 会话准备与运行时读数是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
@@ -1145,6 +1146,23 @@ async function main() {
     '没得清就原样返回，不白白多触发一次渲染',
     pruneDrafts(pruned, 'case_a', ['gate_live']) === pruned,
     '返回的是同一个对象',
+  );
+
+  // ── 工作区菜单右边那一列：上一级路径 ──────────────────────────────────────
+  check(
+    '砍掉末级目录名，留住上面几级',
+    rootParent('/Users/ziyu/Projects/inquestry') === '/Users/ziyu/Projects',
+    rootParent('/Users/ziyu/Projects/inquestry'),
+  );
+  check(
+    '末尾的斜杠不算一级——不然砍出来的还是原路径',
+    rootParent('/Users/ziyu/Projects/inquestry/') === '/Users/ziyu/Projects',
+    rootParent('/Users/ziyu/Projects/inquestry/'),
+  );
+  check(
+    '根下面那一级砍出来是 `/`，不是空串',
+    rootParent('/srv') === '/',
+    rootParent('/srv'),
   );
 
   // ── ⑳ 定稿确认条上「状态型填不填得出来」该信哪一份 ────────────────────────

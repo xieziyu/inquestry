@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CaseBrief, IntakeOptions } from '../shared/ipc.js';
 import { ago, caseState, TodoBadge } from './caseline.js';
 import { Intake } from './Intake.js';
+import { LogoMark } from './LogoMark.js';
 
 /** 首页最多列这么多次排查（ui.md §8.5）。再往前走历史排查页。 */
 const RECENT_LIMIT = 20;
@@ -9,10 +10,7 @@ const RECENT_LIMIT = 20;
 /**
  * 首页：起一次新排查，或接着上次那个。
  *
- * 版面是**左右两栏**，因为这一页答的正好是两个问题：左边写新的，右边接上次。
- * 单栏时右边三分之一是死空，而两件事挤在一列里又要靠滚动才发现列表。
- *
- * 与历史调查页的分工要守住——**这一页只回答"接着上次那个"**：固定最近 20 条、
+ * 与历史排查页的分工要守住——**这一页只回答"接着上次那个"**：固定最近 20 条、
  * 不筛选、不检索、不分页。两页都做成全量列表的话，人得先想"该去哪一页找"，
  * 而那正是把一个入口拆成两个的唯一代价。
  */
@@ -36,43 +34,46 @@ export function Home({
   }, []);
 
   const recent = cases.slice(0, RECENT_LIMIT);
-  const current = recent.find((c) => c.current) ?? null;
-  const rest = recent.filter((c) => c !== current);
+  const current = recent.find((c) => c.current);
+  const rows = current ? [current, ...recent.filter((c) => c !== current)] : recent;
 
   return (
     <div className="page home">
       <header className="pagehead">
-        <h1>新排查</h1>
+        <h1>首页</h1>
       </header>
 
       <div className="pagebody">
-        <div className="homegrid">
-          <section className="make">
-            <Intake opts={opts} onSubmit={(d) => window.inquestry.createCase(d)} onCreated={onCreated} />
-          </section>
+        <div className="homecol">
+          <div className="mast">
+            {/* 名字就在旁边写着，标记这时是装饰——不藏起来读屏会把 Inquestry 念两遍 */}
+            <span aria-hidden="true">
+              <LogoMark size={34} />
+            </span>
+            <span className="word">Inquestry</span>
+          </div>
 
-          <aside className="side">
-            <div className="side-h">
-              <h2>历史调查</h2>
-              <span className="c">{recent.length || ''}</span>
-              <button className="more" onClick={onAll}>
-                全部 →
+          <Intake opts={opts} onSubmit={(d) => window.inquestry.createCase(d)} onCreated={onCreated} />
+
+          <section>
+            <div className="bandhead">
+              <h2>近期调查</h2>
+              <span className="c">{rows.length || ''}</span>
+              <button className="all" onClick={onAll}>
+                全部历史
               </button>
             </div>
 
-            {recent.length === 0 ? (
+            {rows.length === 0 ? (
               <p className="blank">还没有排查。选个工作区、写下问题就能开始。</p>
             ) : (
-              <>
-                {current && <CurrentCard c={current} onOpen={onOpen} />}
-                <div className="recent">
-                  {rest.map((c) => (
-                    <RecentRow key={c.id} c={c} onOpen={onOpen} />
-                  ))}
-                </div>
-              </>
+              <div className="track">
+                {rows.map((c) => (
+                  <TrackRow key={c.id} c={c} onOpen={onOpen} />
+                ))}
+              </div>
             )}
-          </aside>
+          </section>
         </div>
       </div>
     </div>
@@ -80,38 +81,20 @@ export function Home({
 }
 
 /**
- * 「当前那一次」那张卡。
+ * 轨道上的一条排查。
  *
- * 它是这一栏唯一值得占三行的东西：状态、等你几条、多久没动过，
- * 三样凑齐才决定得了要不要现在点进去；其余的一行足够。
+ * ⚠️ 节点分档的次序**不是 `caseState` 那一套**：等人处理排在运行中之前。
+ * 暖色是「需要人动手」的全局专属（ui.md §4），一条边跑边等人的排查该先说它在等你。
  */
-function CurrentCard({ c, onOpen }: { c: CaseBrief; onOpen: (id: string) => void }) {
+function TrackRow({ c, onOpen }: { c: CaseBrief; onOpen: (id: string) => void }) {
   const st = caseState(c);
+  const node = st.tone === 'done' ? 'shut' : c.todos > 0 ? 'wait' : st.tone === 'run' ? 'live' : '';
   return (
-    <button className="curcard" onClick={() => onOpen(c.id)}>
-      <span className="l1">
-        <span className={`st ${st.tone}`}>
-          {st.tone === 'run' && <i />}
-          {st.label}
-        </span>
-        <TodoBadge n={c.todos} />
-      </span>
-      <span className={`title ${st.tone === 'done' ? 'done' : ''}`}>{c.title}</span>
-      <span className="l3">
-        {ago(c.updatedAt)}
-        <span className="go">继续 →</span>
-      </span>
-    </button>
-  );
-}
-
-function RecentRow({ c, onOpen }: { c: CaseBrief; onOpen: (id: string) => void }) {
-  const st = caseState(c);
-  return (
-    <button className="rrow" onClick={() => onOpen(c.id)}>
+    <button className={`tr ${node}${c.current ? ' cur' : ''}`} onClick={() => onOpen(c.id)}>
+      <span className="nd" />
       <span className={`title ${st.tone === 'done' ? 'done' : ''}`}>{c.title}</span>
       <span className="when">{ago(c.updatedAt)}</span>
-      <span className="l2">
+      <span className="m">
         <span className={`st ${st.tone}`}>{st.label}</span>
         <TodoBadge n={c.todos} />
       </span>

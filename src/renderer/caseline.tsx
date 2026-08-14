@@ -58,6 +58,12 @@ export function rootLabel(root: string | null): string {
   return root ? (root.split('/').filter(Boolean).slice(-1)[0] ?? root) : '无工作区';
 }
 
+/** 末级目录名之外的那一段（`/a/b/c` → `/a/b`）：工作区菜单里答"哪一个同名的"。 */
+export function rootParent(root: string): string {
+  const i = root.replace(/\/+$/, '').lastIndexOf('/');
+  return i > 0 ? root.slice(0, i) : '/';
+}
+
 /**
  * 「等你 N」徽标。暖色是全局唯一的（ui.md §4），所以它只在这一处出现——
  * 别的状态一律用中性色或主色。

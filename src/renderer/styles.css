@@ -444,154 +444,221 @@ button.primary small { opacity: .6; font-weight: 400; }
 .casemeta { display: flex; gap: 14px; align-items: center; font-size: 11.5px; color: var(--dim); }
 .casemeta code { font-family: var(--mono); color: var(--text); font-size: 11px; }
 
-/* ── 首页：左右两栏 ──
-   这一页答的正好是两个问题（起新的 / 接上次），所以给它们各一栏。
-   单栏时右边三分之一是死空，两件事挤成一列又要滚动才发现列表。 */
-.homegrid {
-  display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 36px;
-  max-width: 1180px; margin: 0 auto; padding: 28px 32px 64px;
+/* ── 首页：上下两带 ── */
+.homecol {
+  max-width: 900px; margin: 0 auto; padding: 26px 32px 40px;
+  display: flex; flex-direction: column; gap: 30px;
 }
-/* 窄到放不下侧栏就退回单栏，接上次那一栏排到写新的下面（那时它不再需要吸顶） */
-@media (max-width: 1080px) {
-  .homegrid { grid-template-columns: minmax(0, 1fr); gap: 30px; }
-  .side { position: static; }
+@media (max-width: 820px) { .homecol { padding: 22px 18px 32px; } }
+
+.mast {
+  display: flex; align-items: center; justify-content: center; gap: 11px;
+  margin-bottom: -12px;
+}
+.mast .word { font-size: 21px; font-weight: 600; letter-spacing: .005em; color: var(--text); }
+/* 深的那头止于 `--mk-middle`，别接标记最底那层 `#24577F`——它对底只有 2.5:1，
+   落在字上就是读不出来的一截。`color` 先给足再在 supports 里换：不支持 background-clip
+   的地方 `color: transparent` 会让整个名字凭空消失 */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .mast .word {
+    background: linear-gradient(90deg, var(--text) 0%, var(--mk-middle, #4d91d0) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
 }
 
-/* ── 选工作区那一格 ──
-   它在表单第一格，不在页头：顶栏读起来像状态栏，人不会把那儿当成"第一步"，
-   而它恰恰是不选就没法往下走的那一步。 */
-.compose .f.ws { gap: 9px; }
-.compose .dir {
-  background: none; border: 1px solid var(--line); color: var(--dim);
-  font: inherit; font-size: 12.5px; padding: 6px 13px; border-radius: 7px; cursor: pointer;
+/* ── 合成器：一个有边框的整块，三段 ── */
+/* ── Picker：自己画的单选下拉（`Picker.tsx`）──
+   原生 `<select>` 的面板由系统画，字体、圆角、内边距一概不跟这套色板走。 */
+.picker { position: relative; }
+.picker .pk {
+  display: flex; align-items: center; gap: 7px; max-width: 100%;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  font: inherit; font-size: 12.5px; padding: 5px 11px; border-radius: 7px; cursor: pointer;
   transition: background .16s ease, color .16s ease, border-color .16s ease;
 }
-.compose .dir:hover { background: var(--panel-2); color: var(--text); }
-/* 还没选时它是这一屏唯一能往下走的动作，得看得出来是要点的那一个 */
-.compose .dir.need { border-color: var(--fill); color: var(--accent); }
-.compose .ws .path {
-  font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  /* 从头上截，留住末级目录名；路径本身在 `<bdi>` 里保持 ltr（见 Intake.tsx） */
-  direction: rtl;
-}
-/* 最近用过的摊平成一行可点文字，不收进下拉：换工作区是高频动作。
-   选中不用填色（ui.md §5）：靠字色与字重，填色会和语义色打架 */
-.compose .chips { gap: 2px; }
-.compose .chips button {
-  background: none; border: 0; color: var(--dim); font: inherit; font-size: 12.5px;
-  padding: 3px 8px; border-radius: 5px; cursor: pointer;
-  transition: background .16s ease, color .16s ease;
-}
-.compose .chips button:hover { background: var(--panel-2); color: var(--text); }
-.compose .chips button.on { color: var(--text); font-weight: 600; }
+.picker .pk:hover, .picker .pk.open { background: var(--panel-2); border-color: var(--dim-2); }
+.picker .pk .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker .pk .caret { color: var(--dim-2); font-size: 9px; margin-left: auto; padding-left: 2px; }
+/* 只描边不填色：实底整页只给「启动」（ui.md §0） */
+.picker .pk.need { border-color: var(--fill); color: var(--accent); }
+.picker .pk.need:hover { background: var(--panel-2); border-color: var(--fill); }
+.picker .pk.need .caret { color: var(--accent); opacity: .65; }
+.picker .pk.bad { color: var(--bad); border-color: var(--bad); }
 
-/* ── 左栏：新建排查（ui.md §8.1）──
-   竖着排的字段，不再是一条把六个高矮不一的控件塞进去的横向工具栏。
-   栏内没有标题也没有导语：必答的只有工作区与问题描述两格，一句"起一次新排查"
-   说的是屏幕上已经看得见的事。 */
-.compose .f { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; }
+.picker-menu {
+  position: absolute; z-index: 5; top: calc(100% + 5px); left: 0;
+  min-width: max(100%, 240px); max-height: 320px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+  padding: 5px; box-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+}
+.picker-menu button {
+  display: flex; align-items: baseline; gap: 9px; width: 100%; text-align: left;
+  background: none; border: 0; color: var(--text); font: inherit; font-size: 12.5px;
+  padding: 6px 9px; border-radius: 6px; cursor: pointer;
+}
+/* 落脚点只认 `.at`（键盘与指针都写它），不用 `:hover`——两套各画一份的话，
+   键盘走到第三条、鼠标恰好停在第五条上，屏幕上会同时亮两条 */
+.picker-menu button.at { background: var(--panel-2); }
+.picker-menu button.on { color: var(--accent); font-weight: 600; }
+.picker-menu button:disabled { color: var(--dim-2); cursor: default; }
+.picker-menu button:disabled.at { background: none; }
+.picker-menu .n { flex: 0 0 auto; }
+.picker-menu .p {
+  margin-left: auto; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--dim-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 从头上截：靠后那几级才分得开两个同名的项目，开头的 `/Users/<自己>` 条条都一样 */
+.picker-menu.headcut .p { direction: rtl; }
+.picker-menu .act {
+  align-items: center; color: var(--dim);
+  margin-top: 5px; padding-top: 10px; border-top: 1px solid var(--line-soft);
+}
+.picker-menu .act.at { color: var(--text); }
+/* 下面放不下就朝上开（`Picker.tsx` 量完再挂这个类） */
+.picker-menu.up { top: auto; bottom: calc(100% + 5px); }
+
+/* 🔴 **不能用 `overflow: hidden` 去圆角**：Picker 的菜单是绝对定位的，靠下那几格
+   （思考强度、权限模式）一展开就被这一层裁掉半截。首尾两段各自圆自己的角。 */
+.compose {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+
+.compose .target {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 11px 15px; border-bottom: 1px solid var(--line-soft); background: var(--code);
+  border-radius: 9px 9px 0 0;
+}
 .compose .k { font-size: 11.5px; color: var(--dim-2); }
 .compose .k em { font-style: normal; opacity: .75; margin-left: 5px; }
-.compose textarea {
-  width: 100%; min-height: 150px; resize: vertical;
-  background: var(--panel); border: 1px solid var(--line); color: var(--text);
-  border-radius: 9px; padding: 13px 15px; font: inherit; font-size: 14.5px; line-height: 1.7;
-  transition: border-color .16s ease;
+/* 目录不合法那条占满一行，落在它说的那一格底下 */
+.compose .target .hint.err { flex-basis: 100%; margin: 0; }
+
+.compose .qwrap { padding: 17px 18px; min-height: 172px; display: flex; }
+.compose .qbox {
+  width: 100%; background: transparent; border: 0; color: var(--text); resize: none;
+  font: inherit; font-size: 15px; line-height: 1.75; padding: 0;
 }
-.compose input:focus, .compose textarea:focus { outline: 0; border-color: var(--fill); }
-.compose input.bad, .compose textarea.bad { border-color: var(--bad); }
+.compose .qbox:focus { outline: 0; }
 .compose ::placeholder { color: var(--dim-2); }
-.compose .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-/* 按钮收成三档：primary（蓝底浅字）/ 描边（选目录）/ 纯文字（更多选项） */
-.compose button.more {
-  background: none; border: 0; color: var(--dim); padding: 5px 8px; border-radius: 7px;
-  cursor: pointer; font: inherit; font-size: 12.5px; transition: background .16s ease, color .16s ease;
-}
-.compose button.more:hover { background: var(--panel-2); color: var(--text); }
-
-.compose .hint { font-size: 11.5px; line-height: 1.6; color: var(--dim-2); margin: 2px 0 0; max-width: 62ch; }
-.compose .hint.err { color: var(--bad); }
 .compose .adv {
-  margin: 0 0 18px; padding-top: 16px; border-top: 1px solid var(--line);
-  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  padding: 16px 18px; border-top: 1px solid var(--line-soft); background: var(--code);
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 11px 16px; align-items: center;
 }
-.compose .adv .f { margin-bottom: 0; }
-.compose .adv .f.wide { grid-column: 1 / -1; }
-.compose .adv .f > input {
-  background: var(--code); border: 1px solid var(--line); color: var(--text);
-  border-radius: 7px; padding: 6px 11px; font: inherit; font-size: 12.5px;
-}
+/* 摊平进网格，标签因此都落在同一根竖线上 */
+.compose .adv .f { display: contents; }
+.compose .adv .k { justify-self: start; }
+.compose .adv .hint { grid-column: 2; margin: 0; }
 .compose .seg { display: flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; width: max-content; }
 .compose .seg button {
   background: none; border: 0; color: var(--dim); padding: 5px 12px; cursor: pointer; font: inherit; font-size: 12.5px;
 }
 .compose .seg button.on { background: var(--panel-2); color: var(--accent); }
-
-/* 模型与思考强度用原生下拉：探到的模型有十几个，摊成一排按钮会把面板撑成一堵墙 */
 .compose select {
-  background: var(--code); border: 1px solid var(--line); color: var(--text);
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
   border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12.5px;
   width: max-content; max-width: 100%; cursor: pointer;
   transition: border-color .16s ease;
 }
 .compose select:hover { border-color: var(--fill); }
 .compose select:focus { outline: 0; border-color: var(--fill); }
+.compose .hint { font-size: 11.5px; line-height: 1.6; color: var(--dim-2); margin: 2px 0 0; max-width: 62ch; }
+.compose .hint.err { color: var(--bad); }
 
-.compose .acts { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
-.compose .acts .hint { margin: 0; }
+.compose .bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px 10px 14px; border-top: 1px solid var(--line-soft); background: var(--code);
+  border-radius: 0 0 9px 9px;
+}
+.compose .bar .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.compose .bar .hint { margin: 0; }
+.compose .opts {
+  display: flex; align-items: center; gap: 7px;
+  background: none; border: 0; color: var(--dim); font: inherit; font-size: 12.5px;
+  padding: 5px 9px; border-radius: 7px; cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.compose .opts:hover { background: var(--panel-2); color: var(--text); }
+.compose .opts.bad { color: var(--bad); }
+.compose .opts .caret { opacity: .6; font-size: 10px; }
+.compose .go {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--fill); border: 1px solid var(--fill); color: var(--on-fill);
+  font: inherit; font-size: 13px; font-weight: 600; padding: 8px 18px; border-radius: 8px; cursor: pointer;
+  transition: filter .16s ease;
+}
+.compose .go:hover:not(:disabled) { filter: brightness(1.12); }
+.compose .go:active:not(:disabled) { transform: translateY(1px); }
+.compose .go:disabled { opacity: .5; cursor: default; }
+.compose .go small { font-family: var(--mono); font-size: 10.5px; font-weight: 400; opacity: .72; }
 
-/* ── 右栏：历史调查 ── */
-.side { position: sticky; top: 28px; align-self: start; }
-.side-h { display: flex; align-items: baseline; gap: 9px; padding: 0 2px 8px; }
-.side-h h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); }
-.side-h .c { font-size: 11.5px; color: var(--dim-2); font-family: var(--mono); }
-.side-h .more {
+.bandhead {
+  display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--line);
+}
+.bandhead h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); }
+.bandhead .c { font-size: 11.5px; color: var(--dim-2); font-family: var(--mono); }
+.bandhead .all {
   margin-left: auto; font-size: 12px; color: var(--accent); background: none; border: 0;
   cursor: pointer; font-family: inherit; padding: 2px 6px; border-radius: 5px;
   transition: background .16s ease;
 }
-.side-h .more:hover { background: var(--panel-2); }
-.side .blank { padding: 10px 2px; }
+.bandhead .all:hover { background: var(--panel-2); }
+.home .blank { padding: 14px 2px; color: var(--dim); }
 
-/* 当前那一次值得占三行：状态、等你几条、多久没动过——三样凑齐才决定得了要不要点进去 */
-.curcard {
-  display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
-  background: var(--tint); border: 1px solid var(--fill); border-radius: 9px;
-  padding: 12px 13px; cursor: pointer; color: var(--text); font: inherit;
-  transition: background .16s ease;
-}
-.curcard:hover { background: #1C2833; }
-.curcard .l1 { display: flex; align-items: center; gap: 8px; }
-.curcard .title { line-height: 1.5; }
-.curcard .title.done { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--line); }
-.curcard .l3 { display: flex; align-items: center; font-size: 11.5px; color: var(--dim-2); font-family: var(--mono); }
-.curcard .l3 .go { margin-left: auto; color: var(--accent); font-family: inherit; }
-
-.recent { display: flex; flex-direction: column; margin-top: 6px; }
-.rrow {
-  display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; align-items: center;
-  width: 100%; text-align: left; background: none; border: 0;
-  border-bottom: 1px solid var(--line-soft); padding: 9px 10px; border-radius: 7px;
+/* ── 轨道 ──
+   🔴 **主干由每一行自己画一段**，首尾各收半段（`:first-child` / `:last-child` 的 50%），
+   线因此正好起于第一个节点、止于最后一个。列表画一条通长的线会在上下各支出去一截。 */
+.track { margin-top: 6px; }
+.tr {
+  position: relative; display: grid;
+  /* 两行写死而不是让它隐式生成：隐式网格里 `-1` 解析回第 1 根线，
+     节点那条 `grid-row: 1 / -1` 会退化成只占第一行 */
+  grid-template-columns: 26px minmax(0, 1fr) auto; grid-template-rows: auto auto;
+  gap: 0 14px; align-items: center; width: 100%; text-align: left;
+  background: none; border: 0; padding: 11px 12px 11px 0; border-radius: 8px;
   color: var(--text); font: inherit; cursor: pointer; transition: background .16s ease;
 }
-.rrow:last-child { border-bottom: 0; }
-.rrow:hover { background: var(--panel); }
-.rrow .title { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rrow .title.done { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--line); }
-.rrow .when { font-size: 11px; color: var(--dim-2); font-family: var(--mono); text-align: right; }
-.rrow .l2 { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; }
+.tr:hover { background: var(--panel); }
+.tr::before {
+  content: ''; position: absolute; left: 12px; top: 0; bottom: 0; width: 1px; background: var(--line);
+}
+.tr:first-child::before { top: 50%; }
+.tr:last-child::before { bottom: 50%; }
+/* ⚠️ **必须跨满整行**（`1 / -1`）：只占第一行的话它落在标题那条基线上，
+   而主干那两个收口按的是行高的一半，首尾两个节点会与线错开二十来像素。 */
+.tr .nd {
+  position: relative; z-index: 1; grid-column: 1; grid-row: 1 / -1;
+  justify-self: center; align-self: center;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--bg); border: 1.5px solid var(--mk-tangle);
+}
+.tr.wait .nd { border-color: var(--warn); }
+.tr.live .nd {
+  width: 11px; height: 11px; background: var(--accent); border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(90, 158, 221, .14);
+  /* 动效只有两处，这是其中一处：进行中的状态呼吸（ui.md §5） */
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.tr.shut .nd { width: 6px; height: 6px; background: var(--line); border-color: var(--line); }
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
+@media (prefers-reduced-motion: reduce) { .tr.live .nd { animation: none; } }
+
+.tr .title { grid-column: 2; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr .title.done { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--line); }
+.tr.cur .title { font-size: 14.5px; font-weight: 600; }
+.tr .m { grid-column: 2; display: flex; align-items: center; gap: 9px; margin-top: 3px; }
+.tr > .when { grid-column: 3; grid-row: 1; font-size: 11px; color: var(--dim-2); font-family: var(--mono); }
 
 /* 状态一律写字（ui.md §5），但四档不能是同一个灰——那样扫一眼分不出谁还活着 */
 .home .st { font-size: 11.5px; color: var(--dim-2); }
 .home .st.idle { color: var(--dim); }
-.home .st.run { color: var(--accent); display: flex; align-items: center; gap: 6px; }
-/* 动效只有两处，这是其中一处：进行中的状态呼吸（ui.md §5） */
-.home .st.run i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: breathe 2.4s ease-in-out infinite; }
-@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
+.home .st.run { color: var(--accent); }
 
-/* 历史排查那两段列表的外框（首页侧栏不用框，靠发丝线分行就够） */
+/* 历史排查那两段列表的外框（首页那条轨道不用框，线本身就是结构） */
 .cases { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .badge { font-size: 10.5px; padding: 1px 6px; border-radius: 9px; flex: 0 0 auto; }
 /* 暖色是「需要人动手」的全局专属，列表上只有这一个徽标用它 */

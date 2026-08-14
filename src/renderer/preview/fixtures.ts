@@ -170,7 +170,9 @@ export function installPreviewApi(): void {
 
   const api: InquestryApi = {
     envCheck: async () => ({ claude: '/opt/homebrew/bin/claude', hint: '' }),
-    intakeOptions: async () => INTAKE_OPTIONS,
+    // `?noroots`：第一次用这个应用的那一版，没有最近用过的目录
+    intakeOptions: async () =>
+      params.has('noroots') ? { ...INTAKE_OPTIONS, recentRoots: [] } : INTAKE_OPTIONS,
     // 浏览器里没有系统目录选择器，给个像样的路径，好让「选中之后」那一版也看得到
     pickProjectRoot: async () => '/Users/ziyu/Projects/order-api',
     createCase: async () => ({ ok: true }),
