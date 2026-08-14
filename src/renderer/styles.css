@@ -435,7 +435,7 @@ button.primary small { opacity: .6; font-weight: 400; }
 
 /* ── 新建排查面板 ── */
 /* 工作区页头上的排查元信息：建单信息里那几项要一直看得见，
-   否则基准日期填错要到报告空了才发现 */
+   agent 补齐无日期时间串用的就是那个基准 */
 .casemeta { display: flex; gap: 14px; align-items: center; font-size: 11.5px; color: var(--dim); }
 .casemeta code { font-family: var(--mono); color: var(--text); font-size: 11px; }
 
@@ -452,36 +452,39 @@ button.primary small { opacity: .6; font-weight: 400; }
   .side { position: static; }
 }
 
-/* ── 页头改说「起点」──
-   「首页」两个字是废话（rail 上那一格已经说了这是哪儿），而起点决定这次是真项目
-   还是演示模式、挂哪套工具、信任边界在哪，是这一屏最该常驻的一条事实。 */
-.pagehead.roots { padding-right: 14px; gap: 10px; }
-.pagehead.roots .k { font-size: 11.5px; color: var(--dim-2); }
-.pagehead.roots .picks { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.pagehead.roots .picks button {
-  background: none; border: 0; color: var(--dim); font: inherit; font-size: 12.5px;
-  padding: 3px 7px; border-radius: 5px; cursor: pointer;
-  transition: background .16s ease, color .16s ease;
-}
-.pagehead.roots .picks button:hover { background: var(--panel-2); color: var(--text); }
-/* 选中不用填色（ui.md §5）：靠字色与字重，填色会和语义色打架 */
-.pagehead.roots .picks button.on { color: var(--text); font-weight: 600; }
-.pagehead.roots .what { margin-left: auto; font-size: 11.5px; color: var(--dim-2); }
-.pagehead.roots .browse {
+/* ── 选工作区那一格 ──
+   它在表单第一格，不在页头：顶栏读起来像状态栏，人不会把那儿当成"第一步"，
+   而它恰恰是不选就没法往下走的那一步。 */
+.compose .f.ws { gap: 9px; }
+.compose .dir {
   background: none; border: 1px solid var(--line); color: var(--dim);
-  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  font: inherit; font-size: 12.5px; padding: 6px 13px; border-radius: 7px; cursor: pointer;
+  transition: background .16s ease, color .16s ease, border-color .16s ease;
+}
+.compose .dir:hover { background: var(--panel-2); color: var(--text); }
+/* 还没选时它是这一屏唯一能往下走的动作，得看得出来是要点的那一个 */
+.compose .dir.need { border-color: var(--fill); color: var(--accent); }
+.compose .ws .path {
+  font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 从头上截，留住末级目录名；路径本身在 `<bdi>` 里保持 ltr（见 Intake.tsx） */
+  direction: rtl;
+}
+/* 最近用过的摊平成一行可点文字，不收进下拉：换工作区是高频动作。
+   选中不用填色（ui.md §5）：靠字色与字重，填色会和语义色打架 */
+.compose .chips { gap: 2px; }
+.compose .chips button {
+  background: none; border: 0; color: var(--dim); font: inherit; font-size: 12.5px;
+  padding: 3px 8px; border-radius: 5px; cursor: pointer;
   transition: background .16s ease, color .16s ease;
 }
-.pagehead.roots .browse:hover { background: var(--panel-2); color: var(--text); }
-/* 起点不合法只有提交时才知道，那条错误要回到起点自己这儿 */
-.pagehead.roots .what.err { color: var(--bad); }
+.compose .chips button:hover { background: var(--panel-2); color: var(--text); }
+.compose .chips button.on { color: var(--text); font-weight: 600; }
 
 /* ── 左栏：新建排查（ui.md §8.1）──
    竖着排的字段，不再是一条把六个高矮不一的控件塞进去的横向工具栏。
-   压缩掉的只是填一次就不再动的那些；基准日期不压——它填错不报错，只让时间线悄悄排乱 */
-.make h1 { margin: 0 0 3px; font-size: 20px; font-weight: 600; letter-spacing: -.012em; }
-.make .lead { margin: 0 0 22px; font-size: 12.5px; color: var(--dim); }
-
+   栏内没有标题也没有导语：必答的只有工作区与问题描述两格，一句"起一次新排查"
+   说的是屏幕上已经看得见的事。 */
 .compose .f { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; }
 .compose .k { font-size: 11.5px; color: var(--dim-2); }
 .compose .k em { font-style: normal; opacity: .75; margin-left: 5px; }
@@ -496,30 +499,7 @@ button.primary small { opacity: .6; font-weight: 400; }
 .compose ::placeholder { color: var(--dim-2); }
 .compose .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-.compose .date {
-  display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px;
-}
-.compose .date input {
-  width: 92px; background: none; border: 0; color: var(--text);
-  font-family: var(--mono); font-size: 12px; padding: 0;
-}
-.compose .date input:focus { outline: 0; }
-.compose .date input.bad { color: var(--bad); border: 0; }
-.compose .date em { font-style: normal; font-family: var(--mono); font-size: 11.5px; color: var(--dim-2); }
-
-/* 按钮收成三档：primary（蓝底浅字）/ 描边 / 纯文字。原先每个控件各长各的 */
-.compose button.pick, .compose button.ghost {
-  display: flex; align-items: center; gap: 6px;
-  background: none; border: 1px solid var(--line); color: var(--dim);
-  padding: 5px 11px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 12.5px;
-  transition: background .16s ease, color .16s ease, border-color .16s ease;
-}
-.compose button.pick:hover, .compose button.ghost:hover { background: var(--panel-2); color: var(--text); }
-.compose button.pick.on { border-color: var(--fill); color: var(--accent); }
-.compose button.pick:disabled { opacity: .4; cursor: default; }
-.compose button.pick:disabled:hover { background: none; color: var(--dim); }
-.compose button.pick em { font-style: normal; font-size: 11px; opacity: .8; }
+/* 按钮收成三档：primary（蓝底浅字）/ 描边（选目录）/ 纯文字（更多选项） */
 .compose button.more {
   background: none; border: 0; color: var(--dim); padding: 5px 8px; border-radius: 7px;
   cursor: pointer; font: inherit; font-size: 12.5px; transition: background .16s ease, color .16s ease;
@@ -543,9 +523,21 @@ button.primary small { opacity: .6; font-weight: 400; }
   background: none; border: 0; color: var(--dim); padding: 5px 12px; cursor: pointer; font: inherit; font-size: 12.5px;
 }
 .compose .seg button.on { background: var(--panel-2); color: var(--accent); }
-.compose .acts { display: flex; align-items: center; gap: 10px; margin-top: 22px; }
 
-/* ── 右栏：接着上次那个 ── */
+/* 模型与思考强度用原生下拉：探到的模型有十几个，摊成一排按钮会把面板撑成一堵墙 */
+.compose select {
+  background: var(--code); border: 1px solid var(--line); color: var(--text);
+  border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12.5px;
+  width: max-content; max-width: 100%; cursor: pointer;
+  transition: border-color .16s ease;
+}
+.compose select:hover { border-color: var(--fill); }
+.compose select:focus { outline: 0; border-color: var(--fill); }
+
+.compose .acts { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+.compose .acts .hint { margin: 0; }
+
+/* ── 右栏：历史调查 ── */
 .side { position: sticky; top: 28px; align-self: start; }
 .side-h { display: flex; align-items: baseline; gap: 9px; padding: 0 2px 8px; }
 .side-h h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); }

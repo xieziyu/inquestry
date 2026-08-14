@@ -9,11 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
-import { DEMO_INCIDENT_DATE, DEMO_QUESTION } from '../backend/datasource/demo.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
 import { readIntake, sweepZombies } from '../backend/store/sqlite-store.js';
 import { casePage } from '../backend/db/queries.js';
-import { exportStamp, localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
+import { exportStamp, localTzOffset, todayLocal } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
@@ -163,6 +162,9 @@ function createCase(draft: IntakeDraft): IntakeResult {
   if ('error' in root) return { ok: false, field: 'projectRoot', error: root.error };
 
   rememberRoot(root.path);
+  // 基准日期取立案这一刻，不再由人填：填错不会报错，只让无日期的时间串整体挪几天（ui.md §8.1）
+  const now = new Date();
+  const incidentDate = todayLocal(now);
   const caseId = `case_${randomUUID().slice(0, 8)}`;
   cases.adopt(
     caseId,
@@ -175,11 +177,10 @@ function createCase(draft: IntakeDraft): IntakeResult {
         title: titleOf(question),
         question,
         projectRoot: root.path,
-        incidentDate: draft.incidentDate,
-        // 时区不由用户填，取新建排查机器的偏移落库定死；**按基准日期那天算**，
-        // 不是按此刻——有夏令时的地区冬夏差一小时（见 shared/time.ts）
-        tzOffset: tzOffsetOn(draft.incidentDate),
-        clues: draft.clues?.trim() || null,
+        incidentDate,
+        tzOffset: localTzOffset(now),
+        // 「已知现象」不再单收：写清楚在 question 里就够了。列与旧排查里的值照旧留着
+        clues: null,
       },
       agent: draft.agent,
       // 权限模式初值由设置屏给（ui.md §8.1 的最后一项）。**要连同 agent 一起落
@@ -213,13 +214,13 @@ function loadCase(caseId: string): CaseRunner | null {
 }
 
 /**
- * 项目起点要在新建排查之前验：它随后就是 SDK 的 `cwd`。
+ * 工作区要在新建排查之前验：它随后就是 SDK 的 `cwd`。
  * 不验的话路径不存在也能新建排查成功，直到点「开始排查」才由 query 抛错、会话直接 crashed，
  * 而那时坏路径已经进了最近目录列表。
  */
-function checkProjectRoot(input: string | null): { path: string | null } | { error: string } {
+function checkProjectRoot(input: string | null): { path: string } | { error: string } {
   const p = input?.trim();
-  if (!p) return { path: null };
+  if (!p) return { error: '先选一个工作区目录' };
   const resolved = p.startsWith('~') ? path.join(homedir(), p.slice(1)) : p;
   // 相对路径要按 main 进程的 cwd 解释，打包后那是个说不准的目录 —— 与其猜不如让人看见
   if (!path.isAbsolute(resolved)) return { error: `请给绝对路径（${p}）` };
@@ -683,8 +684,6 @@ async function intakeOptions(): Promise<IntakeOptions> {
     // 面板的 agent 三项从设置里取初值；模型探测不到时那一档会退回内置表，
     // 所以这里给的 model 可能不在 `models` 里——面板自己按"选不到就回 default"处理
     agentDefaults: settings().intake,
-    defaults: { incidentDate: todayLocal(), tzOffset: localTzOffset() },
-    demo: { question: DEMO_QUESTION, incidentDate: DEMO_INCIDENT_DATE },
   };
 }
 
@@ -745,7 +744,7 @@ app.whenReady().then(async () => {
   }));
   ipcMain.handle('intake:options', () => intakeOptions());
   ipcMain.handle('intake:pickRoot', async () => {
-    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: '选择项目起点' });
+    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: '选择工作区目录' });
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle('case:create', (_e, draft: IntakeDraft) => createCase(draft));
@@ -884,10 +883,9 @@ app.whenReady().then(async () => {
       if (process.env.INQUESTRY_AUTOSTART) {
         // 无人值守时替人立一次案，好让整条链路能自己跑完
         createCase({
-          projectRoot: null,
+          // 探针也要给工作区：起点是必填项，缺了它这一条什么都立不起来
+          projectRoot: process.env.INQUESTRY_AUTOSTART_ROOT || process.cwd(),
           question: process.env.INQUESTRY_AUTOSTART,
-          incidentDate: DEMO_INCIDENT_DATE,
-          clues: null,
           agent: { backend: 'claude', model: null, effort: null },
           takeover: false,
         });
@@ -1014,7 +1012,7 @@ app.whenReady().then(async () => {
           runner.answerOperator({
             id: ask.id,
             statement: ask.statement,
-            answer: ask.suggestedAnswer || '(操作员：这条没跑，换个写法)',
+            answer: '(操作员：这条没跑，换个写法)',
             executedAt: '2026-08-09 12:41:07 +08:00',
           });
         }

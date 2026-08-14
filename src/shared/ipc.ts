@@ -21,15 +21,15 @@ export type AgentChoice = {
 };
 
 /**
- * 时区不在这里：它由 main 取新建排查机器的本机偏移，用户不填也改不了。
- * 因此本工具的前提是**日志时区 = 新建排查机器时区**——排查异地系统时这条会错，
- * 而且错法是整体偏移几小时，见 ui.md §8.1。
+ * 基准日期与时区都不在这里：由 main 取立案那一刻的本机日期与偏移落库。
+ * 因此本工具的前提是**日志时区 = 立案机器时区、事发就在立案当天**——
+ * 排查异地系统或补查前几天的事故时这条会错，错法是无日期的时间串整体挪几小时 / 几天，
+ * 且不会有任何报错，见 ui.md §8.1。
  */
 export type IntakeDraft = {
-  projectRoot: string | null;
+  /** 工作区目录，必填：它决定 agent 继承哪套 skill / MCP，也是唯一的信任边界。 */
+  projectRoot: string;
   question: string;
-  incidentDate: string;
-  clues: string | null;
   agent: AgentChoice;
   /**
    * 权限模式初值：`true` = 全程接管（ui.md §8.1）。设置屏给的只是预填，
@@ -41,9 +41,20 @@ export type IntakeDraft = {
 /** 新建排查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
 export type IntakeResult = { ok: true } | { ok: false; field: 'projectRoot'; error: string };
 
+/**
+ * ⚠️ **加字段要同时把 `backend/agent/capabilities.ts` 的 `CACHE_VERSION` +1。**
+ * 那份探测结果缓存 24 小时，旧形状不作废的话老库上会安静地顶着少一个字段的行，
+ * 而界面上没有任何地方看得出来。
+ */
 export type ModelOption = {
   value: string;
   label: string;
+  /**
+   * 这一档实际落到的模型 id（`sonnet` → `claude-sonnet-5`）。**面板要把它显示出来**：
+   * backend 报的 `label` 只有系列名，看不出跑的是第几代——而报告里要标"这一步是哪个模型跑的"。
+   * 探测不到时没有这一项（内置兜底表故意不写死版本号，那才是真正会烂的东西）。
+   */
+  resolvedModel?: string;
   description: string;
   /** 不支持时整项隐藏，而不是给个假开关（D19）。 */
   efforts: string[];
@@ -63,10 +74,6 @@ export type IntakeOptions = {
    * 而不是把一个列表上根本没有的值显示成选中。
    */
   agentDefaults: { agent: AgentChoice; takeover: boolean };
-  /** `tzOffset` 只用于显示"按哪个时区解释"，不是可编辑项。 */
-  defaults: { incidentDate: string; tzOffset: string };
-  /** 内置演示模式的预填。选它就是「不给项目起点」，玩具数据源才会挂上去。 */
-  demo: { question: string; incidentDate: string };
 };
 
 /** 排查列表的一行（D28）。 */
@@ -90,7 +97,7 @@ export type CaseBrief = {
 /**
  * 历史排查页要的一行（ui.md §8.3）。
  *
- * 比 `CaseBrief` 多的都是**只在那一页看得见**的：项目起点、步数、当前结论摘要。
+ * 比 `CaseBrief` 多的都是**只在那一页看得见**的：工作区、步数、当前结论摘要。
  * 快照里那份 `cases` 每 60ms 推一轮，把这些塞进去等于每一轮都多跑几条聚合查询，
  * 而它们只有历史排查页开着时才有人看。
  */
@@ -234,8 +241,6 @@ export type PendingAsk = {
   expect: string;
   env?: string;
   askedAt: number;
-  /** 数据源可以给个建议答案，UI 预填、人再改。演示数据源用它免去手敲。 */
-  suggestedAnswer?: string;
 };
 
 /**
@@ -347,6 +352,7 @@ export type CaseMeta = {
   projectRoot: string | null;
   incidentDate: string;
   tzOffset: string;
+  /** 历史字段：新建排查面板不再单收「已知现象」，写清楚在 `question` 里就够了。 */
   clues: string | null;
   agent: AgentChoice;
   /** 收尾三档（D29）。`closed` / `aborted` 都是冻结：开不了新会话，只能导出。 */
@@ -588,7 +594,7 @@ export type InquestryApi = {
 
   /**
    * 历史排查页的分页列表。**与快照里那份 `cases` 是两条路**：那一份是最近 20 条 + 钉住的，
-   * 每 60ms 推一次；这一份是人翻页翻出来的，带筛选、带项目起点与结论摘要。
+   * 每 60ms 推一次；这一份是人翻页翻出来的，带筛选、带工作区与结论摘要。
    */
   listCases(q: CaseListQuery): Promise<CaseListPage>;
   /** 应用级设置。回的是**归一化之后**那一份——夹逼过的值才是真正生效的那个。 */

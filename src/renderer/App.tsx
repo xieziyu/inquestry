@@ -811,14 +811,15 @@ function InvestigationTimeline({
   );
 }
 
-/** 基准日期填错时报告会静静地空掉，所以它得一直在屏幕上，而不是藏在新建排查那一刻。 */
+/** agent 补齐无日期时间串用的就是这个基准，它得一直在屏幕上——不然报告静静空掉时没人对得上。 */
 function CaseMetaStrip({ meta }: { meta: CaseMeta }) {
   return (
     <div className="casemeta">
       <span>
         基准日期 <code>{meta.incidentDate}</code> {meta.tzOffset}
       </span>
-      <span>{meta.projectRoot ? <code>{meta.projectRoot.split('/').slice(-1)[0]}</code> : '演示数据源'}</span>
+      {/* 工作区如今必填；null 只可能来自这条规则之前立的旧排查 */}
+      <span>{meta.projectRoot ? <code>{meta.projectRoot.split('/').slice(-1)[0]}</code> : '无工作区'}</span>
       <span>
         {meta.agent.backend}
         {meta.agent.model ? ` · ${meta.agent.model}` : ''}

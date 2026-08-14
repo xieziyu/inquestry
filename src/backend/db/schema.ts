@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS cases (
   -- 而不是留个空值让下游各自现算一个"今天"
   incident_date TEXT    NOT NULL,
   tz_offset     TEXT    NOT NULL,   -- 新建排查机器的本机偏移，不由用户填
-  clues         TEXT,                  -- 新建排查时已知的服务 / traceId / 用户 ID，拼进首轮提问
+  clues         TEXT,                  -- 历史字段：面板不再单收，旧排查里的值照旧拼进首轮提问
   -- 决定报告装哪几块（D25）。**收尾那一下才写**，在那之前是 NULL：
   -- 排查中途的形态是会变的，定死一个只会让报告按一个过期的判断装。取值见 overview §6.1.1
   verdict_shape TEXT CHECK (verdict_shape IN ('sequence','state','chain','distribution','open')),

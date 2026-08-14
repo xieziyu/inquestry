@@ -29,7 +29,6 @@ import {
   type LaneOutcome,
 } from '../backend/store/sqlite-store.js';
 import { createInquestryMcpServer, toolName } from '../backend/tools/sdk-mcp-adapter.js';
-import { createDemoDataSource, DEMO_TOOL, suggestOperatorAnswer } from '../backend/datasource/demo.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
@@ -68,7 +67,7 @@ const gateTimeoutMs = (init: CaseRunnerInit) => init.limits?.().gateTimeoutMs ??
  * 于是每条查询都要退成 ask_operator 让人贴结果。**别把它加回来。**
  */
 const STRUCTURAL = new Set([toolName('open_step'), toolName('close_step')]);
-/** 有项目起点时给的只读三件套：读代码是排查的地基，不值得每次拦一下。 */
+/** 只读三件套：读代码是排查的地基，不值得每次拦一下。 */
 const READONLY_BUILTINS = ['Read', 'Grep', 'Glob'];
 /** agent 自理的杂务：记事本与工具检索。它们取不到任何证据，拦下来只会把待办栏刷满。 */
 const CHORES = ['TodoWrite', 'ToolSearch'];
@@ -166,7 +165,7 @@ export class CaseRunner {
       ...STRUCTURAL,
       toolName('ask_operator'),
       ...CHORES,
-      ...(this.demoMode ? [DEMO_TOOL] : READONLY_BUILTINS),
+      ...READONLY_BUILTINS,
     ]);
   }
 
@@ -247,11 +246,6 @@ export class CaseRunner {
     });
     this.modeSwitch = run.catch(() => undefined);
     return run;
-  }
-
-  /** 没有项目起点 = 演示模式：只有这种情况才把玩具数据源塞进去。 */
-  private get demoMode() {
-    return !this.intake.projectRoot;
   }
 
   get meta() {
@@ -376,17 +370,17 @@ export class CaseRunner {
     this.q = query({
       prompt: this.inbox.iterable,
       options: {
-        // 真项目要加载磁盘上的 settings，否则「继承该项目的 skill 与 MCP」只是句话：
-        // **必须含 `project` 才会读该项目的 CLAUDE.md**（SDK 契约），
-        // 而项目约束正是排查时最不该缺的上下文。演示模式反过来要可复现，用隔离模式。
+        // 必须加载磁盘上的 settings，否则「继承该工作区的 skill 与 MCP」只是句话：
+        // **必须含 `project` 才会读该目录的 CLAUDE.md**（SDK 契约），
+        // 而项目约束正是排查时最不该缺的上下文。
         //
         // ⚠️ 这不只是放开上下文：磁盘 settings 里的 `hooks` 是 shell 命令，**加载即执行**
         // （实测 SessionStart 在第一次工具调用之前就跑了），项目 `.mcp.json` 同理直接拉起进程。
         // 两者都绕过 PreToolUse / canUseTool / disallowedTools——三分法只管得住 agent
         // 自己发出的调用。真正的信任边界是「新建排查时选的那个目录」，等价于在那儿直接跑 claude。
         // 已决定接受该风险（overview §8 风险表最后一行）。
-        settingSources: this.demoMode ? [] : ['user', 'project', 'local'],
-        // 项目起点决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
+        settingSources: ['user', 'project', 'local'],
+        // 工作区决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
         cwd: this.intake.projectRoot ?? undefined,
         model: this.init.agent.model ?? undefined,
         effort: (this.init.agent.effort as never) ?? undefined,
@@ -404,10 +398,7 @@ export class CaseRunner {
         // 接管模式下切回 `default`：分类器不会把调用推给人（`spike:automode`），
         // 留着它判的话，人明明按了「接管」，多数调用照旧不会到闸门上来
         permissionMode: this.permissionMode,
-        mcpServers: {
-          inquestry: createInquestryMcpServer(session.store),
-          ...(this.demoMode ? { datasource: createDemoDataSource() } : {}),
-        },
+        mcpServers: { inquestry: createInquestryMcpServer(session.store) },
         // 分类器模式下 backend 基本不会走到这儿（A.2 实测零次）。**留着不是死代码**：
         // 它是"人当场处置"唯一的入口，接管模式（§3.5）一开就从这条路进来
         canUseTool: async (name, input, opts) => {
@@ -906,7 +897,7 @@ export class CaseRunner {
       }, OPERATOR_TIMEOUT_MS);
 
       this.pending.set(id, {
-        ask: { id, askedAt: Date.now(), ...args, suggestedAnswer: suggestOperatorAnswer(args.statement) },
+        ask: { id, askedAt: Date.now(), ...args },
         callId,
         resolve: (r) => resolve({ answer: r.answer, statement: r.statement, executedAt: r.executedAt }),
         timer,
@@ -1136,11 +1127,13 @@ function laneOutcome(status: string): LaneOutcome {
 function openingMessage(intake: CaseIntake): string {
   const lines = [intake.question.trim()];
   lines.push(`基准日期：${intake.incidentDate}（时区 ${intake.tzOffset}）。日志里只有时分秒的时间串按这一天理解。`);
+  // 只有面板还收「已知现象」那阵子立的排查填得出这一条
   if (intake.clues?.trim()) lines.push(`已知现象：${intake.clues.trim()}`);
+  // 新建的排查一定有工作区；null 只可能来自这条规则之前立的旧排查
   lines.push(
     intake.projectRoot
-      ? `项目起点：${intake.projectRoot}。可以读这个仓库的代码与配置；查库、跑命令、动生产数据一律用 ask_operator 交给人执行。`
-      : '没有项目起点：只能用已接入的数据源工具，其余一律用 ask_operator 交给人执行。',
+      ? `工作区：${intake.projectRoot}。可以读这个仓库的代码与配置；查库、跑命令、动生产数据一律用 ask_operator 交给人执行。`
+      : '这次排查没有工作区：所有取数一律用 ask_operator 交给人执行。',
   );
   return lines.join('\n');
 }

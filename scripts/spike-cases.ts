@@ -26,6 +26,7 @@ import { checkEventShapes, rebuildProjections } from '../src/backend/db/projecto
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
 import { readIntake, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import type { CaseHit } from '../src/shared/ipc.js';
+import { cacheBlob, cacheHit } from '../src/backend/agent/capabilities.js';
 import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/shared/settings.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
@@ -1223,6 +1224,48 @@ async function main() {
       normalizeSettings({ intake: { takeover: 'yes' } } as unknown).intake.takeover === false &&
         normalizeSettings({ intake: { takeover: true } } as unknown).intake.takeover === true,
       '`Boolean("false")` 是 true —— 用真值判断的写法会把任何存歪的字符串读成"全程接管"',
+    );
+  }
+
+  // ── 模型列表缓存的形状版本（backend/agent/capabilities.ts）──
+  // 缓存一命中就直接当答案返回，且回的 `probed` 是 true。所以给 `ModelOption` 加了字段之后，
+  // **老库上会安静地顶着旧形状最多 24 小时**：代码对了、新装的机器也对，只有老库不对，
+  // 而界面上没有任何地方看得出来。加 `resolvedModel`（模型版本号）那次就是这么栽的。
+  {
+    const now = Date.parse('2026-08-14T10:00:00+08:00');
+    const withVersion = cacheBlob([{ value: 'sonnet', label: 'Sonnet', resolvedModel: 'claude-sonnet-5', description: '', efforts: [] }], now);
+    // 加 resolvedModel 之前那版写下的那种：字段少一个，版本戳压根没有
+    const oldShape = JSON.stringify({
+      at: now,
+      models: [{ value: 'sonnet', label: 'Sonnet', description: '', efforts: [] }],
+    });
+
+    check(
+      '当前形状 + 没过期 = 直接命中，不重探',
+      cacheHit(withVersion, now + 60_000)?.[0]?.resolvedModel === 'claude-sonnet-5',
+      '探测要 spawn 一次 CLI，命中这条路必须真的走得通，否则每开一次面板都付一次那个代价',
+    );
+    check(
+      '🔴 旧形状的缓存不算命中，哪怕它一点没过期',
+      cacheHit(oldShape, now + 60_000) === null,
+      '只判 TTL 的写法在这条上会命中：那份缓存里的模型没有 resolvedModel，' +
+        '于是下拉一整天只显示系列名、看不出版本号——而这与"探测失败退回兜底"长得完全一样，' +
+        '面板还照旧说自己是探测出来的',
+    );
+    check(
+      '过期的也不算命中',
+      cacheHit(withVersion, now + 25 * 60 * 60 * 1000) === null,
+      '版本对上之后不能就把 TTL 忘了：模型列表本身会变（新模型上线、账号档位变化）',
+    );
+    check(
+      '写进去的那一份自己读得回来（版本戳只在 cacheBlob 里打）',
+      cacheHit(cacheBlob([{ value: 'x', label: 'X', description: '', efforts: [] }], now), now) !== null,
+      '写侧漏打版本戳的话每次开面板都要重探一遍——不会给错答案，但那 20 秒超时会天天付',
+    );
+    check(
+      '存歪的 JSON 与空缓存都当没缓存过，不抛',
+      cacheHit('{{{', now) === null && cacheHit(null, now) === null,
+      '这份东西存在 ui_settings 里，手改过一次就可能不是合法 JSON；抛出去的表现是新建排查面板整个白掉',
     );
   }
 

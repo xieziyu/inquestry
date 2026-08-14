@@ -1,55 +1,51 @@
 import { useEffect, useState } from 'react';
-import type { AgentChoice, IntakeDraft, IntakeOptions, IntakeResult } from '../shared/ipc.js';
-import { tzOffsetOn } from '../shared/time.js';
+import type { AgentChoice, IntakeDraft, IntakeOptions, IntakeResult, ModelOption } from '../shared/ipc.js';
+import { rootLabel } from './caseline.js';
 
 /** backend 报出来的「不指定模型」那一档的 value。 */
 const DEFAULT_ROW = 'default';
 
+/** 「不指定」在 `<select>` 里的 value：`null` 不是合法的 option value。 */
+const NONE = '';
+
 /**
- * 格式对不代表日子存在，而且两种错法都要接住：`2026-02-30` 会被悄悄算成 3 月 2 日，
- * `2026-13-01` 直接是 Invalid Date（这时 `toISOString()` 会抛）。
+ * 下拉里一行模型怎么写。
+ *
+ * **版本号要露出来**：backend 报的 `label` 只有系列名（`Sonnet`），而同一个系列换代之后
+ * 界面上一个字都不会变——报告里却要标"这一步是哪个模型跑的"。`resolvedModel` 是 backend
+ * 自己说的那个 id，没有它（内置兜底表）就只写系列名，不自己拼一个版本号出来。
  */
-function checkDate(v: string): string | null {
-  const s = v.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s ? '格式要是 YYYY-MM-DD' : '基准日期必填';
-  const ms = Date.parse(`${s}T00:00:00Z`);
-  if (Number.isNaN(ms)) return '这一天不存在';
-  return new Date(ms).toISOString().slice(0, 10) === s ? null : '这一天不存在';
+function modelText(m: ModelOption): string {
+  return m.resolvedModel ? `${m.label} · ${m.resolvedModel}` : m.label;
 }
 
 /**
  * 新建排查的合成器（ui.md §8.1），住在首页左栏。
  *
- * 字段顺序仍是**先项目起点再写问题**：起点决定 agent 继承哪套 skill / MCP。
- * 起点本身搬去了页头（它是一种模式不是一个表单字段），在屏上仍排在问题之前。
+ * 三件事按**必须先做的在上面**排：选工作区 → 写问题 → 开始排查。
+ * 工作区一度挂在页头，已否决——顶栏读起来像状态栏，人不会把那儿当成"第一步"，
+ * 而它恰恰是不做就没法往下走的那一步。
  *
- * 压缩掉的只是那些填一次就不再动的——已知现象、思考强度、权限模式收进「更多选项」，
- * **基准日期不在里面**：它填错不会报错，只会让系统时间线悄悄排乱，所以必须一直露在外面。
- *
- * 时区不收，取本机的。
+ * 其余填一次就不再动的收进「更多选项」。agent 三项（backend / 模型 / 思考强度）都用原生下拉：
+ * 探测出来的模型是十几个的量级，摊成一排按钮会把这个面板撑成一堵墙；
+ * backend 用按钮则读起来像"点一下就执行"，而它是个单选。
  */
 export function Intake({
   opts,
-  root,
-  onRoot,
   onSubmit,
-  onRootError,
   onCreated,
 }: {
-  /** 由首页取一次分给两处；还没到手时按"探测不到"渲染，不要自己再取一次。 */
+  /** 由首页取一次交下来；还没到手时按"探测不到"渲染，不要自己再取一次。 */
   opts: IntakeOptions | null;
-  /** 页头那条起点条选的那个。空串 = 演示模式。 */
-  root: string;
-  onRoot: (v: string) => void;
   onSubmit: (d: IntakeDraft) => Promise<IntakeResult>;
-  /** 起点不合法只有提交时才知道，而那条错误要显示在页头的起点条上。 */
-  onRootError: (e: string | null) => void;
   /** 建成了。由首页负责翻到工作区——这个组件不知道外面有几个屏。 */
   onCreated: () => void;
 }) {
+  // 存原字符串而不是 null：输入阶段做 trim 会把目录名里刚敲下的空格吃掉
+  const [root, setRoot] = useState('');
+  /** 工作区不合法只有提交时才知道（目录可能刚被删掉），那条错误要回到工作区那一格上。 */
+  const [rootError, setRootError] = useState<string | null>(null);
   const [question, setQuestion] = useState('');
-  const [incidentDate, setIncidentDate] = useState('');
-  const [clues, setClues] = useState('');
   const [agent, setAgent] = useState<AgentChoice>({ backend: 'claude', model: null, effort: null });
   const [takeover, setTakeover] = useState(false);
   const [more, setMore] = useState(false);
@@ -57,72 +53,98 @@ export function Intake({
 
   useEffect(() => {
     if (!opts) return;
-    setIncidentDate((d) => d || opts.defaults.incidentDate);
     // 设置屏定的预填。**只在首次载入时铺**：人已经在面板上改过之后，
     // 一次 options 重取不该把他挑的那套冲掉
     setAgent((a) => (a.model === null && a.effort === null ? opts.agentDefaults.agent : a));
     setTakeover(opts.agentDefaults.takeover);
   }, [opts]);
 
-  const hasDefaultRow = !!opts?.models.some((m) => m.value === DEFAULT_ROW);
   const model = opts?.models.find((m) => m.value === (agent.model ?? DEFAULT_ROW));
   // 模型不支持 effort 就整项不出现，而不是给个拧了不生效的假开关（D19）
   const efforts = model?.efforts ?? [];
-  // 基准日期错了不会有任何报错，只会让整条系统时间线排乱，
-  // 所以在这里拦住，而不是在下游悄悄替换成一个默认值
-  const dateError = checkDate(incidentDate);
-  const ready = question.trim().length > 0 && !dateError && !submitting;
-  // 与 main 落库时用的是同一个函数、同一个日期，面板上显示的偏移不会和库里的对不上
-  const tzOffset = dateError ? null : tzOffsetOn(incidentDate.trim());
+  // backend 报得出「默认」那一档时就用它那行——它说得出默认到底落到哪个模型
+  const defaultRow = opts?.models.find((m) => m.value === DEFAULT_ROW);
+  const ready = question.trim().length > 0 && root.trim().length > 0 && !submitting;
   /**
    * 设置屏挑的模型这会儿可能探测不到了（那时探到、这时退回内置表）。
    * 说出来比默默换掉强：默默换掉的话，人以为在用 opus，报告里记的是另一个。
    */
   const modelMissing = agent.model !== null && !!opts && !model;
 
+  const pick = () => void window.inquestry.pickProjectRoot().then((p) => p && choose(p));
+  const choose = (v: string) => {
+    setRoot(v);
+    setRootError(null);
+  };
+
   const submit = async () => {
     setSubmitting(true);
-    onRootError(null);
+    setRootError(null);
     try {
       const r = await onSubmit({
-        projectRoot: root.trim() || null,
+        projectRoot: root.trim(),
         question: question.trim(),
-        incidentDate: incidentDate.trim(),
-        clues: clues.trim() || null,
         agent,
         takeover,
       });
       if (r.ok) {
         // 建完就清空：首页不会自己换掉，留着上一次的问题会让下一次误以为没提交成功
         setQuestion('');
-        setClues('');
         setSubmitting(false);
         onCreated();
       } else {
-        onRootError(r.error);
+        setRootError(r.error);
         setSubmitting(false);
       }
     } catch (err) {
-      onRootError(String((err as Error).message ?? err));
+      setRootError(String((err as Error).message ?? err));
       setSubmitting(false);
     }
   };
 
-  const useDemo = () => {
-    if (!opts) return;
-    onRoot('');
-    setQuestion(opts.demo.question);
-    setIncidentDate(opts.demo.incidentDate);
-    setClues('');
-  };
+  // 从别处挑来的路径不在最近列表里，也要能显示成选中的那一个
+  const recents = opts?.recentRoots ?? [];
+  const chips = [...(root && !recents.includes(root) ? [root] : []), ...recents.slice(0, 5)];
 
   return (
     <div className="compose">
+      <div className="f ws">
+        <span className="k">工作区</span>
+        <div className="row">
+          <button className={`dir ${root ? '' : 'need'}`} onClick={pick}>
+            {root ? '更换目录…' : '选择目录…'}
+          </button>
+          {root && (
+            // 截断要从头上截（末级目录才是认得出是哪个项目的那一段），所以外层走 rtl；
+            // 路径本身必须留在 ltr 的隔离里，否则开头那个 `/` 会被 bidi 挪到末尾
+            <span className="path" title={root}>
+              <bdi>{root}</bdi>
+            </span>
+          )}
+        </div>
+        {chips.length > 0 && (
+          <div className="row wrap chips">
+            {chips.map((p) => (
+              <button
+                key={p}
+                className={p === root ? 'on' : ''}
+                title={p}
+                onClick={() => choose(p)}
+              >
+                {rootLabel(p)}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* 只在提交时才知道目录不合法（可能刚被删掉），那条错误要回到这一格上 */}
+        {rootError && <p className="hint err">{rootError}</p>}
+      </div>
+
       <label className="f">
-        <span className="k">问题</span>
+        <span className="k">问题描述</span>
         <textarea
           value={question}
-          placeholder="线上发生了什么、谁受影响、你已经知道的现象…"
+          placeholder="线上发生了什么、谁受影响、你已经知道的现象（涉及服务 / traceId / 用户 ID / 报错码都写进来）…"
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ready) {
@@ -133,120 +155,90 @@ export function Intake({
         />
       </label>
 
-      <div className="f">
-        <span className="k">基准日期</span>
-        <div className="row">
-          <label className="date">
-            <input
-              className={dateError ? 'bad' : ''}
-              value={incidentDate}
-              placeholder="YYYY-MM-DD"
-              onChange={(e) => setIncidentDate(e.target.value)}
-            />
-            <em>{tzOffset ?? '—'}</em>
-          </label>
-
-          {opts?.backends.map((b) => (
-            <button
-              key={b.value}
-              className={`pick ${agent.backend === b.value ? 'on' : ''}`}
-              disabled={!b.enabled}
-              title={b.note}
-              onClick={() => setAgent({ backend: b.value, model: null, effort: null })}
-            >
-              {b.label}
-              {b.note && <em>{b.note}</em>}
-            </button>
-          ))}
-
-          <button className="more" onClick={() => setMore(!more)}>
-            {more ? '收起选项 ▴' : '更多选项 ▾'}
-          </button>
-        </div>
-        {/* 基准日期填错不报错、只让时间线悄悄排乱，所以这条提示与「更多选项」无关，始终在 */}
-        <p className={dateError ? 'hint err' : 'hint'}>
-          {dateError ?? '日志时间串多半只有 12:03:01.220，没有这一天就排不出系统时间线。时区取本机的，不可改。'}
-        </p>
+      <div className="row">
+        <button className="more" onClick={() => setMore(!more)}>
+          {more ? '收起选项 ▴' : '更多选项 ▾'}
+        </button>
       </div>
 
       {more && (
         <div className="adv">
           <label className="f">
-            <span className="k">
-              已知现象 <em>可选</em>
-            </span>
-            <input
-              value={clues}
-              placeholder="涉及服务 / traceId / 用户 ID / 报错码"
-              onChange={(e) => setClues(e.target.value)}
-            />
-            <span className="hint">填了能省掉 agent 前几轮试探，不填也能跑。</span>
+            <span className="k">Agent</span>
+            <select
+              value={agent.backend}
+              onChange={(e) =>
+                setAgent({ backend: e.target.value as AgentChoice['backend'], model: null, effort: null })
+              }
+            >
+              {opts?.backends.map((b) => (
+                <option key={b.value} value={b.value} disabled={!b.enabled}>
+                  {b.label}
+                  {b.note ? `（${b.note}）` : ''}
+                </option>
+              ))}
+            </select>
           </label>
 
           <div className="f">
             <span className="k">权限模式</span>
             <div className="seg">
               <button className={takeover ? '' : 'on'} onClick={() => setTakeover(false)}>
-                分层放行
+                自动模式
               </button>
               <button className={takeover ? 'on' : ''} onClick={() => setTakeover(true)}>
                 全程接管
               </button>
             </div>
-            <span className="hint">随时可切。接管档每次调用都要你放行，且不会自动过去。</span>
           </div>
 
-          <div className="f wide">
+          <label className="f wide">
             <span className="k">模型</span>
-            <div className="row wrap">
-              {!hasDefaultRow && (
-                <button
-                  className={`pick ${agent.model === null ? 'on' : ''}`}
-                  onClick={() => setAgent((a) => ({ ...a, model: null, effort: null }))}
-                >
-                  默认模型
-                </button>
-              )}
-              {opts?.models.map((m) => {
-                // backend 报的 default 那一档就是「不指定」：存 null，不把 'default' 当模型名传下去
-                const value = m.value === DEFAULT_ROW ? null : m.value;
-                return (
-                  <button
-                    key={m.value}
-                    className={`pick ${agent.model === value ? 'on' : ''}`}
-                    title={m.description}
-                    onClick={() => setAgent((a) => ({ ...a, model: value, effort: null }))}
-                  >
-                    {m.label}
-                  </button>
-                );
-              })}
-            </div>
+            <select
+              value={agent.model ?? NONE}
+              onChange={(e) =>
+                setAgent((a) => ({ ...a, model: e.target.value || null, effort: null }))
+              }
+            >
+              <option value={NONE}>{defaultRow ? modelText(defaultRow) : '默认模型'}</option>
+              {opts?.models
+                // backend 报的 default 那一档就是上面那条「不指定」，不再列一遍
+                .filter((m) => m.value !== DEFAULT_ROW)
+                .map((m) => (
+                  <option key={m.value} value={m.value} title={m.description}>
+                    {modelText(m)}
+                  </option>
+                ))}
+              {/* 设置里挑的那个探测不到时也要显示成选中的，否则下拉会自己跳回默认那一档 */}
+              {modelMissing && <option value={agent.model!}>{agent.model}</option>}
+            </select>
             {modelMissing && (
               <span className="hint err">
                 设置里挑的 <code>{agent.model}</code> 这会儿没探测到，跑起来会退回默认模型。
               </span>
             )}
             {opts && !opts.modelsProbed && (
-              <span className="hint">没能从 backend 问到模型列表（可能是还没登录），这几项是内置兜底。</span>
+              <span className="hint">
+                没能从 backend 问到模型列表（可能是还没登录），这几项是内置兜底，因此也报不出版本号。
+              </span>
             )}
-          </div>
+          </label>
 
           {efforts.length > 0 && (
-            <div className="f wide">
+            <label className="f">
               <span className="k">思考强度</span>
-              <div className="row wrap">
+              <select
+                value={agent.effort ?? NONE}
+                onChange={(e) => setAgent((a) => ({ ...a, effort: e.target.value || null }))}
+              >
+                <option value={NONE}>默认</option>
                 {efforts.map((e) => (
-                  <button
-                    key={e}
-                    className={`pick ${agent.effort === e ? 'on' : ''}`}
-                    onClick={() => setAgent((a) => ({ ...a, effort: a.effort === e ? null : e }))}
-                  >
+                  <option key={e} value={e}>
                     {e}
-                  </button>
+                  </option>
                 ))}
-              </div>
-            </div>
+              </select>
+            </label>
           )}
         </div>
       )}
@@ -255,9 +247,7 @@ export function Intake({
         <button className="primary" disabled={!ready} onClick={() => void submit()}>
           开始排查 <small>⌘↵</small>
         </button>
-        <button className="ghost" onClick={useDemo} disabled={!opts || submitting}>
-          填一份演示数据
-        </button>
+        {!root.trim() && <span className="hint">先选一个工作区目录。</span>}
       </div>
     </div>
   );

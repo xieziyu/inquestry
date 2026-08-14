@@ -26,14 +26,3 @@ export function exportStamp(ms: number): string {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())} ${localTzOffset(at)}`;
 }
 
-/**
- * **基准日期那一天**的本机偏移，不是此刻的。
- *
- * 有夏令时的地区冬夏差一小时（实测 America/New_York 冬 -05:00、夏 -04:00），
- * 冬天立一个夏天的排查就会把所有只有时分秒的证据整体挪一小时，而且毫无报错。
- * 取当天正午来算，避开切换那一小时本身的歧义。
- */
-export function tzOffsetOn(incidentDate: string, fallback: Date = new Date()): string {
-  const noon = new Date(`${incidentDate}T12:00:00`);
-  return localTzOffset(Number.isNaN(noon.getTime()) ? fallback : noon);
-}

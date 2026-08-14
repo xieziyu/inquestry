@@ -50,9 +50,12 @@ export function ago(ms: number, now = Date.now()): string {
     : `${t.getFullYear()}-${mm}-${dd}`;
 }
 
-/** 项目起点只显示末级目录名，完整路径进 title——列表要的是认得出是哪个项目。 */
+/**
+ * 工作区只显示末级目录名，完整路径进 title——列表要的是认得出是哪个项目。
+ * null 只可能来自"工作区必填"这条规则之前立的旧排查。
+ */
 export function rootLabel(root: string | null): string {
-  return root ? (root.split('/').filter(Boolean).slice(-1)[0] ?? root) : '演示数据源';
+  return root ? (root.split('/').filter(Boolean).slice(-1)[0] ?? root) : '无工作区';
 }
 
 /**

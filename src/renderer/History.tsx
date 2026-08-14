@@ -226,7 +226,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
 
 /**
  * 检索命中补齐成一行。**缺的那几项一律给"不知道"而不是编一个**：
- * 命中那条路查的是 FTS，拿不到项目起点与步数，填 0 的话它会显示成"一次没有步骤的排查"。
+ * 命中那条路查的是 FTS，拿不到工作区与步数，填 0 的话它会显示成"一次没有步骤的排查"。
  */
 function toRow(h: CaseHit): CaseListRow {
   return { ...h, projectRoot: null, incidentDate: '', verdictShape: null, steps: 0, headline: null };
@@ -272,7 +272,7 @@ function Row({
           </>
         ) : (
           <>
-            <span className="where" title={c.projectRoot ?? '演示模式（内置玩具数据源）'}>
+            <span className="where" title={c.projectRoot ?? '这条排查没有工作区'}>
               {shape ?? rootLabel(c.projectRoot)}
             </span>
             <span className="snip">

@@ -153,7 +153,7 @@ export function Settings() {
                     className={s.intake.takeover ? '' : 'on'}
                     onClick={() => patchIntake({ takeover: false })}
                   >
-                    分层放行
+                    自动模式
                   </button>
                   <button
                     className={s.intake.takeover ? 'on' : ''}
@@ -165,11 +165,11 @@ export function Settings() {
               </Row>
 
               <Row
-                label="最近项目起点"
+                label="最近工作区"
                 hint={
                   opts?.recentRoots.length
                     ? `${opts.recentRoots.length} 条，首页那张表单上的快捷入口`
-                    : '还没有用过任何项目起点'
+                    : '还没有用过任何工作区'
                 }
               >
                 <span className="ro mono">

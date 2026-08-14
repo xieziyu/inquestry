@@ -25,7 +25,7 @@ export function PendingCard({
   onSubmit: (r: OperatorReply) => void;
 }) {
   const statement = draft.statement ?? ask.statement;
-  const answer = draft.answer ?? ask.suggestedAnswer ?? '';
+  const answer = draft.answer ?? '';
   const executedAt = draft.executedAt ?? '';
   const setStatement = (v: string) => onDraft({ statement: v });
   const setAnswer = (v: string) => onDraft({ answer: v });
