@@ -214,7 +214,7 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
 /**
  * 系统时间线画成真正的时间轴：一条竖线 + 圆点（ui.md §6）。
  *
- * 与排查台的轨道同一个母题，含义不同——那条是"我按什么顺序做的"，这条是
+ * 与工作区的轨道同一个母题，含义不同——那条是"我按什么顺序做的"，这条是
  * "系统当时按什么顺序发生的"。竖线只在时间轴内部出现，与「全屏唯一的曲线表示推翻」不冲突。
  */
 function Timeline({ rows, label }: { rows: IncidentEntry[]; label: (id: string) => string }) {

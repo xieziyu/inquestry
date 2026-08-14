@@ -33,7 +33,7 @@ declare global {
 export function App() {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   /**
-   * 报告开着的是**哪个排查**的（D21：排查台与报告是两个屏，不是同屏两个 tab）。
+   * 报告开着的是**哪个排查**的（D21：工作区与报告是两个屏，不是同屏两个 tab）。
    *
    * 记排查而不是记一个 `screen` 枚举：切到别的排查时报告屏得自己让开——
    * 留着的话，屏幕上是排查 B 的标题配排查 A 的章节，而报告正是这个工具唯一交出去的东西。
@@ -340,7 +340,7 @@ export function App() {
 
   /**
    * 报告是**另一个屏**，整屏换掉（D21）：主角、密度、能做的事都不一样。
-   * 挂在这儿而不是塞进主区，是为了让排查台的顶栏与底部输入带一并让开——
+   * 挂在这儿而不是塞进主区，是为了让工作区的顶栏与底部输入带一并让开——
    * 报告上只有导出，留着"停止 / 定稿 / 归档"会让人以为这份还能改。
    */
   if (reportOf === openCase) {
@@ -355,7 +355,7 @@ export function App() {
           <span className="case">{snap.case.title}</span>
         </div>
         <CaseMetaStrip meta={snap.case} />
-        {/* 两条时间线不是顶栏的两个 tab：排查线属于排查台，系统线属于报告（ui.md §1）。
+        {/* 两条时间线不是顶栏的两个 tab：排查线属于工作区，系统线属于报告（ui.md §1）。
             它们是同一批证据的两次投影，这是数据模型的事实，不该翻译成一对开关 */}
         <div className="status">
           <button

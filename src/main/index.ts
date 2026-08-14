@@ -757,7 +757,7 @@ app.whenReady().then(async () => {
         console.log('[shot]', file);
       }
       // 系统时间线现在属于报告屏（D21），拍它就是拍报告。
-      // **点不到入口要出声**：`?.click()` 静默跳过的话，拍出来的是排查台，
+      // **点不到入口要出声**：`?.click()` 静默跳过的话，拍出来的是工作区，
       // 而文件名与日志都说这是报告——一张认错了的截图比没有更糟
       if (process.env.INQUESTRY_SHOT_REPORT) {
         // **先等界面到位再摸它**：单独设这个变量时（不带 INQUESTRY_SHOT）这里是
@@ -774,7 +774,7 @@ app.whenReady().then(async () => {
         if (ready === 'none') throw new Error('[shot] 进不去报告屏：等了 10s，既没有报告屏也没找到 .toreport');
         // 先留一帧点击前的：**固定等一会儿再拍是不够的**——实测点进报告屏后 400ms 拍到的
         // 与点击前那一张字节完全相同（§11 的过期帧）。等到画面真的变了才算拍到，
-        // 等不到就抛；否则文件名和日志都说这是报告，而里面是排查台
+        // 等不到就抛；否则文件名和日志都说这是报告，而里面是工作区
         const before = (await win!.webContents.capturePage()).toPNG();
         // 收尾之后界面会自己翻到报告屏（ui.md §6），那时不用点
         if (ready === 'toreport') {
