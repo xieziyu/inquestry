@@ -17,7 +17,12 @@
   --fill: #2a6598;
   --on-fill: #f2f8fd;
   --on-warn: #1a1206;
-  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 全局字体。整套界面走等宽，中文也不例外——`Maple Mono NF CN` 的汉字正好是拉丁的两倍宽，
+     竖着看每一列都对得齐。没装它的机器上拉丁退回系统等宽、汉字退回 PingFang，
+     仍然读得了，只是不再对列（字体不打包：20MB 的 CJK 字重不值得进仓库） */
+  --ui: 'Maple Mono NF CN', ui-monospace, SFMono-Regular, Menlo, 'PingFang SC', system-ui, sans-serif;
+  /* 与 `--ui` 的差别只在没装 Maple 的机器上：那儿正文退成比例字体，这几处仍是等宽 */
+  --mono: 'Maple Mono NF CN', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* 标记专用：乱麻与理直那一段。语义色三个直接复用上面的 ok / bad / warn */
   --mk-tangle: #6f7c89;
   --mk-line: #93a0ac;
@@ -43,7 +48,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 13.5px/1.6 -apple-system, "PingFang SC", system-ui, sans-serif;
+  font: 13.5px/1.6 var(--ui);
   -webkit-font-smoothing: antialiased;
   /* 相对时间、时长、条数在列表里是竖着对齐读的，比例数字会让每一行都错半格 */
   font-variant-numeric: tabular-nums;
