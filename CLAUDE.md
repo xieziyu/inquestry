@@ -50,6 +50,7 @@ npm run spike:all  # 跑全套自检
 
 ### 验界面
 
+- **调版面先用 `npm run preview:ui`**（浏览器开 `http://localhost:5178`，`?screen=` 直达某屏）：真组件真 CSS，只换掉 `window.inquestry`，改一行立刻看得到。🔴 **但它没有 main 进程**——落库、重开会话、真导出、模型探测一律不经过，凡是这类判断仍旧只能在真 app 里验。细节与两处"像而不是"看 [`docs/design/ui.md`](docs/design/ui.md) §11。
 - 现成的无人值守开关看 [`docs/design/ui.md`](docs/design/ui.md) §11。
 - 🔴 **`screencapture` 在这台机器上被 TCC 挡成全黑图，别拿它验 UI。** 可靠的做法是 `npx electron . --user-data-dir=<临时目录> --remote-debugging-port=9222`，再用 node 内置 `WebSocket` 走 CDP：`Runtime.evaluate` 读 DOM 与 `getComputedStyle`、`Page.captureScreenshot` 拍图。**读 computed style 与 `getBoundingClientRect` 比看图靠谱**，而且能写成会失败的断言。
 - 🔴 **走 CDP 前先确认 9222 是自己那一份**：旧实例没死会占着端口，新起的那个只在自己日志里报 `Address already in use`，而 CDP 照常连得上——连的是旧窗口。表现是"改完重启，界面一点没变"，而代码是对的。`pkill -f` 要按完整路径匹配。**每次截图前先读一句 DOM 核对这是哪一屏。**

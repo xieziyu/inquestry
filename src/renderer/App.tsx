@@ -32,7 +32,13 @@ declare global {
   }
 }
 
-export function App() {
+export function App({
+  /**
+   * 起手停在哪一屏。**只有浏览器预览会传**（`preview/main.tsx` 的 `?screen=`）：
+   * 那儿改一行样式就整页重载一次，每次都从首页点回去的话，深处那几屏根本调不动。
+   */
+  initialScreen,
+}: { initialScreen?: Screen } = {}) {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   /**
    * 报告开着的是**哪个排查**的（D21：工作区与报告是两个屏，不是同屏两个 tab）。
@@ -55,7 +61,7 @@ export function App() {
    * 起手在首页而不是工作区：打开 app 时手上多半没有排查，
    * 而工作区在那种情况下是一屏什么都没有的空屏。
    */
-  const [screen, setScreen] = useState<Screen>('home');
+  const [screen, setScreen] = useState<Screen>(initialScreen ?? 'home');
   const [env, setEnv] = useState<{ claude: string | null; hint: string } | null>(null);
   const [excerpt, setExcerpt] = useState<{ title: string; body: string } | null>(null);
   /**

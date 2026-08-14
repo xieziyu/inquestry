@@ -371,6 +371,16 @@ harness 侧的记账、状态与投影由 spike 兜底，**改哪一带先跑哪
 
 **renderer 的状态没有 node 侧的回归网。** 验它用**临时探针**：在 main 里加一段 env 开关的 `executeJavaScript` 脚本，驱动真 app（点按钮 → 读回 DOM），验完把探针删干净。能提成纯函数的（`renderer/drafts.ts`）就提出来进 spike。
 
+#### 调版面用浏览器预览，判对错仍然只能在真 app 里
+
+`npm run preview:ui` 起一个 vite dev server（`http://localhost:5178`），**用真组件、真 CSS**，只把 `window.inquestry` 换成 `renderer/preview/fixtures.ts` 里那份假的。改一行样式浏览器里立刻就变，不用等 electron-vite 重启，也不用 CDP。`?screen=home|workspace|history|settings` 直达某一屏（整页重载之后不必从首页点回去），`?empty` 换成空态那一版。
+
+夹具的报告那几屏**借的是 `scripts/fixtures/report-case.ts`**，与 `spike:report` / `spike:markdown` 同一份。另抄一份的话，屏幕上看着好好的那一版会和检查覆盖的那一版慢慢变成两个案子。
+
+> 🔴 **它证明不了任何与 main 有关的事。** 这儿没有 main 进程：落库、重开会话、"重启后还在不在"、导出真文件、模型真探测——一律不经过。凡是这类判断仍然按上面那两条走（真 app + CDP，且真重启）。
+>
+> ⚠️ 两处像而不是的地方：窗口是浏览器的，**没有交通灯**，所以顶栏左边那段为让位留的 `--head-pad` 在这儿看着是一块空地，别照着它去调；`-webkit-app-region: drag` 在这儿也不生效。反过来它比真 app 强的一点是**窗口是获焦的**——`ResizeObserver` 与 `scrollIntoView({behavior:'smooth'})` 在这儿真的会跑，而那正是真 app 的验证环境里验不出来的东西。
+
 无人值守跑一轮并截图（开关名与用法看 `main/index.ts` 里那段自检）：
 
 ```bash
