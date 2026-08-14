@@ -18,26 +18,35 @@ function checkDate(v: string): string | null {
 }
 
 /**
- * 新建排查的合成器（ui.md §8.1），住在首页顶上。
+ * 新建排查的合成器（ui.md §8.1），住在首页左栏。
  *
- * 字段顺序仍是**先项目起点再写问题**：起点决定 agent 继承哪套 skill / MCP，
- * 先选它，问题才写得有的放矢。压缩掉的只是那些填一次就不再动的——
- * 已知现象、思考强度、权限模式收进「更多选项」，**基准日期不在里面**：
- * 它填错不会报错，只会让系统时间线悄悄排乱，所以必须一直露在外面。
+ * 字段顺序仍是**先项目起点再写问题**：起点决定 agent 继承哪套 skill / MCP。
+ * 起点本身搬去了页头（它是一种模式不是一个表单字段），在屏上仍排在问题之前。
+ *
+ * 压缩掉的只是那些填一次就不再动的——已知现象、思考强度、权限模式收进「更多选项」，
+ * **基准日期不在里面**：它填错不会报错，只会让系统时间线悄悄排乱，所以必须一直露在外面。
  *
  * 时区不收，取本机的。
  */
 export function Intake({
+  opts,
+  root,
+  onRoot,
   onSubmit,
+  onRootError,
   onCreated,
 }: {
+  /** 由首页取一次分给两处；还没到手时按"探测不到"渲染，不要自己再取一次。 */
+  opts: IntakeOptions | null;
+  /** 页头那条起点条选的那个。空串 = 演示模式。 */
+  root: string;
+  onRoot: (v: string) => void;
   onSubmit: (d: IntakeDraft) => Promise<IntakeResult>;
+  /** 起点不合法只有提交时才知道，而那条错误要显示在页头的起点条上。 */
+  onRootError: (e: string | null) => void;
   /** 建成了。由首页负责翻到工作区——这个组件不知道外面有几个屏。 */
   onCreated: () => void;
 }) {
-  const [opts, setOpts] = useState<IntakeOptions | null>(null);
-  // 存原字符串而不是 null：输入阶段做 trim 会把目录名里刚敲下的空格吃掉
-  const [root, setRoot] = useState('');
   const [question, setQuestion] = useState('');
   const [incidentDate, setIncidentDate] = useState('');
   const [clues, setClues] = useState('');
@@ -45,18 +54,15 @@ export function Intake({
   const [takeover, setTakeover] = useState(false);
   const [more, setMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [rootError, setRootError] = useState<string | null>(null);
 
   useEffect(() => {
-    void window.inquestry.intakeOptions().then((o) => {
-      setOpts(o);
-      setIncidentDate((d) => d || o.defaults.incidentDate);
-      // 设置屏定的预填。**只在首次载入时铺**：人已经在面板上改过之后，
-      // 一次 options 重取不该把他挑的那套冲掉
-      setAgent((a) => (a.model === null && a.effort === null ? o.agentDefaults.agent : a));
-      setTakeover(o.agentDefaults.takeover);
-    });
-  }, []);
+    if (!opts) return;
+    setIncidentDate((d) => d || opts.defaults.incidentDate);
+    // 设置屏定的预填。**只在首次载入时铺**：人已经在面板上改过之后，
+    // 一次 options 重取不该把他挑的那套冲掉
+    setAgent((a) => (a.model === null && a.effort === null ? opts.agentDefaults.agent : a));
+    setTakeover(opts.agentDefaults.takeover);
+  }, [opts]);
 
   const hasDefaultRow = !!opts?.models.some((m) => m.value === DEFAULT_ROW);
   const model = opts?.models.find((m) => m.value === (agent.model ?? DEFAULT_ROW));
@@ -76,7 +82,7 @@ export function Intake({
 
   const submit = async () => {
     setSubmitting(true);
-    setRootError(null);
+    onRootError(null);
     try {
       const r = await onSubmit({
         projectRoot: root.trim() || null,
@@ -93,18 +99,18 @@ export function Intake({
         setSubmitting(false);
         onCreated();
       } else {
-        setRootError(r.error);
+        onRootError(r.error);
         setSubmitting(false);
       }
     } catch (err) {
-      setRootError(String((err as Error).message ?? err));
+      onRootError(String((err as Error).message ?? err));
       setSubmitting(false);
     }
   };
 
   const useDemo = () => {
     if (!opts) return;
-    setRoot('');
+    onRoot('');
     setQuestion(opts.demo.question);
     setIncidentDate(opts.demo.incidentDate);
     setClues('');
@@ -112,87 +118,56 @@ export function Intake({
 
   return (
     <div className="compose">
-      {/* 起点在最前：它决定挂哪套工具，也决定这是真项目还是演示模式（ui.md §8.1） */}
-      <div className="rootrow">
-        <span className="k">项目起点</span>
-        <input
-          value={root}
-          placeholder="不填 = 演示模式（挂内置玩具数据源）"
-          className={rootError ? 'bad' : ''}
-          onChange={(e) => {
-            setRoot(e.target.value);
-            setRootError(null);
+      <label className="f">
+        <span className="k">问题</span>
+        <textarea
+          value={question}
+          placeholder="线上发生了什么、谁受影响、你已经知道的现象…"
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ready) {
+              e.preventDefault();
+              void submit();
+            }
           }}
         />
-        <button onClick={() => void window.inquestry.pickProjectRoot().then((p) => p && setRoot(p))}>
-          选目录
-        </button>
-        {opts?.recentRoots.slice(0, 3).map((r) => (
-          <button
-            key={r}
-            className={`ghost ${r === root ? 'on' : ''}`}
-            title={r}
-            onClick={() => setRoot(r)}
-          >
-            {r.split('/').slice(-1)[0]}
+      </label>
+
+      <div className="f">
+        <span className="k">基准日期</span>
+        <div className="row">
+          <label className="date">
+            <input
+              className={dateError ? 'bad' : ''}
+              value={incidentDate}
+              placeholder="YYYY-MM-DD"
+              onChange={(e) => setIncidentDate(e.target.value)}
+            />
+            <em>{tzOffset ?? '—'}</em>
+          </label>
+
+          {opts?.backends.map((b) => (
+            <button
+              key={b.value}
+              className={`pick ${agent.backend === b.value ? 'on' : ''}`}
+              disabled={!b.enabled}
+              title={b.note}
+              onClick={() => setAgent({ backend: b.value, model: null, effort: null })}
+            >
+              {b.label}
+              {b.note && <em>{b.note}</em>}
+            </button>
+          ))}
+
+          <button className="more" onClick={() => setMore(!more)}>
+            {more ? '收起选项 ▴' : '更多选项 ▾'}
           </button>
-        ))}
+        </div>
+        {/* 基准日期填错不报错、只让时间线悄悄排乱，所以这条提示与「更多选项」无关，始终在 */}
+        <p className={dateError ? 'hint err' : 'hint'}>
+          {dateError ?? '日志时间串多半只有 12:03:01.220，没有这一天就排不出系统时间线。时区取本机的，不可改。'}
+        </p>
       </div>
-      {rootError && <p className="hint err">{rootError}</p>}
-
-      <textarea
-        value={question}
-        placeholder="线上发生了什么、谁受影响、你已经知道的现象…"
-        onChange={(e) => setQuestion(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ready) {
-            e.preventDefault();
-            void submit();
-          }
-        }}
-      />
-
-      <div className="row">
-        <label className="chip">
-          基准日期
-          <input
-            className={`date ${dateError ? 'bad' : ''}`}
-            value={incidentDate}
-            placeholder="YYYY-MM-DD"
-            onChange={(e) => setIncidentDate(e.target.value)}
-          />
-          <em>{tzOffset ?? '—'}</em>
-        </label>
-
-        {opts?.backends.map((b) => (
-          <button
-            key={b.value}
-            className={`chip pick ${agent.backend === b.value ? 'on' : ''}`}
-            disabled={!b.enabled}
-            title={b.note}
-            onClick={() => setAgent({ backend: b.value, model: null, effort: null })}
-          >
-            {b.label}
-            {b.note && <em>{b.note}</em>}
-          </button>
-        ))}
-
-        <button className="more" onClick={() => setMore(!more)}>
-          {more ? '收起选项 ▴' : '更多选项 ▾'}
-        </button>
-        <span className="spacer" />
-        <button className="ghost" onClick={useDemo} disabled={!opts || submitting}>
-          用演示数据填一份
-        </button>
-        <button className="primary" disabled={!ready} onClick={() => void submit()}>
-          开始排查 <small>⌘↵</small>
-        </button>
-      </div>
-
-      {/* 基准日期填错不报错、只让时间线悄悄排乱，所以这条提示与「更多选项」无关，始终在 */}
-      <p className={dateError ? 'hint err' : 'hint'}>
-        {dateError ?? '日志时间串多半只有 12:03:01.220，没有这一天就排不出系统时间线。时区取本机的，不可改。'}
-      </p>
 
       {more && (
         <div className="adv">
@@ -226,7 +201,7 @@ export function Intake({
             <div className="row wrap">
               {!hasDefaultRow && (
                 <button
-                  className={`chip pick ${agent.model === null ? 'on' : ''}`}
+                  className={`pick ${agent.model === null ? 'on' : ''}`}
                   onClick={() => setAgent((a) => ({ ...a, model: null, effort: null }))}
                 >
                   默认模型
@@ -238,7 +213,7 @@ export function Intake({
                 return (
                   <button
                     key={m.value}
-                    className={`chip pick ${agent.model === value ? 'on' : ''}`}
+                    className={`pick ${agent.model === value ? 'on' : ''}`}
                     title={m.description}
                     onClick={() => setAgent((a) => ({ ...a, model: value, effort: null }))}
                   >
@@ -264,7 +239,7 @@ export function Intake({
                 {efforts.map((e) => (
                   <button
                     key={e}
-                    className={`chip pick ${agent.effort === e ? 'on' : ''}`}
+                    className={`pick ${agent.effort === e ? 'on' : ''}`}
                     onClick={() => setAgent((a) => ({ ...a, effort: a.effort === e ? null : e }))}
                   >
                     {e}
@@ -275,6 +250,15 @@ export function Intake({
           )}
         </div>
       )}
+
+      <div className="acts">
+        <button className="primary" disabled={!ready} onClick={() => void submit()}>
+          开始排查 <small>⌘↵</small>
+        </button>
+        <button className="ghost" onClick={useDemo} disabled={!opts || submitting}>
+          填一份演示数据
+        </button>
+      </div>
     </div>
   );
 }

@@ -693,6 +693,15 @@ function createWindow() {
     width: 1380,
     height: 900,
     titleBarStyle: 'hiddenInset',
+    /**
+     * 交通灯钉死在这儿，好让 CSS 那侧的让位量算得出来（`--head-pad`）。
+     * 三颗灯连起来 52px 宽（x=20 起，右缘 72），y 取的是 46px 顶栏的竖直居中。
+     *
+     * ⚠️ **rail 让不开它**——灯比这条 52px 的 rail 还宽。让位是顶栏一家的事，
+     * 顶栏因此做成整幅的、压在 rail 上面那一格（见 styles.css 的外壳网格）。
+     * 不写这一项就跟着 macOS 版本漂，而漂了没人会去核——表现是标题被灯压住。
+     */
+    trafficLightPosition: { x: 20, y: 17 },
     backgroundColor: '#0f1115',
     webPreferences: {
       preload: path.join(HERE, '../preload/index.mjs'),

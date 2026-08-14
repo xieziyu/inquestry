@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>首页 v3 · 双栏工作台 — Inquestry</title>
+<style>
+:root{
+  --code:#0E1317; --bg:#141A1F; --panel:#1A2128; --panel-2:#212A32; --line:#273038;
+  --text:#DFE5EC; --dim:#8A96A4;
+  --ok:#5A9EDD; --accent:var(--ok); --bad:#C9564C; --warn:#E0A94A;
+  --fill:#2A6598; --on-fill:#F2F8FD; --on-warn:#1A1206;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --line-soft:#1F2831; --dim-2:#6E7A87; --tint:#18222C;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font:13.5px/1.65 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;
+}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid rgba(90,158,221,.55);outline-offset:2px;border-radius:4px}
+
+.app{display:flex;height:100%}
+.rail{flex:0 0 52px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0 10px;background:var(--panel);border-right:1px solid var(--line)}
+.rail .mark{margin:30px 0 12px;opacity:.95;display:flex}
+.rail-btn{position:relative;display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:9px;background:transparent;color:var(--dim);cursor:pointer;transition:background .16s ease,color .16s ease}
+.rail-btn:hover{background:var(--panel-2);color:var(--text)}
+.rail-btn.on{background:var(--panel-2);color:var(--accent)}
+.rail-btn.on::before{content:'';position:absolute;left:-8px;top:8px;bottom:8px;width:2.5px;border-radius:0 3px 3px 0;background:var(--accent)}
+.rail-btn .dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--warn);border:1.5px solid var(--panel)}
+.rail-gap{flex:1}
+.rail .env{width:6px;height:6px;border-radius:50%;background:var(--ok);margin-bottom:8px}
+.frame{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+
+/* ══ B 的页头：保留那条横带，但让它说点有用的 ══
+   「首页」是废话。换成「起点」—— 它决定 agent 挂哪套工具，是这一屏最该常驻的一条事实。 */
+.head{
+  display:flex;align-items:center;gap:12px;flex:0 0 auto;
+  padding:0 20px;height:46px;border-bottom:1px solid var(--line);background:var(--panel);
+}
+.head .who{display:flex;align-items:baseline;gap:9px;min-width:0}
+.head .who .lab{font-size:11.5px;color:var(--dim-2)}
+.head .who .val{font-size:13.5px;font-weight:600}
+.head .who .path{font-size:11.5px;color:var(--dim-2);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.head .grow{margin-left:auto}
+
+.body{flex:1;min-height:0;overflow-y:auto}
+/* 用满宽度：左边写问题，右边接着上次 —— 首页那两个职责各占一栏 */
+.grid{
+  display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:36px;
+  max-width:1180px;margin:0 auto;padding:30px 32px 72px;
+}
+@media (max-width:1080px){.grid{grid-template-columns:minmax(0,1fr);gap:28px}}
+
+.btn{background:none;border:1px solid transparent;color:var(--dim);padding:5px 10px;border-radius:7px;cursor:pointer;font-size:12.5px;transition:background .16s ease,color .16s ease,border-color .16s ease,transform .06s ease}
+.btn:hover{color:var(--text);background:var(--panel-2)}
+.btn:active{transform:translateY(1px)}
+.btn.quiet{border-color:var(--line)}
+.btn.on{border-color:var(--fill);color:var(--accent)}
+.btn.primary{background:var(--fill);border-color:var(--fill);color:var(--on-fill);font-weight:600;padding:8px 18px}
+.btn.primary:hover{background:#3175AE}
+.btn.primary small{opacity:.62;font-weight:400;margin-left:6px}
+
+/* ══ 左栏：竖着排的字段，不再是一条横向工具栏 ══ */
+.h1{font-size:20px;font-weight:600;letter-spacing:-.012em;margin:0 0 3px}
+.lead{color:var(--dim);font-size:12.5px;margin:0 0 22px}
+
+.f{display:flex;flex-direction:column;gap:7px;margin-bottom:18px}
+.f>.k{font-size:11.5px;color:var(--dim-2)}
+.f>.k em{font-style:normal;opacity:.7;margin-left:5px}
+
+.rootpick{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rootpick input{
+  flex:1;min-width:220px;background:var(--code);border:1px solid var(--line);
+  border-radius:7px;padding:7px 11px;font-size:12.5px;font-family:var(--mono);
+  transition:border-color .16s ease;
+}
+.rootpick input:focus{outline:0;border-color:var(--fill)}
+.rootpick input::placeholder{color:var(--dim-2);font-family:-apple-system,"PingFang SC",system-ui}
+.recents{display:flex;gap:0;align-items:center;font-size:12px;color:var(--dim-2);padding-top:2px}
+.recents a{color:var(--dim);text-decoration:none;cursor:pointer;padding:2px 5px;border-radius:4px;transition:color .16s ease,background .16s ease}
+.recents a:hover{color:var(--text);background:var(--panel-2)}
+.recents .sep{color:#39434C;margin:0 2px}
+
+.q{
+  width:100%;min-height:150px;resize:vertical;background:var(--panel);
+  border:1px solid var(--line);border-radius:9px;padding:14px 15px;
+  font-size:14.5px;line-height:1.7;transition:border-color .16s ease;
+}
+.q:focus{outline:0;border-color:var(--fill)}
+.q::placeholder{color:var(--dim-2)}
+
+.metarow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px}
+.date{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-family:var(--mono);font-size:12px}
+.date input{width:88px;background:none;border:0;padding:0;font-family:var(--mono);font-size:12px}
+.date input:focus{outline:0}
+.date em{font-style:normal;color:var(--dim-2)}
+.hint{font-size:11.5px;line-height:1.6;color:var(--dim-2);margin:9px 0 0;max-width:62ch}
+.actions{display:flex;align-items:center;gap:10px;margin-top:22px}
+.actions .grow{margin-left:auto}
+
+/* ══ 右栏：接着上次那个 ══ */
+.side{display:flex;flex-direction:column;gap:10px;position:sticky;top:0;align-self:start}
+.sidehead{display:flex;align-items:baseline;gap:8px;padding:0 2px 2px}
+.sidehead h2{margin:0;font-size:12px;font-weight:600;color:var(--dim)}
+.sidehead .n{font-size:11.5px;color:var(--dim-2);font-family:var(--mono)}
+.sidehead .all{margin-left:auto;font-size:12px;color:var(--accent);background:none;border:0;cursor:pointer;padding:2px 6px;border-radius:5px}
+.sidehead .all:hover{background:var(--panel-2)}
+
+/* 「当前」那一张是一张真卡：它是这一栏唯一值得占两行的东西 */
+.cur{
+  display:block;width:100%;text-align:left;cursor:pointer;
+  background:var(--tint);border:1px solid var(--fill);border-radius:9px;padding:12px 13px;
+  transition:background .16s ease;
+}
+.cur:hover{background:#1C2833}
+.cur .top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.cur .st{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--accent)}
+.cur .st i{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:breathe 2.4s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.28}}
+.cur .title{font-size:13.5px;line-height:1.5;margin-bottom:9px}
+.cur .foot{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim-2)}
+.cur .foot .go{margin-left:auto;color:var(--accent)}
+
+.list{display:flex;flex-direction:column;margin-top:4px}
+.row{
+  display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;
+  width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line-soft);
+  padding:9px 10px;cursor:pointer;border-radius:7px;transition:background .16s ease;
+}
+.row:hover{background:var(--panel)}
+.row:last-child{border-bottom:0}
+.row .title{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row.done .title{color:var(--dim);text-decoration:line-through;text-decoration-color:#39434C}
+.row .when{font-size:11px;color:var(--dim-2);font-family:var(--mono);text-align:right}
+.row .st{grid-column:1/-1;font-size:11px;color:var(--dim-2)}
+.row .st.idle{color:var(--dim)}
+
+.badge{font-size:10.5px;padding:1.5px 7px;border-radius:5px;flex:0 0 auto;line-height:1.5}
+.badge.todo{background:var(--warn);color:var(--on-warn);font-weight:600}
+
+.notes{max-width:1180px;margin:0 auto;padding:0 32px 80px;color:var(--dim);font-size:12px;line-height:1.8}
+.notes h3{font-size:12px;color:var(--dim-2);font-weight:600;margin:0 0 8px;letter-spacing:.04em}
+.notes li{margin-bottom:5px}
+.notes b{color:var(--text);font-weight:500}
+.notes hr{border:0;border-top:1px solid var(--line);margin:0 0 18px}
+.notes ul{max-width:78ch}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <nav class="rail">
+    <div class="mark">
+      <svg width="20" height="20" viewBox="0 0 96 96">
+        <path d="M22 76 C0 66 4 26 28 22 C50 19 54 48 30 50 C12 51 14 32 34 34 C44 35 49 44 50 52" fill="none" stroke="#6F7C89" stroke-width="8.5" stroke-linecap="round"/>
+        <path d="M50 52 H85" fill="none" stroke="#93A0AC" stroke-width="8.5" stroke-linecap="round"/>
+        <circle cx="68" cy="52" r="7.5" fill="#5A9EDD"/><circle cx="85" cy="52" r="7.5" fill="#E0A94A"/>
+      </svg>
+    </div>
+    <button class="rail-btn on" aria-label="首页"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.2 12 3l9 7.2"/><path d="M5 9.5V20h14V9.5"/></svg></button>
+    <button class="rail-btn" aria-label="工作区"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15"/><circle cx="7" cy="7.5" r="2.1"/><circle cx="7" cy="16.5" r="2.1"/><path d="M7 12h6a2 2 0 0 1 2 2"/><circle cx="17.5" cy="14" r="2.1"/></svg><span class="dot"></span></button>
+    <button class="rail-btn" aria-label="历史排查"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.4 2"/></svg></button>
+    <span class="rail-gap"></span>
+    <span class="env"></span>
+    <button class="rail-btn" aria-label="设置"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.1 14.4a1.6 1.6 0 0 0 .32 1.8l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.8-.32 1.6 1.6 0 0 0-.97 1.47v.17a2 2 0 0 1-4 0v-.09a1.6 1.6 0 0 0-1.05-1.46 1.6 1.6 0 0 0-1.8.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.8 1.6 1.6 0 0 0-1.47-.97H2.8a2 2 0 0 1 0-4h.09a1.6 1.6 0 0 0 1.46-1.05 1.6 1.6 0 0 0-.32-1.8l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.8.32h.08A1.6 1.6 0 0 0 9.7 3.7v-.17a2 2 0 0 1 4 0v.09a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.8-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.8v.08a1.6 1.6 0 0 0 1.47.97h.17a2 2 0 0 1 0 4h-.09a1.6 1.6 0 0 0-1.47.97z"/></svg></button>
+  </nav>
+
+  <main class="frame">
+    <header class="head">
+      <div class="who">
+        <span class="lab">起点</span>
+        <span class="val">演示数据源</span>
+        <span class="path">内置玩具数据源 · 隔离模式</span>
+      </div>
+      <span class="grow"></span>
+      <button class="btn quiet">换一个 ▾</button>
+    </header>
+
+    <div class="body">
+      <div class="grid">
+
+        <section>
+          <h1 class="h1">起一次新排查</h1>
+          <p class="lead">先定起点，再写问题 —— 起点决定 agent 继承哪套 skill 与 MCP。</p>
+
+          <div class="f">
+            <span class="k">项目起点 <em>不填 = 演示模式</em></span>
+            <div class="rootpick">
+              <input placeholder="/Users/ziyu/Projects/…">
+              <button class="btn quiet">选目录</button>
+            </div>
+            <div class="recents">
+              最近
+              <a>inquestry</a><span class="sep">·</span>
+              <a>duetlens</a><span class="sep">·</span>
+              <a>podhub</a>
+            </div>
+          </div>
+
+          <div class="f">
+            <span class="k">问题</span>
+            <textarea class="q" placeholder="线上发生了什么、谁受影响、你已经知道的现象…"></textarea>
+          </div>
+
+          <div class="f">
+            <span class="k">基准日期</span>
+            <div class="metarow">
+              <label class="date"><input value="2026-08-14" aria-label="基准日期"><em>+08:00</em></label>
+              <button class="btn on">Claude</button>
+              <button class="btn" disabled style="opacity:.42;cursor:default">codex</button>
+              <button class="btn">更多选项 ▾</button>
+            </div>
+            <p class="hint">日志时间串多半只有 <code style="font-family:var(--mono)">12:03:01.220</code>，没有基准日期就排不出系统时间线。时区取本机的，不可改。</p>
+          </div>
+
+          <div class="actions">
+            <button class="btn primary">开始排查<small>⌘↵</small></button>
+            <button class="btn">填一份演示数据</button>
+          </div>
+        </section>
+
+        <aside class="side">
+          <div class="sidehead">
+            <h2>接着上次那个</h2><span class="n">6</span>
+            <button class="all">全部 →</button>
+          </div>
+
+          <button class="cur">
+            <span class="top">
+              <span class="st"><i></i>运行中</span>
+              <span class="badge todo">等你 2</span>
+            </span>
+            <div class="title">支付回调偶发 502，凌晨 2 点集中</div>
+            <span class="foot">演示数据源 · 刚刚 <span class="go">继续 →</span></span>
+          </button>
+
+          <div class="list">
+            <button class="row">
+              <span class="title">节目详情页 P99 从 180ms 涨到 1.4s</span>
+              <span class="when">3 小时前</span>
+              <span class="st idle">已停止 · inquestry</span>
+            </button>
+            <button class="row">
+              <span class="title">用户 32891 的订阅列表少了两档</span>
+              <span class="when">昨天</span>
+              <span class="st">未打开 · podhub</span>
+            </button>
+            <button class="row done">
+              <span class="title">转码队列积压到 4000 条</span>
+              <span class="when">4 天前</span>
+              <span class="st">已定稿 · 单一根因</span>
+            </button>
+            <button class="row done">
+              <span class="title">推送到达率掉了 12 个点</span>
+              <span class="when">07-29</span>
+              <span class="st">已归档 · duetlens</span>
+            </button>
+            <button class="row">
+              <span class="title">评论区 emoji 变成方块</span>
+              <span class="when">07-21</span>
+              <span class="st">未打开 · podhub</span>
+            </button>
+          </div>
+        </aside>
+
+      </div>
+
+      <div class="notes">
+        <hr>
+        <h3>首页 v3 · 双栏工作台 —— 这一版动了什么</h3>
+        <ul>
+          <li><b>用满宽度，左右分工。</b>首页的两个职责（起新的 / 接上次）各占一栏。现状是 940px 左对齐，右边三分之一是死空。</li>
+          <li><b>页头改说「起点」。</b>「首页 · 起一次新排查」是废话；起点决定挂哪套工具，是这一屏最该常驻的一条事实（也解决了「这次是不是演示模式」看不出来）。</li>
+          <li><b>新建从横向工具栏改成竖向字段。</b>原来 6 个高矮不一的控件挤一行像杂货铺；现在每个字段有自己的标签与呼吸。</li>
+          <li><b>右栏顶上是一张「当前」卡。</b>运行中 + 等你 2 直接露在外面，不必先扫完一整行才发现。其余按两行紧凑排，第二行补上起点／收尾形态 —— 那是真正认得出「是哪一次」的信息。</li>
+          <li><b>标签不再用「9.5px 全大写 + 字距」。</b><code>text-transform:uppercase</code> 对中文无效，现状只剩下被拉开的字距和过小的字号，看起来像渲染坏了。</li>
+        </ul>
+        <p style="color:var(--dim-2)">代价要说明：右栏 336px 让最近排查的标题更容易被截断，且窗口窄于 1080px 时会退回单栏。守住的硬线与 A 相同。</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

@@ -19,6 +19,7 @@ import { trackLayout, type TrackRow } from './track.js';
 import { GateCard } from './GateCard.js';
 import { History } from './History.js';
 import { Home } from './Home.js';
+import { LogoMark } from './LogoMark.js';
 import { isPlainKey, isTyping } from './keys.js';
 import { PendingCard } from './PendingCard.js';
 import { Rail, type Screen } from './Rail.js';
@@ -226,6 +227,11 @@ export function App() {
   const shell = (content: React.ReactNode) => (
     <div className="app">
       <Rail screen={screen} todo={anyTodo} envBad={!!env && !env.claude} onGo={setScreen} />
+      {/* 顶栏左端的应用标记。由外壳画一次而不是各屏各画一次——它在每一屏上都是同一个东西，
+          而各屏的页头只管自己那份内容（见 styles.css 的 `.brand` 与外壳网格） */}
+      <span className="brand">
+        <LogoMark size={20} />
+      </span>
       <div className="frame">{content}</div>
     </div>
   );
@@ -477,6 +483,7 @@ export function App() {
           )}
         </div>
       </header>
+      <div className="pagebody ws">
 
       {/* 环境不通的横幅只在工作区出：设置屏那一节把同一件事说得更细，
           两处都挂的话人会以为是两个问题 */}
@@ -600,6 +607,7 @@ export function App() {
           </button>
         </div>
       </footer>
+      </div>
 
       {excerpt && (
         <div className="overlay" onClick={() => setExcerpt(null)}>

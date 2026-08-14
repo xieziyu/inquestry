@@ -1,12 +1,16 @@
-import { LogoMark } from './LogoMark.js';
-
 export type Screen = 'home' | 'workspace' | 'history' | 'settings';
 
 /**
  * 全局导航（ui.md §8.5）。**一条 52px 的图标条，不写字、不带计数。**
  *
- * 它通到底而不是挂在顶栏之下：顶上那一段正好让开 macOS 交通灯并当拖拽区，
- * 主区因此不必再为交通灯留一次位——现在每一屏各有各的页头，那一格是给标题的。
+ * 它**挂在整幅顶栏之下**，不通到底（参照 `~/Projects/duetlens` 的 `AppRail`）。
+ * 应用标记也不在这儿——顶栏左端那一格是它的，见 styles.css 的 `.brand`。
+ *
+ * ⚠️ 原先让它通到底，理由是"顶上那一段正好让开 macOS 交通灯"——**那是错的**：
+ * 三颗灯连起来比这条 52px 的 rail 还宽，它只让开了竖着那一段，横着多出来的一截
+ * 压在页头左端，而 rail 那条右边线从灯中间穿了过去。让位因此是顶栏一家的事
+ * （`--head-pad`），rail 的右边线从顶栏下沿才画（`--head-h`，见 styles.css 的外壳网格）。
+ * 这两个变量与 `main/index.ts` 里钉死的 `trafficLightPosition` 是一套，改一处要连着改。
  *
  * 排查的切换不在这儿。它在历史排查页（ui.md §8.3）：rail 上有常驻入口之后，
  * 切换不再是工作区内的手势，也就不必在工作区里再挂一排 chip。
@@ -50,9 +54,6 @@ export function Rail({
 
   return (
     <nav className="rail" aria-label="主导航">
-      <div className="mark">
-        <LogoMark size={20} />
-      </div>
       {item('home', '首页', '首页 · 新建排查', <HomeIcon />)}
       {item(
         'workspace',
