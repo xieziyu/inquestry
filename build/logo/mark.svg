@@ -1,11 +1,24 @@
-<!-- Inquestry 主标记：一团缠住的线往右解开成一条挂着证据点的直线。
-     三个点是三个语义色（成立 / 推翻 / 等你处置），与 renderer/styles.css 的 ok / bad / warn 三个语义变量同源。
+<!-- Inquestry 主标记：三层证据被同一条溯源通道贯穿。
+     通道是透明负形，不是画在表面的深色线；换任何底色都仍然成立。
      20px 及以下改用 mark-small.svg / mark-tiny.svg（分档见 scripts/gen-icons.ts）。 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
-  <path d="M22 74 C2 66 6 30 28 26 C46 23 50 48 30 50 C14 51 14 34 34 36 C44 37 47 45 48 52"
-        fill="none" stroke="#6F7C89" stroke-width="7" stroke-linecap="round"/>
-  <path d="M48 52 H88" fill="none" stroke="#93A0AC" stroke-width="7" stroke-linecap="round"/>
-  <circle cx="66" cy="52" r="5.5" fill="#5A9EDD"/>
-  <circle cx="77" cy="52" r="5.5" fill="#C9564C"/>
-  <circle cx="88" cy="52" r="5.5" fill="#E0A94A"/>
+  <defs>
+    <mask id="trace-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+      <rect width="96" height="96" fill="white"/>
+      <path fill="black" d="M44 96 V37 C41.8 35.5 40.5 32.8 40.5 29.5
+        C40.5 25.4 43.9 22 48 22 C52.1 22 55.5 25.4 55.5 29.5
+        C55.5 32.8 54.2 35.5 52 37 V96 Z"/>
+    </mask>
+  </defs>
+  <g mask="url(#trace-cut)">
+  <path fill="#24577F" d="
+    M10 63 L43 81 Q48 84 53 81 L86 63 Q90 61 90 66 V71
+    L55 91 Q48 95 41 91 L6 71 V66 Q6 61 10 63 Z"/>
+  <path fill="#4D91D0" d="
+    M10 45 L43 63 Q48 66 53 63 L86 45 Q90 43 90 48 V54
+    L55 73 Q48 77 41 73 L6 54 V48 Q6 43 10 45 Z"/>
+  <path fill="#C9D5E0" d="
+    M44 9 Q48 7 52 9 L86 29 Q90 32 86 35 L56 52
+    Q48 57 40 52 L10 35 Q6 32 10 29 Z"/>
+  </g>
 </svg>

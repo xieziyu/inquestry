@@ -10,6 +10,7 @@
 import markFull from '../../build/logo/mark.svg?raw';
 import markSmall from '../../build/logo/mark-small.svg?raw';
 import markTiny from '../../build/logo/mark-tiny.svg?raw';
+import { useId } from 'react';
 
 type Tier = 'full' | 'small' | 'tiny';
 
@@ -20,25 +21,27 @@ function tierFor(size: number): Tier {
   return size > 20 ? 'small' : 'tiny';
 }
 
-/** 文件里的固定色值 → 色板变量。灰的两档各有深浅两个取值（小档为了压住糊边调亮过）。 */
+/** 文件里的固定色值 → 可覆写的品牌变量；fallback 与应用图标使用同一套定稿色。 */
 const PALETTE: Array<[RegExp, string]> = [
-  [/#6F7C89|#7E8C99/gi, 'var(--mk-tangle)'],
-  [/#93A0AC|#9AA7B3/gi, 'var(--mk-line)'],
-  [/#5A9EDD/gi, 'var(--ok)'],
-  [/#C9564C/gi, 'var(--bad)'],
-  [/#E0A94A/gi, 'var(--warn)'],
+  [/#C9D5E0/gi, 'var(--mk-top, #C9D5E0)'],
+  [/#4D91D0/gi, 'var(--mk-middle, #4D91D0)'],
+  [/#24577F/gi, 'var(--mk-bottom, #24577F)'],
 ];
 
 /**
  * 取 `<svg>` 的内层内容：外层由 React 渲染，才给得了它 width/height/class。
- *
- * 这几个标记里没有 `defs` / `id`，所以不必像别处那样给 id 加实例后缀——
- * 真加了 defs 就得补上，否则同屏挂两枚会互相串引用。
+ * mask id 必须按实例改名；同屏的不同尺寸若共用一个 id，浏览器可能把小档套上大档的镂空。
  */
-function body(tier: Tier): string {
+function body(tier: Tier, instance: string): string {
   const svg = SOURCE[tier];
   let inner = svg.slice(svg.indexOf('>', svg.indexOf('<svg')) + 1, svg.lastIndexOf('</svg>'));
   for (const [re, v] of PALETTE) inner = inner.replace(re, v);
+  const suffix = instance.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const ids = [...inner.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
+  for (const id of ids) {
+    const unique = `${id}-${suffix}`;
+    inner = inner.replaceAll(`id="${id}"`, `id="${unique}"`).replaceAll(`url(#${id})`, `url(#${unique})`);
+  }
   return inner;
 }
 
@@ -53,6 +56,7 @@ export function LogoMark({
   className?: string;
 }) {
   const t = tier ?? tierFor(size);
+  const instance = useId();
   return (
     <svg
       className={className}
@@ -61,7 +65,7 @@ export function LogoMark({
       viewBox="0 0 96 96"
       role="img"
       aria-label="Inquestry"
-      dangerouslySetInnerHTML={{ __html: body(t) }}
+      dangerouslySetInnerHTML={{ __html: body(t, instance) }}
     />
   );
 }

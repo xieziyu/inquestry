@@ -31,9 +31,9 @@ const PLATE_R = PLATE * 0.225;
  * 与圆点半径量出来，改了 SVG 就要重量。
  */
 const VARIANTS = {
-  full: { file: 'mark.svg', span: 87.97, cx: 49.51, cy: 49.88 },
-  small: { file: 'mark-small.svg', span: 89.2, cx: 47.9, cy: 48.89 },
-  tiny: { file: 'mark-tiny.svg', span: 90.65, cx: 46.68, cy: 49.0 },
+  full: { file: 'mark.svg', span: 88, cx: 48, cy: 51 },
+  small: { file: 'mark-small.svg', span: 91, cx: 48, cy: 50.5 },
+  tiny: { file: 'mark-tiny.svg', span: 94, cx: 48, cy: 50 },
 } as const;
 
 type Variant = keyof typeof VARIANTS;
@@ -75,13 +75,7 @@ function compose(variant: Variant): string {
   const ty = CANVAS / 2 - cy * scale;
   const inset = (CANVAS - PLATE) / 2;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CANVAS} ${CANVAS}" width="${CANVAS}" height="${CANVAS}">
-  <defs>
-    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1b2130"/>
-      <stop offset="1" stop-color="#0c0f16"/>
-    </linearGradient>
-  </defs>
-  <rect x="${inset}" y="${inset}" width="${PLATE}" height="${PLATE}" rx="${PLATE_R}" fill="url(#plate)"/>
+  <rect x="${inset}" y="${inset}" width="${PLATE}" height="${PLATE}" rx="${PLATE_R}" fill="#11161B"/>
   <rect x="${inset + 1.5}" y="${inset + 1.5}" width="${PLATE - 3}" height="${PLATE - 3}" rx="${PLATE_R - 1.5}" fill="none" stroke="#ffffff" stroke-width="3" opacity=".08"/>
   <g transform="translate(${tx} ${ty}) scale(${scale})">${markBody(file)}</g>
 </svg>

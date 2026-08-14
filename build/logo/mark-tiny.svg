@@ -1,9 +1,22 @@
-<!-- Inquestry 16px 标记：结只留一个可辨认的环，证据点减到一个。
-     ⚠️ 乱麻末端与直线必须真的接上（这里靠最后那段过渡曲线）——
-     断开一截在大图上看不出来，缩到 16px 就是两个不相干的碎片。 -->
+<!-- Inquestry 16px 标记：只保留能成像的粗轮廓，负形加宽为 12px，节点同步放大。 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
-  <path d="M20 78 C0 64 4 20 30 20 C52 20 54 50 30 50 C18 50 22 38 42 42 C50 44 52 49 52 54"
-        fill="none" stroke="#7E8C99" stroke-width="12" stroke-linecap="round"/>
-  <path d="M52 54 H68" fill="none" stroke="#9AA7B3" stroke-width="12" stroke-linecap="round"/>
-  <circle cx="80" cy="54" r="12" fill="#E0A94A"/>
+  <defs>
+    <mask id="trace-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+      <rect width="96" height="96" fill="white"/>
+      <path fill="black" d="M42 96 V38 C39.3 35.8 38 32.5 38 28.5
+        C38 23 42.5 18.5 48 18.5 C53.5 18.5 58 23 58 28.5
+        C58 32.5 56.7 35.8 54 38 V96 Z"/>
+    </mask>
+  </defs>
+  <g mask="url(#trace-cut)">
+  <path fill="#24577F" d="
+    M8 63 L41 81 Q48 86 55 81 L88 63 Q92 61 92 67 V73
+    L56 93 Q48 98 40 93 L4 73 V67 Q4 61 8 63 Z"/>
+  <path fill="#4D91D0" d="
+    M8 43 L41 61 Q48 66 55 61 L88 43 Q92 41 92 47 V54
+    L56 75 Q48 80 40 75 L4 54 V47 Q4 41 8 43 Z"/>
+  <path fill="#C9D5E0" d="
+    M42 7 Q48 3 54 7 L88 27 Q93 31 88 35 L57 53
+    Q48 59 39 53 L8 35 Q3 31 8 27 Z"/>
+  </g>
 </svg>
