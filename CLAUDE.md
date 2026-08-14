@@ -40,11 +40,12 @@
 ## 怎么跑、怎么验
 
 ```bash
+npm run dev        # 开发跑 app（HMR）
 npm run app        # 跑 app（含无人值守探针）
 npm run spike:all  # 跑全套自检
 ```
 
-**这两条各自把 `better-sqlite3` 的 ABI 切好了，别自己拼 `npx electron-vite preview`。** 忘了切的表现是安静的错答案：app 停在启动失败屏上干等到超时，spike 打出 0 PASS / 0 FAIL（脚本在 import 阶段就崩了，计数看着像全过）。**"跑了很久没输出"先想 ABI，别去怀疑刚改的代码。**
+**这三条各自把 `better-sqlite3` 的 ABI 切好了，别自己拼 `npx electron-vite dev/preview`，也别用 `npm start`（它不切）。** 忘了切的表现是安静的错答案：app 停在启动失败屏上干等到超时，spike 打出 0 PASS / 0 FAIL（脚本在 import 阶段就崩了，计数看着像全过）。**"跑了很久没输出"先想 ABI，别去怀疑刚改的代码。**
 
 改哪一带先跑哪一条 spike（清单看 `package.json`）。起真会话的那几条靠订阅凭据，过期了要在终端 `claude` 重登。
 

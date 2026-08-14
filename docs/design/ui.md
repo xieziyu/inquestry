@@ -363,7 +363,7 @@ renderer 的报错默认只留在它自己的 devtools 里——`console-message
 
 ## 11. 开发期自检
 
-**两条现成命令，别自己拼**：跑全套自检 `npm run spike:all`，跑 app（含无人值守探针）`npm run app`。两者各自把 ABI 切好再跑——`better-sqlite3` 装完 Electron 之后只对一个 ABI 有效，而**忘了切的表现是 app 停在启动失败屏上干等到超时**。
+**三条现成命令，别自己拼**：开发跑 app（HMR）`npm run dev`，跑 app（含无人值守探针）`npm run app`，跑全套自检 `npm run spike:all`。三者各自把 ABI 切好再跑（裸 `npm start` 不切）——`better-sqlite3` 装完 Electron 之后只对一个 ABI 有效，而**忘了切的表现是 app 停在启动失败屏上干等到超时**。
 
 harness 侧的记账、状态与投影由 spike 兜底，**改哪一带先跑哪一条**（清单看 `package.json` 的 scripts）。起真会话、靠订阅凭据的那几条不在 `spike:all` 里。
 

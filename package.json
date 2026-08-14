@@ -24,6 +24,7 @@
     "spike:branch": "tsx scripts/spike-branch.ts",
     "spike:all": "npm run rebuild:node && npm run spike:db && npm run spike:gate && npm run spike:cases && npm run spike:close && npm run spike:track && npm run spike:branch && npm run spike:report && npm run spike:markdown && npm run spike:image",
     "start": "electron-vite dev",
+    "dev": "npm run rebuild:electron && electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "app": "npm run rebuild:electron && electron-vite preview",
