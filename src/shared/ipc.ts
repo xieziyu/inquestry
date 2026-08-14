@@ -7,6 +7,7 @@
 
 // 只借一个类型：报告要装哪几块由 `shared/report.ts` 定，在这儿照抄一份必然与它长歪
 import type { ReportInput } from './report.js';
+import type { UiSettings } from './settings.js';
 
 /**
  * 新建排查面板收集的东西（ui.md §8.1）。
@@ -30,6 +31,11 @@ export type IntakeDraft = {
   incidentDate: string;
   clues: string | null;
   agent: AgentChoice;
+  /**
+   * 权限模式初值：`true` = 全程接管（ui.md §8.1）。设置屏给的只是预填，
+   * **这一次选的什么以这个字段为准**——不带过来的话面板上那个开关是个假开关。
+   */
+  takeover: boolean;
 };
 
 /** 新建排查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
@@ -49,13 +55,21 @@ export type IntakeOptions = {
   models: ModelOption[];
   modelsProbed: boolean;
   recentRoots: string[];
+  /**
+   * 设置屏里定的那份预填（agent 三项 + 权限模式初值）。
+   *
+   * ⚠️ `agent.model` **可能不在上面那张 `models` 表里**：设置那会儿探测到的模型，
+   * 这会儿可能探测不到、退回了内置表。面板要按"选不到就回默认那一档"处理，
+   * 而不是把一个列表上根本没有的值显示成选中。
+   */
+  agentDefaults: { agent: AgentChoice; takeover: boolean };
   /** `tzOffset` 只用于显示"按哪个时区解释"，不是可编辑项。 */
   defaults: { incidentDate: string; tzOffset: string };
   /** 内置演示模式的预填。选它就是「不给项目起点」，玩具数据源才会挂上去。 */
   demo: { question: string; incidentDate: string };
 };
 
-/** 排查切换栏的一行（D28）。 */
+/** 排查列表的一行（D28）。 */
 export type CaseBrief = {
   id: string;
   title: string;
@@ -74,11 +88,57 @@ export type CaseBrief = {
 };
 
 /**
+ * 历史排查页要的一行（ui.md §8.3）。
+ *
+ * 比 `CaseBrief` 多的都是**只在那一页看得见**的：项目起点、步数、当前结论摘要。
+ * 快照里那份 `cases` 每 60ms 推一轮，把这些塞进去等于每一轮都多跑几条聚合查询，
+ * 而它们只有历史排查页开着时才有人看。
+ */
+export type CaseListRow = CaseBrief & {
+  projectRoot: string | null;
+  incidentDate: string;
+  verdictShape: VerdictShape | null;
+  steps: number;
+  /** 当前生效的那条结论，截断过。没有就是 null——半程与刚起步的排查都会这样。 */
+  headline: string | null;
+};
+
+/**
+ * 历史排查页的筛选。**`status` 里没有"进行中"这一档的运行时含义**：
+ * 库里只有 open / closed / aborted，"在跑"是运行时状态，由 `running` 合上去。
+ */
+export type CaseListQuery = {
+  status?: 'all' | 'open' | 'closed' | 'aborted';
+  limit?: number;
+  offset?: number;
+};
+
+export type CaseListPage = {
+  rows: CaseListRow[];
+  /** 库里符合这个筛选的总数，用来画"还有多少没显示"。 */
+  total: number;
+};
+
+/** 关于那一节。版本号一律由 main 现取，renderer 里写死的那份必然与打包出来的对不上。 */
+export type AppInfo = {
+  version: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  sqlite: string;
+  /** claude 可执行文件路径；没找到是 null。版本号探测不到时为 null，不编一个。 */
+  claudePath: string | null;
+  claudeVersion: string | null;
+  dbPath: string;
+  dbBytes: number;
+};
+
+/**
  * 检索命中的一次排查（ui.md §8.3 的「历史」那一半）。
  *
  * 与 `CaseBrief` 是同一种东西加三项"为什么命中"——**不另起一种类型**：
- * 切换栏上两种列表长得一样、点下去做的也是同一件事，分成两种的话
- * 徽标（等你 N / 跑动中）迟早只在其中一边跟得上。
+ * 两种列表长得一样、点下去做的也是同一件事，分成两种的话
+ * 徽标（等你 N / 运行中）迟早只在其中一边跟得上。
  */
 export type CaseHit = CaseBrief & {
   /** 这次排查里命中了几条。只作展示，不参与排序（排序与最近列表同一条规则）。 */
@@ -308,7 +368,7 @@ export type ReportStepRef = {
 
 export type Snapshot = {
   case: CaseMeta | null;
-  /** 所有排查，含别处的待办数。为 null 的 `case` 配非空 `cases` = 正在立新案，切换栏照常在。 */
+  /** 所有排查，含别处的待办数。`case` 为 null = 手上没有打开的排查，而列表照旧要给（首页靠它）。 */
   cases: CaseBrief[];
   sessionStatus: 'idle' | 'live' | 'ended' | 'crashed';
   /**
@@ -525,4 +585,23 @@ export type InquestryApi = {
   exportPayload(token: string): Promise<ExportPayload | null>;
   snapshot(): Promise<Snapshot>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;
+
+  /**
+   * 历史排查页的分页列表。**与快照里那份 `cases` 是两条路**：那一份是最近 20 条 + 钉住的，
+   * 每 60ms 推一次；这一份是人翻页翻出来的，带筛选、带项目起点与结论摘要。
+   */
+  listCases(q: CaseListQuery): Promise<CaseListPage>;
+  /** 应用级设置。回的是**归一化之后**那一份——夹逼过的值才是真正生效的那个。 */
+  getSettings(): Promise<UiSettings>;
+  /**
+   * 存设置。回的同样是归一化之后的整份，界面直接认它：
+   * 只回 ok 的话，人填了个越界的数字，屏幕上留着他填的、实际生效的是夹过的，
+   * 而这个差别一个字都不会显示出来。
+   */
+  putSettings(patch: UiSettings): Promise<UiSettings>;
+  appInfo(): Promise<AppInfo>;
+  /** 在访达里定位数据库文件。 */
+  revealDb(): Promise<void>;
+  /** 用系统浏览器开链接。**只认 https**，别的一律不开。 */
+  openExternal(url: string): Promise<void>;
 };

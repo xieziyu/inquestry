@@ -3,8 +3,6 @@ import {
   EMPTY_SNAPSHOT,
   VERDICT_SHAPES,
   type CallNode,
-  type CaseBrief,
-  type CaseHit,
   type CaseMeta,
   type ClosingStepKind,
   type InquestryApi,
@@ -16,13 +14,16 @@ import {
   type VerdictShape,
 } from '../shared/ipc.js';
 import { SHAPE_COPY } from '../shared/report.js';
-import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
+import { draftKey, pruneDrafts, stateFillable, type CardDrafts } from './drafts.js';
 import { trackLayout, type TrackRow } from './track.js';
 import { GateCard } from './GateCard.js';
-import { Intake } from './Intake.js';
+import { History } from './History.js';
+import { Home } from './Home.js';
 import { isPlainKey, isTyping } from './keys.js';
 import { PendingCard } from './PendingCard.js';
+import { Rail, type Screen } from './Rail.js';
 import { Report } from './Report.js';
+import { Settings } from './Settings.js';
 
 declare global {
   interface Window {
@@ -46,6 +47,14 @@ export function App() {
    * 分开存还顺带保住了草稿：切回去它还在。
    */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /**
+   * 现在在哪一屏（ui.md §8.5）。**只是导航，不带任何排查状态**：
+   * 切排查那件事整个搬到了历史排查页，rail 上四格里没有一格记得住"哪个排查"。
+   *
+   * 起手在首页而不是工作区：打开 app 时手上多半没有排查，
+   * 而工作区在那种情况下是一屏什么都没有的空屏。
+   */
+  const [screen, setScreen] = useState<Screen>('home');
   const [env, setEnv] = useState<{ claude: string | null; hint: string } | null>(null);
   const [excerpt, setExcerpt] = useState<{ title: string; body: string } | null>(null);
   /**
@@ -200,24 +209,63 @@ export function App() {
     if (await window.inquestry.send(caseId, text)) setDrafts((d) => ({ ...d, [caseId]: '' }));
   };
 
-  // 没选中排查时整屏只有新建排查面板：没有基准日期与问题，后面所有东西都无从谈起。
-  // 切换栏照常在——建到一半改主意，得能回到原来那次排查
+  /**
+   * rail 那颗暖色点：**有没有排查在等人**（D28 的跨案汇总）。
+   *
+   * 算的是全部排查而不只是当前那个——切换入口搬到历史排查页之后，
+   * 这一颗点是后台那条卡在 `ask_operator` 上的支线在别的屏上仅有的痕迹。
+   */
+  const anyTodo = snap.cases.some((c) => c.todos > 0) || todos.length > 0;
+
+  /** 打开某次排查 = 切过去 + 翻到工作区。切换本身不中断任何一个（D28）。 */
+  const open = (id: string) => {
+    void window.inquestry.switchCase(id);
+    setScreen('workspace');
+  };
+
+  const shell = (content: React.ReactNode) => (
+    <div className="app">
+      <Rail screen={screen} todo={anyTodo} envBad={!!env && !env.claude} onGo={setScreen} />
+      <div className="frame">{content}</div>
+    </div>
+  );
+
+  if (screen === 'home') {
+    return shell(
+      <Home
+        cases={snap.cases}
+        onOpen={open}
+        // 建完就翻到工作区：`createCase` 会把新排查设成当前排查，
+        // 而人下一步想做的一定是点「开始排查」
+        onCreated={() => setScreen('workspace')}
+        onAll={() => setScreen('history')}
+      />,
+    );
+  }
+  if (screen === 'history') return shell(<History cases={snap.cases} onOpen={open} />);
+  if (screen === 'settings') return shell(<Settings />);
+
+  // rail 上工作区那一格随时点得到，但手上不一定有排查。
+  // 不给出路的话它就是个死胡同——两个出口正好对应"新建"与"找一个旧的"
   if (!snap.case) {
-    return (
-      <div className="app">
-        <header className="topbar">
-          <div className="brand">
-            Inquestry<span className="dot" />
-          </div>
+    return shell(
+      <div className="page">
+        <header className="pagehead">
+          <h1>工作区</h1>
+          <span className="sub">当前没有打开的排查</span>
         </header>
-        <CaseBar cases={snap.cases} />
-        {env && !env.claude && (
-          <div className="banner">未找到 claude 可执行文件。请先安装 Claude Code 并在终端登录一次。</div>
-        )}
-        <main className="stage">
-          <Intake onSubmit={(d) => window.inquestry.createCase(d)} />
-        </main>
-      </div>
+        <div className="pagebody">
+          <div className="ws-empty">
+            <p>还没有打开任何排查。</p>
+            <div className="acts">
+              <button className="primary" onClick={() => setScreen('home')}>
+                去首页新建
+              </button>
+              <button onClick={() => setScreen('history')}>从历史排查里挑一个</button>
+            </div>
+          </div>
+        </div>
+      </div>,
     );
   }
 
@@ -344,16 +392,13 @@ export function App() {
    * 报告上只有导出，留着"停止 / 定稿 / 归档"会让人以为这份还能改。
    */
   if (reportOf === openCase) {
-    return <Report snap={snap} onBack={() => setReportOf(null)} />;
+    return shell(<Report snap={snap} onBack={() => setReportOf(null)} />);
   }
 
-  return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          Inquestry<span className="dot" />
-          <span className="case">{snap.case.title}</span>
-        </div>
+  return shell(
+    <div className="page workspace">
+      <header className="pagehead ws">
+        <h1 title={snap.case.question}>{snap.case.title}</h1>
         <CaseMetaStrip meta={snap.case} />
         {/* 两条时间线不是顶栏的两个 tab：排查线属于工作区，系统线属于报告（ui.md §1）。
             它们是同一批证据的两次投影，这是数据模型的事实，不该翻译成一对开关 */}
@@ -433,8 +478,8 @@ export function App() {
         </div>
       </header>
 
-      <CaseBar cases={snap.cases} />
-
+      {/* 环境不通的横幅只在工作区出：设置屏那一节把同一件事说得更细，
+          两处都挂的话人会以为是两个问题 */}
       {env && !env.claude && (
         <div className="banner">未找到 claude 可执行文件。请先安装 Claude Code 并在终端登录一次。</div>
       )}
@@ -565,154 +610,10 @@ export function App() {
           </div>
         </div>
       )}
-    </div>
+    </div>,
   );
 }
 
-/**
- * 排查切换栏（D28 / ui.md §8.3）。进行中的排在前面，各带一个徽标。
- *
- * 切换不中断任何一个：main 持有全部运行时，这里只是换个投影看。
- * 徽标上的「等你 N」是并发排查里唯一能看见后台支线在等人的地方。
- */
-/** ≥3 字走得到索引，快到可以边打边查。 */
-const SEARCH_DEBOUNCE_MS = 120;
-/** <3 字是全表扫（trigram 的结构性下限）：等人停下来再查，别按键盘节奏扫库。 */
-const SEARCH_DEBOUNCE_SHORT_MS = 400;
-
-/** 命中出自哪儿。**别把 `ref_kind` 直接印出来**：那是索引的内部分类，不是给人读的。 */
-const HIT_WHERE: Record<CaseHit['where'], string> = {
-  case: '问题',
-  verdict: '结论',
-  direction: '方向',
-  evidence: '证据',
-  lane: '支线',
-  chat: '对话',
-};
-
-/**
- * 排查切换栏（D28 / ui.md §8.3）+ 跨 case 检索。
- *
- * 检索**换掉的是这一排 chip，不是另开一个面板**：找旧排查的下一步动作就是切过去，
- * 而切过去的入口本来就在这儿。另开面板等于让人在两个长得一样的列表之间挑一个。
- */
-function CaseBar({ cases }: { cases: CaseBrief[] }) {
-  const [term, setTerm] = useState('');
-  /**
-   * 上一次查完的结果，**连它是哪个词查的一起记**。只存命中的话，输入框换成新词之后
-   * 到下一次结果回来之间（短词那档 400ms 起）屏上还是上个词的命中，而那些 chip 点得下去
-   * ——人会照着一个跟当前输入毫无关系的列表切走。
-   *
-   * `hits: null` 是**查砸了**，与"查完了、零命中"是两回事：库坏了、FTS 语法不成立、
-   * IPC 断了都会落到这里，一律说成"没有命中"的话，人拿到的是"历史里确实没有这次排查"这个错结论。
-   */
-  const [found, setFound] = useState<{ term: string; hits: CaseHit[] | null } | null>(null);
-  /**
-   * 只认最后一次查询的结果。打字快的时候几次 invoke 会并发在飞，
-   * **回来的顺序不保证**——不认的话，一个更早、更宽的结果会盖掉刚打完那个词的结果，
-   * 而屏幕上看起来只是"搜出来的东西不对"。
-   */
-  const seq = useRef(0);
-
-  useEffect(() => {
-    const t = term.trim();
-    if (!t) {
-      // 序号也要往前推：清空之后，还在飞的那一次回来时不能再往屏上写
-      seq.current += 1;
-      setFound(null);
-      return;
-    }
-    const mine = ++seq.current;
-    /**
-     * 打一个字查一次全库；等一下再查，键入中途那几次就不必发。
-     *
-     * 🔴 **短词要多等一会儿。** <3 字走不到 trigram 索引（那是 trigram 的结构性下限，
-     * 不是我们的写法问题），一次**没有命中**的短词查询是实打实的全表扫，且随库线性增长
-     * （实测 5 万行 5ms · 20 万行 22ms · 50 万行 56ms，见 data-model §5）。而它跑在
-     * main 的同步 better-sqlite3 上——按每个键都发的话，越往后打字越顿。
-     *
-     * 长一点的等待把它从"边打边扫"变成"停下来扫一次"：**代价与打字速度脱钩**，
-     * 只与"你真的想搜这个词"的次数有关。有命中的短词反而不受影响（LIMIT 提前收，恒 ~1ms）。
-     */
-    const timer = setTimeout(() => {
-      void window.inquestry
-        .searchCases(t)
-        .then((r) => seq.current === mine && setFound({ term: t, hits: r }))
-        .catch((e: unknown) => {
-          // 界面只说得出"没搜成"，原因得留在控制台里，否则这条路径两头都没有线索
-          console.error('searchCases failed', e);
-          if (seq.current === mine) setFound({ term: t, hits: null });
-        });
-    }, t.length >= 3 ? SEARCH_DEBOUNCE_MS : SEARCH_DEBOUNCE_SHORT_MS);
-    return () => clearTimeout(timer);
-  }, [term]);
-
-  // 切过去就是这次检索的终点：留着搜索词的话，切换栏会继续显示结果列表，
-  // 而人此刻要看的是手上这次排查在最近列表里的位置
-  const go = (id: string) => {
-    setTerm('');
-    void window.inquestry.switchCase(id);
-  };
-
-  // 只认与当前输入同一个词的那份结果：对不上就退回最近列表，等这一轮查完再换
-  const t = term.trim();
-  const fresh = found?.term === t ? found : null;
-  const hits = fresh?.hits ?? null;
-  // 命中是一次性查出来的，而「等你 N」「跑动中」每 60ms 会变——**每帧按最新快照兑一次**，
-  // 否则人停在检索结果上时，新冒出来的待办一条都不会显示（正是 D28 要防的）
-  const list: CaseBrief[] = hits ? freshenHits(hits, cases) : cases;
-  if (!cases.length && !term) return null;
-  return (
-    <nav className="casebar">
-      <input
-        className="casesearch"
-        value={term}
-        placeholder="搜历史排查"
-        onChange={(e) => setTerm(e.target.value)}
-        onKeyDown={(e) => e.key === 'Escape' && setTerm('')}
-      />
-      <div className="chips">
-        {t && !fresh && <span className="nohit">搜「{t}」…</span>}
-        {fresh && !fresh.hits && <span className="nohit">「{t}」没搜成，换个词再试一次</span>}
-        {hits?.length === 0 && <span className="nohit">没有命中「{t}」</span>}
-        {list.map((c) => {
-          const hit = hits ? (c as CaseHit) : null;
-          return (
-            <button
-              key={c.id}
-              className={`chip ${c.status} ${c.current ? 'on' : ''}`}
-              // 命中的原文进 title：chip 上只放得下标题，而"为什么它被搜出来"才是要看的
-              title={hit ? `${HIT_WHERE[hit.where]}：${hit.snippet}` : c.title}
-              onClick={() => !(c.current && !hit) && go(c.id)}
-            >
-              <span className="t">{c.title}</span>
-              {hit ? (
-                <span className="b hit">
-                  {HIT_WHERE[hit.where]}
-                  {hit.hits > 1 ? ` ${hit.hits}` : ''}
-                </span>
-              ) : c.todos > 0 ? (
-                <span className="b todo">等你 {c.todos}</span>
-              ) : c.running ? (
-                <span className="b run">跑动中</span>
-              ) : (
-                <span className="b idle">{caseStateLabel(c)}</span>
-              )}
-              {/* 检索结果里的待办徽标不能少：一个正等着人的排查被搜出来时，
-                  只显示"命中在结论里"会把它说成一个静止的旧排查 */}
-              {hit && c.todos > 0 && <span className="b todo">等你 {c.todos}</span>}
-            </button>
-          );
-        })}
-        {!hits && (
-          <button className="chip new" onClick={() => void window.inquestry.newCase()}>
-            ＋ 新排查
-          </button>
-        )}
-      </div>
-    </nav>
-  );
-}
 
 /** 从没跑过 / 跑完了接着查 / 崩了重来，是三句不同的话——按钮和输入框提示要用同一句。 */
 function startLabel(snap: Snapshot) {
@@ -794,12 +695,6 @@ function frozenText(meta: CaseMeta) {
   return meta.status === 'closed'
     ? `本次排查已定稿并冻结。${shape}证据与结论都还在，接着查请另建一次排查。`
     : `本次排查已归档（人为终止）。${shape}证据一条没少，可导出半程报告——它没有根因栏，因为没查出来就是没查出来。`;
-}
-
-function caseStateLabel(c: CaseBrief) {
-  if (c.status === 'closed') return '已定稿';
-  if (c.status === 'aborted') return '已归档';
-  return c.loaded ? '已停' : '未打开';
 }
 
 /**

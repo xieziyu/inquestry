@@ -70,21 +70,22 @@ export type CaseRow = {
   updated_at: number;
 };
 
-const CASE_ORDER = `ORDER BY (status='open') DESC, updated_at DESC`;
+// 表别名固定为 c：两个调用点都要能把它拼进带 JOIN / 子查询的语句里而不歧义
+const CASE_ORDER = `ORDER BY (c.status='open') DESC, c.updated_at DESC`;
 const byCaseOrder = (a: CaseRow, b: CaseRow) =>
   Number(b.status === 'open') - Number(a.status === 'open') || b.updated_at - a.updated_at;
 
 /**
- * 排查切换栏的库侧一半（D28）：进行中的排在前面，同档按最近活动倒序。
- * 「跑动中 / 等你 N」是运行时状态，库里没有，由 main 合上去。
+ * 首页最近列表的库侧一半（D28）：进行中的排在前面，同档按最近活动倒序。
+ * 「运行中 / 等你 N」是运行时状态，库里没有，由 main 合上去。
  *
  * `pinned` 里的排查**一定在结果里**，哪怕排在 limit 之外。它装的是 main 还持有运行时的那些，
- * 而待办只存在于运行时里：被 limit 截掉的话，那次排查会连同它「等你 N」一起从切换栏
+ * 而待办只存在于运行时里：被 limit 截掉的话，那次排查会连同它「等你 N」一起从首页那份列表
  * 和全局汇总里消失——人看不见，也切不回去处理，正好废掉 D28 要保的东西。
  */
 export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {}): CaseRow[] {
   const rows = db
-    .prepare(`SELECT id, title, status, updated_at FROM cases ${CASE_ORDER} LIMIT ?`)
+    .prepare(`SELECT c.id, c.title, c.status, c.updated_at FROM cases c ${CASE_ORDER} LIMIT ?`)
     .all(opts.limit ?? 20) as CaseRow[];
 
   const have = new Set(rows.map((r) => r.id));
@@ -93,11 +94,56 @@ export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {
 
   const extra = db
     .prepare(
-      `SELECT id, title, status, updated_at FROM cases
-       WHERE id IN (${missing.map(() => '?').join(',')})`,
+      `SELECT c.id, c.title, c.status, c.updated_at FROM cases c
+       WHERE c.id IN (${missing.map(() => '?').join(',')})`,
     )
     .all(...missing) as CaseRow[];
   return [...rows, ...extra].sort(byCaseOrder);
+}
+
+export type CasePageRow = CaseRow & {
+  project_root: string | null;
+  incident_date: string;
+  verdict_shape: string | null;
+  steps: number;
+  headline: string | null;
+};
+
+/**
+ * 历史排查页那一页（ui.md §8.3）。**与 `caseList` 分开的两条路**：
+ * 那一条给的是首页那 20 条，每 60ms 随快照推一遍；这一条带筛选与分页，
+ * 只在那一页开着时跑一次，所以负担得起每行再算步数与结论。
+ *
+ * `headline` 取的是**当前生效**那条结论：排除已被推翻的，按会话先后取最新一条。
+ * 与报告那几栏共用 `CHRONO_DESC` 的排序理由——只按 `ordinal` 排会让旧会话的结论压过新的。
+ * ⚠️ 它只是列表上的一句摘要，**不是报告认定的根因**：那一条由 `reportSections()` 独家选，
+ * 在这儿另起一条选择器去凑"更准的根因"就等于让两处指着不同的步。
+ */
+export function casePage(
+  db: Db,
+  opts: { status?: 'all' | 'open' | 'closed' | 'aborted'; limit?: number; offset?: number } = {},
+): { rows: CasePageRow[]; total: number } {
+  const status = opts.status && opts.status !== 'all' ? opts.status : null;
+  const where = status ? `WHERE c.status = ?` : '';
+  const args = status ? [status] : [];
+
+  const total = (
+    db.prepare(`SELECT COUNT(*) AS n FROM cases c ${where}`).get(...args) as { n: number }
+  ).n;
+
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.title, c.status, c.updated_at, c.project_root, c.incident_date, c.verdict_shape,
+              (SELECT COUNT(*) FROM steps s JOIN sessions se ON se.id = s.session_id
+                WHERE se.case_id = c.id AND s.lane IS NULL) AS steps,
+              (SELECT s.verdict_text FROM steps s JOIN sessions se ON se.id = s.session_id
+                WHERE se.case_id = c.id AND s.verdict_text IS NOT NULL AND s.status != 'superseded'
+                ORDER BY ${CHRONO_DESC} LIMIT 1) AS headline
+         FROM cases c ${where} ${CASE_ORDER} LIMIT ? OFFSET ?`,
+    )
+    .all(...args, opts.limit ?? 30, opts.offset ?? 0) as CasePageRow[];
+
+  return { rows, total };
 }
 
 export type ReportSections = {
@@ -234,7 +280,7 @@ export type NarrativeHit = { ref_id: string; ref_kind: string; case_id: string; 
  * 而这条查询是**人每打一个字就跑一次**的同步 IPC，对话带越攒越长，代价只增不减。
  *
  * 截断的代价是"常见词只看得到前 N 条命中里出现过的排查"，这是检索框的正常契约；
- * 而它换来的是**代价与库的大小脱钩**。取值远大于切换栏那 20 行，
+ * 而它换来的是**代价与库的大小脱钩**。取值远大于首页那 20 行，
  * 好让归并之后仍有足够多的排查可排。
  */
 export const MAX_HITS = 2000;
@@ -282,7 +328,7 @@ const hitKind = (refKind: string): HitKind =>
 
 export type CaseSearchRow = CaseRow & { hits: number; snippet: string; where: HitKind };
 
-/** 摘要窗口。太长会把切换栏挤爆，太短则看不出为什么命中。 */
+/** 摘要窗口。太长会把那一行撑破（列表上它只占一行，超出即省略号），太短则看不出为什么命中。 */
 const SNIPPET = 60;
 
 /** 摘要**要围着命中处取**：从头截 60 字的话，命中在第 200 字的那条看着像没命中。 */
@@ -295,7 +341,7 @@ function snippetAround(text: string, term: string): string {
 }
 
 /**
- * 切换栏上的检索（ui.md §8.3）：把 `narrative_fts` 的命中按 case 归并。
+ * 历史排查页上的检索（ui.md §8.3）：把 `narrative_fts` 的命中按 case 归并。
  *
  * **排序与 `caseList` 同一条规则**（进行中的在前、同档按最近活动倒序），不按命中条数排：
  * 两处各排各的话，同一次排查在"最近 20 个"里排第一、搜出来却排第七，人会以为搜到的是另一个。
@@ -329,7 +375,7 @@ export function searchCases(db: Db, term: string, opts: { limit?: number } = {})
   // 拿它渲染出的 chip 点下去会切到一个不存在的排查（`switchTo` 回 false，界面一动不动）
   const rows = db
     .prepare(
-      `SELECT id, title, status, updated_at FROM cases WHERE id IN (${ids.map(() => '?').join(',')}) ${CASE_ORDER}`,
+      `SELECT c.id, c.title, c.status, c.updated_at FROM cases c WHERE c.id IN (${ids.map(() => '?').join(',')}) ${CASE_ORDER}`,
     )
     .all(...ids) as CaseRow[];
 

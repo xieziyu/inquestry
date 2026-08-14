@@ -25,6 +25,8 @@ import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
 import { readIntake, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
+import type { CaseHit } from '../src/shared/ipc.js';
+import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/shared/settings.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
@@ -1024,7 +1026,7 @@ async function main() {
       // 切换栏把「当前的 / 还跑着的 / 挂着待办的」全部钉住，所以不在列表里 ⟺ 三样都不是。
       // 保留旧值的话，一条刚被处理掉的待办会在检索结果上一直挂着「等你 3」
       const ghost = freshenHits(
-        staleHits.map((h) => ({ ...h, id: 'case_gone', todos: 3, running: true, current: true })),
+        staleHits.map((h): CaseHit => ({ ...h, id: 'case_gone', todos: 3, running: true, current: true })),
         withTodo,
       );
       return ghost[0]?.todos === 0 && ghost[0]?.running === false && ghost[0]?.current === false;
@@ -1171,6 +1173,58 @@ async function main() {
     stateFillable(undefined, frozenOn('st_a', true)) === true,
     '没有冻住的那一份',
   );
+
+  // ── 应用级设置的夹逼（shared/settings.ts）──
+  // 这几个值原先写死在源码里，搬进设置屏之后**每一个填过头都不会报错，只会安静地不工作**：
+  // 闸门 0 秒 = 每次调用当场自动放行；在跑上限 0 = 一个排查也跑不起来。
+  {
+    const d = DEFAULT_UI_SETTINGS;
+    check(
+      '空对象归一成默认值，不是一堆 0 / undefined',
+      JSON.stringify(normalizeSettings({})) === JSON.stringify(d),
+      '库里没存过设置时走的就是这条；给出 0 的话闸门当场放行、排查一个也跑不起来',
+    );
+    check(
+      '闸门超时夹在上下界内',
+      normalizeSettings({ limits: { gateTimeoutMs: 0 } }).limits.gateTimeoutMs ===
+        LIMIT_BOUNDS.gateTimeoutMs.min &&
+        normalizeSettings({ limits: { gateTimeoutMs: 999 * 60_000 } }).limits.gateTimeoutMs ===
+          LIMIT_BOUNDS.gateTimeoutMs.max,
+      '下界挡的是"0 秒 = 每次调用当场自动放行"，上界挡的是"等一天"——那是①档的语义，不该由②档模仿出来',
+    );
+    check(
+      '在跑上限夹在 1..8',
+      normalizeSettings({ limits: { maxLiveCases: 0 } }).limits.maxLiveCases === 1 &&
+        normalizeSettings({ limits: { maxLiveCases: 99 } }).limits.maxLiveCases === 8,
+      '填 0 的表现是点了「开始排查」什么都不发生，而那个数字看着完全合法',
+    );
+    check(
+      '🔴 载入上限不会小于在跑上限（跨字段，单独夹逼每一个夹不出来）',
+      normalizeSettings({ limits: { maxLiveCases: 8, maxLoadedCases: 1 } }).limits.maxLoadedCases === 8,
+      '两个数各自都在自己的合法区间里，合起来却会让刚 spawn 起来的排查被当场降级掉——' +
+        '表现同样是"点了开始排查什么都不发生"。逐字段夹逼的写法在这条上会给出 1',
+    );
+    check(
+      '非数字 / NaN 退回默认值，不落成 0',
+      normalizeSettings({ limits: { maxLiveCases: 'abc' as unknown as number } }).limits.maxLiveCases ===
+        d.limits.maxLiveCases &&
+        normalizeSettings({ limits: { gateTimeoutMs: NaN } }).limits.gateTimeoutMs ===
+          d.limits.gateTimeoutMs,
+      '`Number(undefined)` 是 NaN，而 `Math.min/max` 碰上 NaN 一路传染成 NaN —— setTimeout(NaN) 会当场触发',
+    );
+    check(
+      '认不得的 backend 归到 claude，不原样留着',
+      normalizeSettings({ intake: { agent: { backend: 'gpt' } } } as unknown).intake.agent.backend ===
+        'claude',
+      '原样留着的话，新建排查会拿一个 backend 抽象不认识的值去建会话',
+    );
+    check(
+      'takeover 只认 true，别的一律 false',
+      normalizeSettings({ intake: { takeover: 'yes' } } as unknown).intake.takeover === false &&
+        normalizeSettings({ intake: { takeover: true } } as unknown).intake.takeover === true,
+      '`Boolean("false")` 是 true —— 用真值判断的写法会把任何存歪的字符串读成"全程接管"',
+    );
+  }
 
   console.log('\n===== Spike Cases 结果 =====');
   for (const [name, ok, detail] of checks) {

@@ -22,7 +22,7 @@ export type LiveCase = {
 
 /** 每个活跃会话背后是一个 spawn 出来的 CLI 进程，所以这一档限的是它，不是载入的排查数。 */
 export const MAX_LIVE_CASES = 3;
-/** 载入着的运行时总数。静止的不占进程，但占内存，也会把切换栏的条数上限顶掉。 */
+/** 载入着的运行时总数。静止的不占进程，但占内存，也会把首页那份列表的条数上限顶掉。 */
 export const MAX_LOADED_CASES = 12;
 
 export class CaseRegistry<R extends LiveCase> {
@@ -43,6 +43,17 @@ export class CaseRegistry<R extends LiveCase> {
   ) {
     this.maxLive = opts.maxLive ?? MAX_LIVE_CASES;
     this.maxLoaded = opts.maxLoaded ?? MAX_LOADED_CASES;
+  }
+
+  /**
+   * 设置屏改了上限。**调小之后要当场执行一次**：不执行的话，新的上限要等到下一次
+   * 领域事件才生效——而"手上正开着 5 个、把上限改成 2"之后很可能什么都不发生，
+   * 于是那个数字看起来是个没接线的假开关。
+   */
+  setLimits(limits: { maxLive: number; maxLoaded: number }) {
+    this.maxLive = limits.maxLive;
+    this.maxLoaded = limits.maxLoaded;
+    this.enforceLimit();
   }
 
   get current(): R | null {
@@ -94,7 +105,7 @@ export class CaseRegistry<R extends LiveCase> {
    *
    * 只钉这三种，不是「所有载入过的」——待办只活在运行时里，所以有待办的必须钉；
    * 但一个只是点开看过一眼的排查没有这个理由，全钉的话条数上限就等于不存在，
-   * 切换栏会随着用过的排查无上限地长。
+   * 排查列表会随着用过的排查无上限地长。
    */
   private pinnedIds(): string[] {
     return [...this.live.entries()]
@@ -109,8 +120,8 @@ export class CaseRegistry<R extends LiveCase> {
   /**
    * 检索的结果同样要**合上运行时那一半**（ui.md §8.3）。
    *
-   * 库里那一半只知道标题与状态；「等你 N」「跑动中」只活在运行时里。少合这一下，
-   * 搜出来的 chip 会把一个正卡在 `ask_operator` 上等人的排查显示成"已停"——
+   * 库里那一半只知道标题与状态；「等你 N」「运行中」只活在运行时里。少合这一下，
+   * 搜出来的那一行会把一个正卡在 `ask_operator` 上等人的排查显示成"已停止"——
    * 而跨 case 汇总要保的正是"别让那条支线静静挂死"。
    */
   search(term: string): CaseHit[] {
@@ -120,6 +131,15 @@ export class CaseRegistry<R extends LiveCase> {
       snippet: c.snippet,
       where: c.where,
     }));
+  }
+
+  /**
+   * 把库里查出来的一行合上运行时那一半。历史排查页用它——那一页不走 `briefs()`
+   * （它固定 20 条 + 钉住的），但**必须共用这一下合并**，否则那一页的
+   * 「等你 N / 运行中」会与首页那份各说各的。
+   */
+  briefOf(c: CaseRow): CaseBrief {
+    return this.brief(c);
   }
 
   private brief(c: CaseRow): CaseBrief {

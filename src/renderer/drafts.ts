@@ -52,22 +52,25 @@ export function pruneDrafts(drafts: CardDrafts, caseId: string, aliveIds: Iterab
 }
 
 /**
- * 把检索命中上的**运行时那一半**换成最新快照里的那一份。
+ * 把一份查出来的排查列表上的**运行时那一半**换成最新快照里的那一份。
  *
- * 命中是一次性查出来的（人打完字那一刻），而「等你 N」「跑动中」「当前」每 60ms 会变。
+ * 检索命中与历史排查页那一页共用它（两者都是一次性查出来的，泛型只为保住各自多出来的字段）：
+ * **同一条约束由两处各写一份的话，其中一处迟早跟不上**，而跟不上的表现正是这条要防的。
+ *
+ * 列表是一次性查出来的（人打完字、或翻到这一页那一刻），而「等你 N」「运行中」「当前」每 60ms 会变。
  * 不换的话，人停在检索结果上的这段时间里，**新冒出来的待办一条都不会显示**——
  * 而跨 case 汇总存在的全部理由就是别让那条支线静静挂死（D28）。
  *
  * 🔴 **不在 `cases` 里的按"静的"算，不是保留命中里那份旧值。** 这不是猜：
- * 切换栏那份列表把「当前的 / 还跑着的 / 挂着待办的」全部钉住（`CaseRegistry.pinnedIds`），
+ * 快照里那份列表把「当前的 / 还跑着的 / 挂着待办的」全部钉住（`CaseRegistry.pinnedIds`），
  * 所以一次排查**不在里面** ⟺ 它三样都不是。留着旧值的话，一条刚被处理掉的待办
  * 会在检索结果上一直挂着「等你 3」。
  *
- * `loaded` 同理归零：它只影响"已停 / 未打开"那句话，而没被钉住的排查本就不该显示成在跑。
+ * `loaded` 同理归零：它只影响"已停止 / 未打开"那句话，而没被钉住的排查本就不该显示成在跑。
  */
-export function freshenHits(hits: CaseHit[], cases: CaseBrief[]): CaseHit[] {
+export function freshenHits<T extends CaseBrief>(hits: T[], cases: CaseBrief[]): T[] {
   const live = new Map(cases.map((c) => [c.id, c]));
-  return hits.map((h) => {
+  return hits.map((h): T => {
     const now = live.get(h.id);
     return {
       ...h,

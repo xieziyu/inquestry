@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  CaseListQuery,
   GateDecision,
   InquestryApi,
   IntakeDraft,
@@ -7,6 +8,7 @@ import type {
   Snapshot,
   VerdictShape,
 } from '../shared/ipc.js';
+import type { UiSettings } from '../shared/settings.js';
 
 /** renderer 只能经这里够到 main —— contextIsolation 开、nodeIntegration 关。 */
 const api: InquestryApi = {
@@ -34,6 +36,12 @@ const api: InquestryApi = {
   searchCases: (term: string) => ipcRenderer.invoke('case:search', term),
   snapshot: () => ipcRenderer.invoke('case:snapshot'),
   excerpt: (callId: string, anchor: string | null) => ipcRenderer.invoke('case:excerpt', callId, anchor),
+  listCases: (q: CaseListQuery) => ipcRenderer.invoke('case:list', q),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  putSettings: (patch: UiSettings) => ipcRenderer.invoke('settings:put', patch),
+  appInfo: () => ipcRenderer.invoke('app:info'),
+  revealDb: () => ipcRenderer.invoke('app:revealDb'),
+  openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
   onSnapshot: (cb: (s: Snapshot) => void) => {
     const handler = (_e: unknown, s: Snapshot) => cb(s);
     ipcRenderer.on('snapshot', handler);

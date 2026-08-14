@@ -46,11 +46,18 @@ import {
   type TakeoverResult,
   type VerdictShape,
 } from '../shared/ipc.js';
+import { DEFAULT_UI_SETTINGS, type UiSettings } from '../shared/settings.js';
 
 /** 人工回填的超时兜底（D9）。到点自动作废，节点标注为超时，agent 不会干挂。 */
 const OPERATOR_TIMEOUT_MS = 15 * 60 * 1000;
-/** ②档闸门的倒计时。归零按预设放行并标记"自动放行"（ui.md §4）——人不在时排查不该停。 */
-const GATE_TIMEOUT_MS = 3 * 60 * 1000;
+/**
+ * ②档闸门的倒计时。归零按预设放行并标记"自动放行"（ui.md §4）——人不在时排查不该停。
+ *
+ * 值由设置屏给（`shared/settings.ts`）。**每次挂闸门时现取，不在构造时抓一份**：
+ * runner 是长命的，抓一份的话改完设置要等这个排查被降级重建才生效，
+ * 而"改了没反应"与"这个开关没接线"在界面上分不出来。
+ */
+const gateTimeoutMs = (init: CaseRunnerInit) => init.limits?.().gateTimeoutMs ?? DEFAULT_UI_SETTINGS.limits.gateTimeoutMs;
 
 /**
  * 下面三组是**直接放行**的那一档：账本自己、只读三件套、agent 自理的杂务。
@@ -102,6 +109,11 @@ export type CaseRunnerInit = {
    * 只存在运行时里的话，限流把这个 runner 降级一次，"我要自己判"就被静默取消了。
    */
   takeover?: boolean;
+  /**
+   * 现取应用级限流值。**是个函数不是个值**：设置改了之后要立刻对已经载入的 runner 生效，
+   * 传死值的话它只对之后新建的那些管用。不给就用内置默认（自检里多数用例不关心它）。
+   */
+  limits?: () => UiSettings['limits'];
   onChange: () => void;
 };
 
@@ -247,7 +259,7 @@ export class CaseRunner {
   }
 
   /**
-   * 下面三个是给排查切换栏用的**便宜**读数（D28）：全局汇总每次快照都要把所有排查算一遍，
+   * 下面三个是给排查列表用的**便宜**读数（D28）：全局汇总每次快照都要把所有排查算一遍，
    * 走 buildSnapshot 的话每 60ms 就是一轮全库查询。
    */
   get todoCount() {
@@ -257,7 +269,7 @@ export class CaseRunner {
   /**
    * 「这次排查还在跑吗」。**支线也算**：`result` 一到主线就不忙了，而那一刻后台可能
    * 还有几条支线在查。只看主线的话，`trimIdle()` 会把一个正有支线在跑的运行时卸掉，
-   * 排查切换栏也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
+   * 排查列表也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
    */
   get isBusy() {
     return this.busy || this.lanes.backgroundLanes > 0;
@@ -807,8 +819,9 @@ export class CaseRunner {
        * 判的是**这次调用挂上来的那一刻**在不在接管模式，不是处置那一刻：
        * 中途关掉开关不该让一条正等着人的调用突然长出一个倒计时。
        */
-      const deadline = this.takeover ? undefined : askedAt + GATE_TIMEOUT_MS;
-      const timer = deadline ? setTimeout(() => finish({ decision: 'timeout' }), GATE_TIMEOUT_MS) : undefined;
+      const budget = gateTimeoutMs(this.init);
+      const deadline = this.takeover ? undefined : askedAt + budget;
+      const timer = deadline ? setTimeout(() => finish({ decision: 'timeout' }), budget) : undefined;
 
       this.gates.set(id, {
         ask: {

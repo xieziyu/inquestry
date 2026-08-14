@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -11,6 +12,7 @@ import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { DEMO_INCIDENT_DATE, DEMO_QUESTION } from '../backend/datasource/demo.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
 import { readIntake, sweepZombies } from '../backend/store/sqlite-store.js';
+import { casePage } from '../backend/db/queries.js';
 import { exportStamp, localTzOffset, todayLocal, tzOffsetOn } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
 import { CaseRegistry } from './case-registry.js';
@@ -18,6 +20,9 @@ import { applyTakeover, CaseRunner } from './case-runner.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
+  type AppInfo,
+  type CaseListPage,
+  type CaseListQuery,
   type ExportPayload,
   type ExportResult,
   type GateDecision,
@@ -29,6 +34,7 @@ import {
   type TakeoverResult,
   type VerdictShape,
 } from '../shared/ipc.js';
+import { normalizeSettings, type UiSettings } from '../shared/settings.js';
 import { reportMarkdown } from '../shared/markdown.js';
 import { pageFile } from '../shared/paging.js';
 import { reportInput } from '../shared/report.js';
@@ -36,6 +42,7 @@ import { reportInput } from '../shared/report.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RECENT_ROOTS_KEY = 'intake.recent_roots';
 const MODEL_CACHE_KEY = 'agent.models';
+const SETTINGS_KEY = 'app.settings';
 
 let db: Db;
 let blobs: string;
@@ -77,6 +84,34 @@ function putSetting(key: string, value: string) {
   db.prepare(
     `INSERT INTO ui_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
   ).run(key, value);
+}
+
+/**
+ * 应用级设置的读侧。**每次读都过一遍 `normalizeSettings`**，不缓存一份在内存里：
+ * 库里那份可能是上个版本写的、也可能被人手改坏了，而"读到一个越界值"的后果
+ * （闸门 0 秒、在跑上限 0）全都是安静地不工作。
+ */
+function settings(): UiSettings {
+  try {
+    return normalizeSettings(JSON.parse(setting(SETTINGS_KEY) ?? '{}'));
+  } catch {
+    return normalizeSettings({});
+  }
+}
+
+/**
+ * 存设置并**当场把它铺到运行时上**。
+ *
+ * 这一步最容易漏：只写库的话，改完的上限要到下次启动才生效，而界面上那个数字
+ * 看起来已经改好了。限流是唯一一个"存起来还不够"的——闸门那个每次挂闸门时现取，
+ * 新建排查的默认值也是下次打开面板时现读，只有它活在 registry 的字段里。
+ */
+function saveSettings(patch: UiSettings): UiSettings {
+  const next = normalizeSettings(patch);
+  putSetting(SETTINGS_KEY, JSON.stringify(next));
+  cases.setLimits({ maxLive: next.limits.maxLiveCases, maxLoaded: next.limits.maxLoadedCases });
+  schedulePush();
+  return next;
 }
 
 function recentRoots(): string[] {
@@ -147,15 +182,20 @@ function createCase(draft: IntakeDraft): IntakeResult {
         clues: draft.clues?.trim() || null,
       },
       agent: draft.agent,
+      // 权限模式初值由设置屏给（ui.md §8.1 的最后一项）。**要连同 agent 一起落
+      // `case_ui_state`**：只交给 runner 的话，这个排查被限流降级一次、或关一次 app，
+      // 「我要全程接管」就被静默取消了——而它正是那一档要防的
+      takeover: draft.takeover,
+      limits: () => settings().limits,
       onChange: schedulePush,
     }),
   );
-  writeCaseUi(caseId, { agent: draft.agent });
+  writeCaseUi(caseId, { agent: draft.agent, takeover: draft.takeover });
   schedulePush();
   return { ok: true };
 }
 
-/** 按库里的建单信息重建一次排查的运行时。库里没有这个 id 就返回 null（切换栏会拒绝切过去）。 */
+/** 按库里的建单信息重建一次排查的运行时。库里没有这个 id 就返回 null（列表会拒绝切过去）。 */
 function loadCase(caseId: string): CaseRunner | null {
   const intake = readIntake(db, caseId);
   if (!intake) return null;
@@ -167,6 +207,7 @@ function loadCase(caseId: string): CaseRunner | null {
     intake,
     agent: lastAgentChoice(caseId),
     takeover: readCaseUi(caseId).takeover ?? false,
+    limits: () => settings().limits,
     onChange: schedulePush,
   });
 }
@@ -508,6 +549,30 @@ function pngSize(buf: Buffer): { w: number; h: number } {
 }
 
 /**
+ * 起手在首页，报告的入口在工作区（ui.md §0）。**两条探针共用这一段**：
+ * 各写一份的话，补了一边、另一边照旧栽在同一个坑里——这一次就是这么栽的
+ * （`exportProbe` 改完了，`INQUESTRY_SHOT_REPORT` 那条还在找早就撤掉的 `.casebar .chip`）。
+ *
+ * 顺序照人的动作走：首页那份最近列表里点一行 → 切过去并翻到工作区。
+ * 手上已经有工作区（`.toreport` 在）时什么都不做。
+ */
+const ENTER_WORKSPACE = `(async () => {
+  const wait = async (sel) => {
+    for (let i = 0; i < 50; i += 1) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return null;
+  };
+  if (document.querySelector('.reportscreen') || document.querySelector('.toreport')) return 'ok';
+  const row = await wait('.crow');
+  if (!row) return 'no-case';
+  row.click();
+  return (await wait('.toreport')) ? 'ok' : 'no-workspace';
+})()`;
+
+/**
  * 无人值守时"进报告屏、按下那个导出按钮、把回执读回来"的一段脚本（ui.md §11）。
  *
  * **两种导出共用一份**：它们在界面上的失效方式一模一样（按了、什么都没发生），
@@ -527,13 +592,7 @@ function exportProbe(button: string): string {
       return null;
     };
     if (!document.querySelector(${JSON.stringify(button)})) {
-      // 库里只剩冻结的排查时启动会停在新建排查面板（启动只恢复 open 的那种），
-      // 那时切换栏上还有它 —— 点进去，这也正是人会做的动作
-      if (!document.querySelector('.toreport')) {
-        const chip = await wait('.casebar .chip:not(.new)');
-        if (!chip) return null;
-        chip.click();
-      }
+      if ((await ${ENTER_WORKSPACE}) !== 'ok') return null;
       const enter = await wait('.toreport');
       if (!enter) return null;
       enter.click();
@@ -562,10 +621,53 @@ function fileStem(title: string, caseId: string): string {
   return `${safe.slice(0, 40) || 'inquestry'} ${caseId}`;
 }
 
-/** 切换栏上的短标签：问题的第一行，长了截断。 */
+/** 排查列表上的短标签：问题的第一行，长了截断。 */
 function titleOf(question: string): string {
   const first = question.split('\n').find((l) => l.trim())?.trim() ?? '未命名排查';
   return first.length > 40 ? `${first.slice(0, 40)}…` : first;
+}
+
+/**
+ * 关于那一节的内容。**版本号一律现取**——renderer 里写死的那份与打包出来的必然对不上。
+ *
+ * `claude --version` 要 spawn 一次，所以结果缓存在模块里：设置屏每次打开都探一次的话，
+ * 那一页的打开速度就跟着一个外部进程走。探不到就是 null，不编一个"未知版本"。
+ */
+let claudeVersionCache: string | null | undefined;
+function claudeVersion(bin: string | null): string | null {
+  if (claudeVersionCache !== undefined) return claudeVersionCache;
+  claudeVersionCache = null;
+  if (bin) {
+    try {
+      claudeVersionCache =
+        execFileSync(bin, ['--version'], { encoding: 'utf8', timeout: 4000 }).trim().split(/\s+/)[0] ?? null;
+    } catch (err) {
+      console.error('[main] 探测 claude 版本失败', err);
+    }
+  }
+  return claudeVersionCache;
+}
+
+function appInfo(): AppInfo {
+  const dbPath = path.join(app.getPath('userData'), 'inquestry.db');
+  const bin = findClaudeExecutable();
+  let dbBytes = 0;
+  try {
+    dbBytes = statSync(dbPath).size;
+  } catch {
+    // 库文件刚建起来之前读不到，显示 0 就够——这一栏是给人看大小的，不是校验
+  }
+  return {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    sqlite: (db.prepare(`SELECT sqlite_version() AS v`).get() as { v: string }).v,
+    claudePath: bin,
+    claudeVersion: claudeVersion(bin),
+    dbPath,
+    dbBytes,
+  };
 }
 
 async function intakeOptions(): Promise<IntakeOptions> {
@@ -578,6 +680,9 @@ async function intakeOptions(): Promise<IntakeOptions> {
     models,
     modelsProbed: probed,
     recentRoots: recentRoots(),
+    // 面板的 agent 三项从设置里取初值；模型探测不到时那一档会退回内置表，
+    // 所以这里给的 model 可能不在 `models` 里——面板自己按"选不到就回 default"处理
+    agentDefaults: settings().intake,
     defaults: { incidentDate: todayLocal(), tzOffset: localTzOffset() },
     demo: { question: DEMO_QUESTION, incidentDate: DEMO_INCIDENT_DATE },
   };
@@ -715,6 +820,35 @@ app.whenReady().then(async () => {
   );
   // 只有长图那个离屏视图会调；token 对不上就什么都不给
   ipcMain.handle('export:payload', (_e, token: string) => exportPayloads.get(token) ?? null);
+  /**
+   * 历史排查页那一页。**每行的运行时那一半要现合**（同 `search()` 的理由，ui.md §8.3）：
+   * 「等你 N」「运行中」只活在运行时里，库里查出来的行少了这一下，
+   * 一个正卡在 `ask_operator` 上等人的排查会被显示成一次静止的旧排查。
+   */
+  ipcMain.handle('case:list', (_e, q: CaseListQuery): CaseListPage => {
+    const page = casePage(db, q ?? {});
+    return {
+      total: page.total,
+      rows: page.rows.map((c) => ({
+        ...cases.briefOf(c),
+        projectRoot: c.project_root,
+        incidentDate: c.incident_date,
+        verdictShape: (c.verdict_shape as CaseListPage['rows'][number]['verdictShape']) ?? null,
+        steps: c.steps,
+        headline: c.headline,
+      })),
+    };
+  });
+  ipcMain.handle('settings:get', () => settings());
+  ipcMain.handle('settings:put', (_e, patch: UiSettings) => saveSettings(patch));
+  ipcMain.handle('app:info', (): AppInfo => appInfo());
+  ipcMain.handle('app:revealDb', () => shell.showItemInFolder(path.join(app.getPath('userData'), 'inquestry.db')));
+  // **只放 https**：这个口子的入参最终来自 renderer，而 `openExternal` 认得 file: 与各种
+  // 自定义协议——放开等于把"点一下就能拉起本机任意程序"接到了界面上
+  ipcMain.handle('app:openExternal', (_e, url: string) => {
+    if (/^https:\/\//i.test(url)) return shell.openExternal(url);
+    console.error('[main] 拒绝打开非 https 链接', url);
+  });
   ipcMain.handle('case:snapshot', () => snapshot());
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
     current()?.excerpt(callId, anchor) ?? '(没有选中的排查)',
@@ -746,6 +880,7 @@ app.whenReady().then(async () => {
           incidentDate: DEMO_INCIDENT_DATE,
           clues: null,
           agent: { backend: 'claude', model: null, effort: null },
+          takeover: false,
         });
         void current()?.start();
       }
@@ -763,6 +898,8 @@ app.whenReady().then(async () => {
         // **先等界面到位再摸它**：单独设这个变量时（不带 INQUESTRY_SHOT）这里是
         // `did-finish-load` 后第一件事，比第一份快照还早——报告屏与 .toreport
         // 谁都还没画出来。不等的话表现是"进不去报告屏"，而两者只是还没渲染出来
+        const entered: string = await win!.webContents.executeJavaScript(ENTER_WORKSPACE);
+        if (entered !== 'ok') throw new Error(`[shot] 进不去工作区（${entered}）：报告的入口长在那一屏上`);
         const ready: string = await win!.webContents.executeJavaScript(`(async () => {
           for (let i = 0; i < 50; i += 1) {
             if (document.querySelector('.reportscreen')) return 'here';

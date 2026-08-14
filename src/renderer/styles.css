@@ -33,32 +33,84 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.app { display: flex; flex-direction: column; height: 100vh; }
+/* rail 通到底，主区在它右边。rail 顶上那段让开交通灯，页头因此不必再让一次位 */
+.app { display: flex; height: 100vh; }
+.frame { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-/* ── 顶栏 ── */
-.topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 10px 16px 10px 88px;           /* 让开 macOS 交通灯 */
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+/* ── 导航 rail（ui.md §8.5）：不写字、不带计数 ── */
+.rail {
+  flex: 0 0 52px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 0 10px; background: var(--panel); border-right: 1px solid var(--line);
   -webkit-app-region: drag;
 }
-.topbar button, .topbar .tabs { -webkit-app-region: no-drag; }
-.brand { font-weight: 600; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; }
-.brand .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-.brand .case { font-weight: 400; color: var(--dim); }
-.tabs { margin-left: auto; display: flex; gap: 4px; background: var(--panel-2); padding: 3px; border-radius: 8px; }
-.tabs button {
-  background: none; border: 0; color: var(--dim); padding: 5px 12px;
-  border-radius: 6px; cursor: pointer; font-size: 13px;
+.rail button { -webkit-app-region: no-drag; }
+.rail .mark { margin: 30px 0 12px; opacity: .95; display: flex; }
+.rail-btn {
+  position: relative; display: grid; place-items: center;
+  width: 36px; height: 36px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--dim); cursor: pointer;
+  transition: background .16s ease, color .16s ease;
 }
-.tabs button.on { background: var(--line); color: var(--text); }
-.tabs .count { color: var(--accent); margin-left: 4px; }
-.status { display: flex; align-items: center; gap: 8px; }
+.rail-btn:hover { background: var(--panel-2); color: var(--text); }
+.rail-btn.on { background: var(--panel-2); color: var(--accent); }
+/* 选中指示条贴 rail 左缘 */
+.rail-btn.on::before {
+  content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px;
+  width: 2.5px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+/* 跨案待办：**一个点不是一个数**（ui.md §4）。整个 rail 上只有它是暖色 */
+.rail-btn .dot {
+  position: absolute; top: 6px; right: 6px; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--warn); border: 1.5px solid var(--panel);
+}
+.rail-btn.on .dot { border-color: var(--panel-2); }
+.rail-gap { flex: 1; }
+.rail .env { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-bottom: 8px; }
+.rail .env.bad { background: var(--bad); }
+
+/* ── 每一屏的页头与正文 ── */
+.page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pagehead {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  -webkit-app-region: drag;
+}
+.pagehead button, .pagehead input { -webkit-app-region: no-drag; }
+.pagehead h1 {
+  margin: 0; font-size: 15px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%;
+}
+.pagehead .sub { color: var(--dim); font-size: 12px; }
+.pagebody { flex: 1; min-height: 0; overflow-y: auto; }
+.pad { padding: 24px 28px 48px; max-width: 940px; }
+.blank { color: var(--dim); font-size: 13px; padding: 18px 2px; }
+.note { color: var(--dim); font-size: 12px; margin: 0 0 10px; }
+.grouplab {
+  font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim); margin: 18px 0 7px;
+}
+
+/* 工作区的页头还要挂状态与收尾三档，所以它自己一行到底 */
+.pagehead.ws { padding-right: 16px; }
+.pagehead.ws h1 { max-width: 34%; }
+
+/* rail 上工作区那一格随时点得到，但手上不一定有排查 */
+.ws-empty { margin: 90px auto; max-width: 440px; text-align: center; color: var(--dim); font-size: 13px; }
+.ws-empty .acts { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+.ws-empty .acts button {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 7px 14px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 12.5px;
+}
+.ws-empty .acts button.primary { background: var(--fill); border-color: var(--fill); color: var(--on-fill); font-weight: 600; }
+
+/* ── 工作区页头右侧：状态与收尾三档 ── */
+.status { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .pill { font-size: 12px; padding: 3px 9px; border-radius: 20px; background: var(--panel-2); color: var(--dim); }
 .pill.busy { background: #1f3350; color: var(--accent); }
 .pill.ended { color: var(--dim); }
 .pill.crashed { color: var(--bad); }
+.pill.todo { background: var(--warn); color: var(--on-warn); font-weight: 600; }
+.pill.todo.other { border: 1px solid var(--warn); background: none; color: var(--warn); cursor: pointer; }
 .status button, .toggle {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
   padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
@@ -66,6 +118,7 @@ body {
 /* 接管开着是一种「你揽下了活」的状态，不是警报：用主色描边。
    暖色是「需要你现在动手」的全局专属，而接管本身不是一件待办 */
 .status button.takeover.on { border-color: var(--fill); color: var(--accent); }
+.toreport em { font-style: normal; color: var(--dim); font-size: 11px; margin-left: 5px; }
 
 .banner { background: #2e2415; color: var(--warn); padding: 8px 16px; font-size: 13px; }
 /* 会话跑不动了：这是坏消息不是待办，用绯色，别占掉暖色那一档 */
@@ -79,7 +132,7 @@ body {
 /* 收尾要人确认那一下（D29）：说的是后果，不是警告，所以走中性面板色不占语义色 */
 .banner.confirm {
   background: var(--panel-2); color: var(--text); border-bottom: 1px solid var(--line);
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
 }
 .banner.confirm span { flex: 1; }
 .banner.confirm button {
@@ -88,7 +141,6 @@ body {
 }
 .banner.confirm button.primary { background: var(--fill); border-color: var(--fill); color: var(--on-fill); }
 /* 形态选择整行另起：它是确认那一下唯一要做的判断，挤在按钮旁边会被当成装饰 */
-.banner.confirm { flex-wrap: wrap; }
 .banner.confirm .shape { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .banner.confirm .shape .lead { color: var(--dim); font-size: 12px; margin-right: 4px; }
 .banner.confirm .shape .lead b { color: var(--text); margin: 0 2px; font-weight: 600; }
@@ -99,45 +151,15 @@ body {
 .banner.confirm .shape button.thin { opacity: 0.55; }
 .banner.confirm .shape .warn { color: var(--warn); margin-left: 8px; }
 /* 已收尾：陈述一个状态，不是坏消息也不是待办——两个语义色都不该动 */
-.banner.frozen { background: var(--panel); color: var(--dim); border-bottom: 1px solid var(--line); }
-.banner.frozen { display: flex; align-items: center; gap: 12px; }
+.banner.frozen {
+  background: var(--panel); color: var(--dim); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 12px;
+}
 .banner.frozen span { flex: 1; }
 .banner.frozen button {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
   padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
 }
-.toreport em { font-style: normal; color: var(--dim); font-size: 11px; margin-left: 5px; }
-
-/* ── 排查切换栏 ──
-   切换只换投影不中断任何一个；chip 上的「等你 N」是并发排查里唯一能看见
-   后台支线在等人的地方（D28），所以它用暖色，和待办栏同一档 */
-.casebar {
-  display: flex; gap: 8px; align-items: center;
-  padding: 7px 16px; border-bottom: 1px solid var(--line); background: var(--bg);
-}
-/* 检索框不跟着 chip 一起横滚：它是这一排的入口，滚出屏外就等于没有 */
-.casebar .chips { display: flex; gap: 6px; align-items: center; overflow-x: auto; flex: 1; }
-.casebar .casesearch {
-  flex: 0 0 130px; background: var(--panel); border: 1px solid var(--line); color: var(--text);
-  padding: 4px 10px; border-radius: 20px; font: inherit; font-size: 12px;
-}
-.casebar .casesearch::placeholder { color: var(--dim); }
-.casebar .nohit { color: var(--dim); font-size: 12px; flex: 0 0 auto; }
-/* 命中出处用中性色：暖色是「需要人动手」的全局专属，而检索结果里那颗「等你 N」照旧是暖的 */
-.casebar .chip .b.hit { color: var(--dim); font-family: var(--mono); }
-.casebar .chip {
-  display: flex; align-items: center; gap: 7px; flex: 0 0 auto; max-width: 280px;
-  background: var(--panel); border: 1px solid var(--line); color: var(--dim);
-  padding: 4px 10px; border-radius: 20px; cursor: pointer; font: inherit; font-size: 12px;
-}
-.casebar .chip.on { border-color: var(--fill); color: var(--text); background: var(--panel-2); cursor: default; }
-.casebar .chip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.casebar .chip .b { font-size: 11px; flex: 0 0 auto; }
-.casebar .chip .b.todo { background: var(--warn); color: var(--on-warn); padding: 0 6px; border-radius: 10px; font-weight: 600; }
-.casebar .chip .b.run { color: var(--accent); }
-.casebar .chip .b.idle { opacity: .6; }
-.casebar .chip.closed .t, .casebar .chip.aborted .t { text-decoration: line-through; text-decoration-color: var(--line); }
-.casebar .new { border-style: dashed; }
 
 /* 跨会话的断点：ordinal 每个会话都从 1 重来，不标一下轨道上会出现两个 #1 */
 .sessionmark { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 11px; margin: 8px 0 0; }
@@ -351,48 +373,191 @@ button.primary small { opacity: .6; font-weight: 400; }
 .sheet button { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 7px; cursor: pointer; }
 
 /* ── 新建排查面板 ── */
-.intake { max-width: 720px; margin: 0 auto; padding: 28px 8px 60px; display: flex; flex-direction: column; gap: 18px; }
-.intake .brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+/* 工作区页头上的排查元信息：建单信息里那几项要一直看得见，
+   否则基准日期填错要到报告空了才发现 */
+.casemeta { display: flex; gap: 14px; align-items: center; font-size: 11.5px; color: var(--dim); }
+.casemeta code { font-family: var(--mono); color: var(--text); font-size: 11px; }
+
+/* ── 首页的新建排查合成器（ui.md §8.1）──
+   压缩掉的只是填一次就不再动的那些；基准日期不压——它填错不报错，只让时间线悄悄排乱 */
+.compose { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 14px 16px 12px; }
+.compose .k { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.compose .k em { font-style: normal; text-transform: none; letter-spacing: 0; opacity: .7; }
+.compose .rootrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.compose .rootrow input {
+  flex: 1; min-width: 200px; background: var(--code); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 12.5px;
+}
+.compose textarea {
+  width: 100%; min-height: 78px; resize: vertical;
+  background: var(--code); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 10px 12px; font: inherit;
+}
+.compose input:focus, .compose textarea:focus { outline: 0; border-color: var(--fill); }
+.compose input.bad, .compose textarea.bad { border-color: var(--bad); }
+.compose ::placeholder { color: var(--dim); }
+.compose .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.compose .row.wrap { margin-top: 4px; }
+.compose .spacer { margin-left: auto; }
+.compose .chip {
+  display: flex; align-items: center; gap: 6px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px;
+  font-size: 12px; color: var(--dim);
+}
+.compose .chip em { font-style: normal; font-family: var(--mono); font-size: 11px; opacity: .8; }
+.compose .chip input.date {
+  width: 96px; background: none; border: 0; color: var(--text);
+  font-family: var(--mono); font-size: 11.5px; padding: 0;
+}
+.compose .chip input.date:focus { outline: 0; }
+.compose .chip input.date.bad { color: var(--bad); }
+.compose button.chip.pick { cursor: pointer; }
+.compose button.chip.pick.on { border-color: var(--fill); color: var(--accent); }
+.compose button.chip.pick:disabled { opacity: .4; cursor: default; }
+.compose button.ghost, .compose button.more {
+  background: none; border: 1px solid var(--line); color: var(--dim);
+  padding: 4px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.compose button.more { border-color: transparent; }
+.compose button.ghost.on { border-color: var(--fill); color: var(--accent); }
+.compose .rootrow button:not(.ghost) {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.compose button.primary { padding: 7px 16px; border-radius: 7px; }
+.compose .hint { font-size: 11.5px; color: var(--dim); margin: 8px 0 0; }
+.compose .hint.err { color: var(--bad); }
+.compose .adv {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+}
+.compose .adv .f { display: flex; flex-direction: column; gap: 5px; }
+.compose .adv .f.wide { grid-column: 1 / -1; }
+.compose .adv .f > input {
+  background: var(--code); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 12.5px;
+}
+.compose .adv .hint { margin: 0; }
+.compose .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; width: max-content; }
+.compose .seg button {
+  background: none; border: 0; color: var(--dim); padding: 5px 12px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.compose .seg button.on { background: var(--panel-2); color: var(--accent); }
+
+/* ── 首页的最近排查 / 历史排查的列表 ── */
+.sec-h { display: flex; align-items: baseline; gap: 10px; margin: 30px 0 10px; }
+.sec-h h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.sec-h .c { font-size: 11.5px; color: var(--dim); }
+.sec-h .more {
+  margin-left: auto; font-size: 12px; color: var(--accent);
+  background: none; border: 0; cursor: pointer; font-family: inherit;
+}
+.cases { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.crow {
+  display: grid; grid-template-columns: 1fr 92px 84px; gap: 12px; align-items: center;
+  width: 100%; text-align: left; padding: 9px 14px; border: 0;
+  border-bottom: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.crow:last-child { border-bottom: 0; }
+.crow:hover { background: var(--panel-2); }
+/* 标题省略号，徽标不参与压缩——被裁掉的正好会是「等你 N」那一个 */
+.crow .t { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.crow .t .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crow .t .title.done { text-decoration: line-through; text-decoration-color: var(--line); color: var(--dim); }
+.crow .st { font-size: 11.5px; color: var(--dim); }
+.crow .st.run { color: var(--accent); }
+.crow .meta { font-size: 11.5px; color: var(--dim); font-family: var(--mono); text-align: right; }
+.badge { font-size: 10.5px; padding: 1px 6px; border-radius: 9px; flex: 0 0 auto; }
+/* 暖色是「需要人动手」的全局专属，列表上只有这一个徽标用它 */
+.badge.todo { background: var(--warn); color: var(--on-warn); font-weight: 600; }
+.badge.cur { color: var(--accent); border: 1px solid var(--fill); }
+
+/* ── 历史排查 ── */
+.filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.filters input.q {
+  flex: 1; min-width: 220px; background: var(--panel); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; padding: 7px 12px; font: inherit; font-size: 13px;
+}
+.filters input.q:focus { outline: 0; border-color: var(--fill); }
+.filters input.q::placeholder { color: var(--dim); }
+.filters .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.filters .seg button {
+  background: none; border: 0; color: var(--dim); padding: 6px 12px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.filters .seg button.on { background: var(--panel-2); color: var(--text); }
+.filters .seg button:disabled { opacity: .35; cursor: default; }
+.hitrow { padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+.hitrow:last-child { border-bottom: 0; }
+.hitrow:hover { background: var(--panel-2); }
+.hitrow.cur { box-shadow: inset 2px 0 0 var(--accent); }
+.hitrow .l1 { display: flex; align-items: center; gap: 10px; }
+.hitrow .l1 .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hitrow .l1 .t.done { text-decoration: line-through; text-decoration-color: var(--line); color: var(--dim); }
+.hitrow .l1 .meta { font-size: 11.5px; color: var(--dim); font-family: var(--mono); flex: 0 0 auto; }
+.hitrow .l1 .meta.run { color: var(--accent); }
+/* 命中出处与摘要占一整行——「为什么它被搜出来」正是要看的 */
+.hitrow .l2 { margin-top: 4px; font-size: 12px; color: var(--dim); display: flex; gap: 8px; min-width: 0; }
+.hitrow .l2 .where { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; opacity: .8; }
+.hitrow .l2 .snip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hitrow .acts { display: flex; gap: 6px; flex: 0 0 auto; opacity: 0; }
+.hitrow:hover .acts { opacity: 1; }
+.hitrow .acts button {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 3px 9px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 11.5px;
+}
+.loadmore {
+  margin-top: 12px; width: 100%; background: none; border: 1px dashed var(--line);
+  color: var(--dim); padding: 8px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 12px;
 }
 
-.intake h1 { margin: 0; font-size: 20px; font-weight: 600; }
-.intake .lede { margin: -8px 0 0; color: var(--dim); font-size: 12.5px; }
-.intake .field { display: flex; flex-direction: column; gap: 6px; }
-.intake .k { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
-.intake .k em { font-style: normal; text-transform: none; letter-spacing: 0; opacity: .7; }
-.intake .k.sub { align-self: center; }
-.intake .hint { font-size: 12px; color: var(--dim); }
-.intake code { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
-.intake input, .intake textarea {
-  background: var(--code); color: var(--text); border: 1px solid var(--line);
-  border-radius: 7px; padding: 8px 10px; font: inherit; resize: vertical; width: 100%;
+/* ── 设置 ── */
+.set-sec { margin-bottom: 26px; }
+.set-sec h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.set-sec .desc { font-size: 12px; color: var(--dim); margin: 0 0 10px; }
+.set-body { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.srow { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.srow:last-child { border-bottom: 0; }
+.srow .lab { flex: 1; min-width: 0; }
+.srow .lab .n { font-size: 13px; }
+.srow .lab .h {
+  font-size: 11.5px; color: var(--dim); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.intake input:focus, .intake textarea:focus { outline: 0; border-color: var(--fill); }
-.intake .row { display: flex; gap: 8px; align-items: center; }
-.intake .row.wrap { flex-wrap: wrap; }
-.intake .row input { flex: 1; }
-.intake .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.intake .recent { display: flex; gap: 6px; flex-wrap: wrap; }
-.intake .agent { display: flex; flex-direction: column; gap: 8px; }
-.intake .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
-/* 选中不用填色：填色会和语义色打架（ui.md §5） */
-.intake button {
-  background: var(--panel); border: 1px solid var(--line); color: var(--text);
-  padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+.srow .ctl { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
+.srow .ctl .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.srow .ctl .seg.wrap { flex-wrap: wrap; }
+.srow .ctl .seg button {
+  background: none; border: 0; color: var(--dim); padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px;
 }
-.intake button.on { border-color: var(--ok); background: var(--panel-2); }
-.intake button:disabled { opacity: .4; cursor: default; }
-.intake button em { font-style: normal; color: var(--dim); font-size: 11px; }
-.intake button.primary { background: var(--fill); color: var(--on-fill); border: 0; font-weight: 600; padding: 8px 18px; }
-
-/* 顶栏上的排查元信息：建单信息里那几项要一直看得见，否则基准日期填错要到报告空了才发现 */
-.casemeta { display: flex; gap: 10px; align-items: center; font-size: 11.5px; color: var(--dim); }
-.casemeta code { font-family: var(--mono); }
-.intake input.bad { border-color: var(--bad); }
-.intake .hint.err { color: var(--bad); }
+.srow .ctl .seg button.on { background: var(--panel-2); color: var(--accent); box-shadow: inset 0 0 0 1px var(--fill); }
+.srow .ctl .seg button:disabled { opacity: .35; cursor: default; }
+.srow .ctl > button {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 4px 11px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.srow .ctl input.num {
+  width: 66px; background: var(--code); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12.5px;
+  font-family: var(--mono); text-align: right;
+}
+.srow .ctl input.num:focus { outline: 0; border-color: var(--fill); }
+.srow .ctl .unit { font-size: 11.5px; color: var(--dim); }
+.srow .ctl .ro { font-size: 12px; color: var(--dim); }
+.srow .ctl .ro.bad { color: var(--bad); }
+.about { display: flex; align-items: center; gap: 14px; padding: 16px 14px; border-bottom: 1px solid var(--line); }
+.about .vmeta .v { font-size: 14px; }
+.about .vmeta .v b { font-family: var(--mono); }
+.about .vmeta .sub { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+.about .lic { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+.links { display: flex; align-items: center; gap: 12px; padding: 11px 14px; font-size: 12.5px; }
+.links a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.links i { width: 1px; height: 11px; background: var(--line); }
+.copyright {
+  padding: 11px 14px; margin: 0; font-size: 11.5px; color: var(--dim);
+  border-top: 1px solid var(--line); line-height: 1.7;
+}
+.mono { font-family: var(--mono); }
 
 /* ── 报告屏（D21 / D22） ─────────────────────────────────────────────
    与工作区**同一套色板**，差别只来自密度与字号（ui.md §1 那张表）：

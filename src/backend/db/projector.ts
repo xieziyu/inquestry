@@ -21,7 +21,7 @@ export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
 }
 
 /**
- * 排查切换栏靠 `updated_at` 把「进行中的」排在前面（ui.md §8.3），
+ * 排查列表靠 `updated_at` 把「进行中的」排在前面（ui.md §8.3），
  * 而新建排查那一刻之后没有别的地方会动它——不在这里前移，排序就永远是新建排查先后。
  *
  * 时间取事件自己的 `at` 而不是时钟：投影器读时钟的那一刻，重放就不再一致。
