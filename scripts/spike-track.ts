@@ -5,8 +5,8 @@
  *
  *   1. **行序逐字是到达顺序。** 按树分组渲染看着更"整齐"，代价是一个晚到的分叉子节点
  *      会被挪到父的下面，把它和中间那几步已读的主干节点一起推走
- *   2. **追加不动已有的行。** 位置、缩进、序号、断点，一个都不许回头改：
- *      深度改成在整份列表里找父，一个"父在后面才到"的分叉就会在父到达那一刻让缩进跳一格；
+ *   2. **追加不动已有的行。** 顺序、列号、序号、断点，一个都不许回头改：
+ *      列改成在整份列表里找父，一个"父在后面才到"的分叉就会在父到达那一刻跳一列；
  *      序号改成"多会话才带 S1# 前缀"，第二次会话一开就会把每一行都重写一遍，
  *      顶上那个断点块还会把所有已读的卡整体下推
  *   3. **推翻者不在轨道上时那一行照样划掉。** 曲线画不出来只是少个指向，
@@ -20,7 +20,7 @@
 
 import { blobDir, openDatabase } from '../src/backend/db/database.js';
 import { createInvestigationSession } from '../src/backend/store/sqlite-store.js';
-import { MAX_DEPTH, trackLayout, weaveChat } from '../src/renderer/track.js';
+import { trackLayout, weaveChat } from '../src/renderer/track.js';
 import type { ChatLine, StepNode } from '../src/shared/ipc.js';
 
 const checks: [string, boolean, string][] = [];
@@ -76,16 +76,17 @@ check(
 );
 
 check(
-  '分叉只向右生长，主干不受影响',
-  L.rows.map((r) => r.depth).join(',') === '0,0,1,0,0,2,0,0,0',
-  `实得深度 ${L.rows.map((r) => r.depth).join(',')} —— d 在 c1 之后仍回到主干`,
+  '每次分叉自开一列，主干照旧留在 0 列',
+  L.rows.map((r) => r.col).join(',') === '0,0,1,0,0,2,0,0,0',
+  `实得列号 ${L.rows.map((r) => r.col).join(',')} —— d 在 c1 之后仍回到主干；` +
+    'c1 与 c2 是两次分叉，各占一列',
 );
 
 const ghost = L.rows[6]!;
 const self = L.rows[7]!;
 check(
   '父不存在 / 自引用一律落回主干（写入侧之外的第二道）',
-  ghost.depth === 0 && ghost.parentLabel === null && self.depth === 0,
+  ghost.col === 0 && ghost.parentLabel === null && self.col === 0,
   'agent 手写的 id 打错一个字符不该让整条轨道空掉',
 );
 
@@ -97,37 +98,38 @@ for (let n = 1; n <= arrival.length; n++) {
   for (let i = 0; i < n; i++) {
     const a = pre[i]!;
     const b = L.rows[i]!;
-    // **序号与断点也要比，不只是位置。** 只比 id/depth 的话，"第二次会话一开就把所有
+    // **序号与断点也要比，不只是位置。** 只比 id/col 的话，"第二次会话一开就把所有
     // 已有行改成 S1#N 并在顶上插一个断点块"这种回头改写整条溜过去
-    if (a.step.id !== b.step.id || a.depth !== b.depth || a.label !== b.label || a.sessionBreak !== b.sessionBreak) {
+    if (a.step.id !== b.step.id || a.col !== b.col || a.label !== b.label || a.sessionBreak !== b.sessionBreak) {
       stable = false;
-      firstDrift ||= `前缀 ${n} 的第 ${i} 行是 ${a.step.id}/深度${a.depth}/${a.label}/断点${a.sessionBreak}，全量里是 ${b.step.id}/深度${b.depth}/${b.label}/断点${b.sessionBreak}`;
+      firstDrift ||= `前缀 ${n} 的第 ${i} 行是 ${a.step.id}/第${a.col}列/${a.label}/断点${a.sessionBreak}，全量里是 ${b.step.id}/第${b.col}列/${b.label}/断点${b.sessionBreak}`;
     }
   }
 }
-check('追加一行不动已有行的位置与缩进', stable, firstDrift || '每个前缀都是全量的前缀');
+check('追加一行不动已有行的列号与序号', stable, firstDrift || '每个前缀都是全量的前缀');
 
-// 父在后面才到：只认已出现过的父，所以它一直是主干——否则父到达那一刻它会跳一格
+// 父在后面才到：只认已出现过的父，所以它一直是主干——否则父到达那一刻它会跳一列
 const forward = [step({ id: 'early', parentStepId: 'late' }), step({ id: 'late' })];
 check(
   '父在后面才到的，一直当主干',
-  trackLayout(forward).rows[0]!.depth === 0 && trackLayout(forward.slice(0, 1)).rows[0]!.depth === 0,
+  trackLayout(forward).rows[0]!.col === 0 && trackLayout(forward.slice(0, 1)).rows[0]!.col === 0,
   '在整份列表里找父的话，late 一到 early 就从主干跳成分叉',
 );
 
-// 缩进封顶：链条比 MAX_DEPTH 深时不再右移，但父子关系仍标出来
+/**
+ * 深链：每一环各占一列，**不封顶**。
+ *
+ * 旧稿在这儿封了 `MAX_DEPTH`，理由是"深链会把卡片挤出画布"——舞台改成可缩放拖拽的画布
+ * 之后那条理由不成立了（横向由缩放与导览图兜着），而封顶的代价是第 4 层往后的分叉
+ * 全挤在同一列里，"顺着一列往下读"读到的是几条互不相干的推理。
+ */
 const deep: StepNode[] = [];
-for (let i = 0; i <= MAX_DEPTH + 2; i++) {
-  deep.push(step({ id: `n${i}`, parentStepId: i ? `n${i - 1}` : null }));
-}
+for (let i = 0; i < 6; i++) deep.push(step({ id: `n${i}`, parentStepId: i ? `n${i - 1}` : null }));
 const D = trackLayout(deep);
 check(
-  `缩进封顶在 ${MAX_DEPTH}，父子关系仍在`,
-  D.rows.every((r) => r.depth <= MAX_DEPTH) &&
-    D.rows[MAX_DEPTH + 1]!.depthCapped &&
-    D.rows[MAX_DEPTH + 1]!.parentLabel !== null &&
-    !D.rows[MAX_DEPTH]!.depthCapped,
-  `实得深度 ${D.rows.map((r) => r.depth).join(',')} —— 不封顶的话深链会把卡片挤出画布`,
+  '深链每一环各占一列，不封顶',
+  D.rows.map((r) => r.col).join(',') === '0,1,2,3,4,5' && D.rows.every((r, i) => (i ? r.parentLabel !== null : true)),
+  `实得列号 ${D.rows.map((r) => r.col).join(',')} —— 封顶的话第 4 层往后会共用一列`,
 );
 
 // 推翻：两头都在轨道上时给一条回指线，方向是推翻者 → 被推翻者
@@ -264,17 +266,24 @@ async function storeChecks() {
  */
 {
   const question = '订单出现了两条重复记录';
-  const talk = (at: number, role: ChatLine['role'], text: string): ChatLine => ({ role, text, at });
+  let n = 0;
+  const talk = (at: number, role: ChatLine['role'], text: string, opening = false): ChatLine => ({
+    id: `ch${++n}`,
+    role,
+    text,
+    at,
+    ...(opening ? { opening: true } : {}),
+  });
   // 夹具里的步是 `seq * 1000`，第 1 到第 9 步分别落在 1000…9000
   const chat: ChatLine[] = [
     // 开场白：harness 用建单信息拼的，正文以问题开头，信息卡上已经逐字有了
-    talk(500, 'user', `${question}\n基准日期：2026-08-15（时区 +08:00）。`),
+    talk(500, 'user', `${question}\n基准日期：2026-08-15（时区 +08:00）。`, true),
     talk(1500, 'assistant', '先看这两条是不是同一个请求写进去的。'),
     talk(4200, 'user', '别查网关了，先看从库。'),
     // 比最后一步还晚：它该落在末尾，而不是被丢掉
     talk(99_000, 'assistant', '影响面已经数出来了。'),
   ];
-  const woven = weaveChat(L.rows, chat, question);
+  const woven = weaveChat(L.rows, chat);
   const stepsOnly = woven.filter((i) => i.kind === 'step').map((i) => i.id);
 
   check(
@@ -305,7 +314,7 @@ async function storeChecks() {
   // 追加一句不动已有的任何一项：与上面那条前缀检查同一条约束，只是换成对话在增长
   let stableTalk = true;
   for (let n = 1; n <= chat.length; n++) {
-    const pre = weaveChat(L.rows, chat.slice(0, n), question).map((i) => i.id);
+    const pre = weaveChat(L.rows, chat.slice(0, n)).map((i) => i.id);
     const full = woven.map((i) => i.id);
     for (let i = 0; i < pre.length; i++) {
       // 前缀里第 i 项在全量里未必还是第 i 项（后来的话会插在它前面），

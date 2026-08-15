@@ -125,6 +125,8 @@ export class CaseRunner {
   private caseId: string;
   private sessionId = randomUUID();
   private chat: ChatLine[] = [];
+  /** 内存里那几句自己的编号：它们不在库里，没有 `chat_lines.id` 可用，而舞台要按 id 认。 */
+  private chatSeq = 0;
   private pending = new Map<string, Pending>();
   /**
    * PreToolUse 记下的 ask_operator 调用，等工具正文跑起来时认领。
@@ -326,7 +328,8 @@ export class CaseRunner {
           backgroundLanes: this.lanes.backgroundLanes,
           liveLanes: this.lanes.liveLanes,
           chat: this.chat,
-          pending: [...this.pending.values()].map((p) => p.ask),
+          // 带上认领到的那次调用：舞台靠它把「等你」标回那一步（待办卡自己钉在视口上，不在画布里）
+          pending: [...this.pending.values()].map((p) => ({ ...p.ask, callId: p.callId })),
           gates: [...this.gates.values()].map((g) => g.ask),
           sessionStatus: this.status,
           takeover: this.takeover,
@@ -1127,7 +1130,7 @@ export class CaseRunner {
    */
   private pushChat(role: ChatLine['role'], text: string) {
     if (this.session) this.session.appendChat({ role, text });
-    else this.chat.push({ role, text, at: Date.now() });
+    else this.chat.push({ id: `mem_${++this.chatSeq}`, role, text, at: Date.now() });
     this.onChange();
   }
 }

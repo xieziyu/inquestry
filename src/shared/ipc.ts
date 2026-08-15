@@ -249,6 +249,14 @@ export type IncidentEntry = {
 /** 挂起的人工回填。resolve 靠 main 里活着的 Promise，进程重启即失效（data-model.md §4）。 */
 export type PendingAsk = {
   id: string;
+  /**
+   * 这条回填挂在哪次工具调用上。**舞台靠它把「等你」标回那一步**——待办卡钉在视口上，
+   * 不在画布里，不标的话人得自己在图上找是哪一步停住了。
+   *
+   * 认不到时没有这一项（`claimAskCall` 宁可不认也不拿队首兜底），那一步就不标记号，
+   * 而不是标到一个猜出来的位置上。②档不需要这个：`PendingGate.id` 本来就是 `CallNode.id`。
+   */
+  callId?: string;
   engine: string;
   statement: string;
   why: string;
@@ -287,7 +295,27 @@ export type GateDecision =
   | { id: string; action: 'rewrite'; input: string }
   | { id: string; action: 'deny'; message: string };
 
-export type ChatLine = { role: 'user' | 'assistant' | 'system'; text: string; at: number };
+/**
+ * 对话带上的一句。舞台把它们织进画布（`renderer/track.ts` 的 `weaveChat`）。
+ *
+ * **`id` 是稳定标识，不许用数组下标顶替**：快照只带最近一段（`CHAT_TAIL`），
+ * 队首一被截掉，按下标编出来的 id 会整体错位——React 当成一批新节点，
+ * 而舞台那侧"落笔之后不再重排"也就跟着废了。
+ */
+export type ChatLine = {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  at: number;
+  /**
+   * 这句是**某次会话的开场白**（harness 用建单信息拼的），舞台不织它——信息卡上已经逐字有了。
+   *
+   * 由 main 按"每个 session 最早那条 user 行"标出来，**不靠正文去猜**：
+   * 一度在 renderer 里按"以问题正文开头"过滤，问题短的时候，人后来引用原问题再补充的
+   * 那句真话会一起被吞掉，而那是调查记录里最不该丢的一类。
+   */
+  opening?: boolean;
+};
 
 /** 定稿前的两个强制 step（overview §6.2）。 */
 export type ClosingStepKind = 'impact' | 'leftover';

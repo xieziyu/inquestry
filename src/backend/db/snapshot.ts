@@ -27,8 +27,15 @@ import {
 } from '../store/sqlite-store.js';
 
 const PREVIEW_LINES = 6;
-/** 对话带一次推多少句。全量推的话，一个跨了几轮会话的调查每 60ms 就要搬一遍整段对话。 */
-const CHAT_TAIL = 200;
+/**
+ * 对话带一次推多少句。全量推的话，一个跨了几轮会话的调查每次领域事件都要搬一遍整段对话。
+ *
+ * ⚠️ **这个数从"底部一条带滚动展示最近几句"变成了"舞台上摆得下几条旁白"**：舞台改成画布
+ * 之后，这些句子是画布上有位置的东西，被截掉的那几条会从图上**静默消失**，而留下的那些
+ * 因为少了前面几条垫着还会整体上移一截。所以它不再是个显示窗口，是个兜底上限——
+ * 定得远高于真实调查的量级，真撞上了也只影响最早那一段旁白，步骤一条不少。
+ */
+const CHAT_TAIL = 2000;
 
 export function buildSnapshot(
   db: Db,
@@ -240,16 +247,33 @@ export function buildSnapshot(
 }
 
 /**
- * 对话带。**取最近 `CHAT_TAIL` 句而不是全部**：一个跨了几轮会话的调查能攒出很长一条，
- * 而每 60ms 推一次全量快照。取的是**末尾**——底部那条带本来就只滚动展示最近的。
+ * 对话带。**取最近 `CHAT_TAIL` 句而不是全部**（那个常量上面写了代价）。
+ *
+ * 顺带标出每次会话的开场白：它是那次会话里最早的一条 user 行。**这件事只有这儿判得了**——
+ * renderer 手上没有 session_id，一度让它按"正文以问题开头"去猜，问题短的时候会把人后来
+ * 引用原问题的补充一起吞掉。这条判断不受上面那个上限影响：min(rowid) 是按全表算的，
+ * 哪怕开场白本身已经被截掉，留下的那几句也不会被误标。
  */
 function chatLines(db: Db, caseId: string): ChatLine[] {
   const rows = db
     .prepare(
-      `SELECT role, text, at FROM chat_lines WHERE case_id=? ORDER BY at DESC, rowid DESC LIMIT ?`,
+      `SELECT id, rowid AS rid, role, text, at FROM chat_lines
+        WHERE case_id=? ORDER BY at DESC, rowid DESC LIMIT ?`,
     )
-    .all(caseId, CHAT_TAIL) as ChatLine[];
-  return rows.reverse();
+    .all(caseId, CHAT_TAIL) as (ChatLine & { rid: number })[];
+  const openings = new Set(
+    (
+      db
+        .prepare(
+          `SELECT MIN(rowid) AS rid FROM chat_lines
+            WHERE case_id=? AND role='user' GROUP BY session_id`,
+        )
+        .all(caseId) as { rid: number }[]
+    ).map((r) => r.rid),
+  );
+  return rows
+    .reverse()
+    .map(({ rid, ...line }) => (openings.has(rid) ? { ...line, opening: true } : line));
 }
 
 /**

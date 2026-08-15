@@ -747,6 +747,15 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1380,
     height: 900,
+    /**
+     * 🔴 **工作区右边那两层是定宽的**（待办层、详情浮层，宽度由 `renderer/Stage.tsx` 的
+     * `PANEL` 一处出）。窗口缩到它们放不下时，画布的可视区会变成负数——舞台那侧只好夹一个
+     * 下限，而夹出来的是一块**并不存在**的空间：「适应」与「跟随最新」按它算，结果是把卡片
+     * 摆到了浮层底下。这里给一个放得下"两层都开 + 一小块画布"的下限，让那个夹子够不着。
+     * 改这两个数要一起想：rail 52 + 待办 386 + 浮层 452 ≈ 890。
+     */
+    minWidth: 1100,
+    minHeight: 560,
     titleBarStyle: 'hiddenInset',
     /**
      * 交通灯钉死在这儿，好让 CSS 那侧的让位量算得出来（`--head-pad`）。

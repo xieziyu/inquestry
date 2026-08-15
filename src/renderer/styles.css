@@ -35,6 +35,10 @@
   --line-soft: #1f2831;
   --dim-2: #6e7a87;
   --tint: #18222c;
+  /* 舞台那一层比应用底再深半档：卡片浮在上面才立得住，而它仍不是纯黑。
+     连线是同一族里最亮的一档灰——它要压得住点阵，又不能抢卡片上的字 */
+  --world: #10161b;
+  --wire: #33404c;
 }
 
 * { box-sizing: border-box; }
@@ -236,12 +240,54 @@ button:hover > .ic { opacity: 1; }
   padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
 }
 
-/* 跨会话的断点：ordinal 每个会话都从 1 重来，不标一下轨道上会出现两个 #1 */
-.sessionmark { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 11px; margin: 8px 0 0; }
-.sessionmark::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+/* ── 舞台：一整幅可缩放拖拽的画布（ui.md §3）──
+   `.stage` 是视口（自己不滚动），`.world` 是被 transform 的那一层。
+   🔴 **卡片与连线必须在同一层里共用世界坐标**：分两层各自缩放的话，线与卡必然错位。 */
+.stage {
+  flex: 1; min-height: 0; position: relative; overflow: hidden;
+  background: var(--world); cursor: grab; touch-action: none;
+}
+.stage:active { cursor: grabbing; }
+/* 点阵是画布的落脚点：没有它，拖拽时屏幕上没有任何东西说明"这一层在动"。
+   §5 那条「不加纹理」管的是卡片与正文那一带——那儿纹理会和等宽字打架；
+   这一层在卡片背后，且跟着 transform 一起走，所以它说的是位置而不是装饰 */
+.stage::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .55;
+  background-image: radial-gradient(circle at 1px 1px, #263039 1px, transparent 0);
+  background-size: var(--dot, 26px) var(--dot, 26px);
+  background-position: var(--dotx, 0) var(--doty, 0);
+}
+.world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.wires { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.wires path { fill: none; }
+/* 连线只有三种形，各自只说一件事：
+   实线 = 同一条探索线接着往下 · 虚线 = 跨列（开出一条新线）· 曲线 = 推翻 */
+.wires .w-flow { stroke: var(--wire); stroke-width: 1.5; }
+.wires .w-open { stroke: var(--wire); stroke-width: 1.5; stroke-dasharray: 4 4; }
+/* 🔴 **全屏只有这一种曲线**，它只表示推翻——结构线一律走直角，
+   所以这条曲线一出现就不用读字也知道发生了什么（ui.md §3） */
+.wires .w-refute { stroke: var(--bad); stroke-width: 1.6; opacity: .82; }
+.wires marker path { fill: var(--wire); stroke: none; }
+.wires marker.bad path { fill: var(--bad); }
 
-/* ── 主区 ── */
-.stage { flex: 1; overflow-y: auto; padding: 16px 20px 8px; display: flex; flex-direction: column; gap: 10px; }
+/* 列头：这一列是谁在查。列成了语义轴之后这句话必须写出来——
+   光靠连线的话，读的人得先追一遍线才知道自己在读谁的推理 */
+.lanehead {
+  position: absolute; display: flex; align-items: center; gap: 7px;
+  font-size: 11px; color: var(--dim-2); white-space: nowrap;
+}
+.lanehead .tag { padding: 1px 8px; border-radius: 4px; border: 1px solid var(--line); background: var(--panel); }
+.lanehead.agent .tag { color: var(--dim); }
+/* agent 显式声明的分叉用主色描边：它是 agent 自己开的一条线，与支线不是一回事 */
+.lanehead.fork .tag { color: var(--accent); border-color: var(--fill); }
+.lanehead .note { opacity: .8; }
+
+/* 跨会话的断点：ordinal 每个会话都从 1 重来，不标一下轨道上会出现两个 #1 */
+.smark {
+  position: absolute; display: flex; align-items: center; gap: 10px;
+  color: var(--dim-2); font-size: 11px; width: 340px;
+}
+.smark::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 
 button.primary {
   background: var(--fill); color: var(--on-fill); border: 0; font-weight: 600;
@@ -254,88 +300,130 @@ button.primary:disabled:hover { background: var(--fill); }
 button.primary small { opacity: .6; font-weight: 400; }
 button.primary:has(> .ic) { gap: 6px; }
 
-/* ── 轨道：主干 + 分叉（D23 / ui.md §3）── */
-.track {
-  position: relative; display: flex; flex-direction: column; gap: 10px;
-  /* 最左边留一条空槽给推翻回指线：曲线整条走在这里，不压任何一个字 */
-  --track-gutter: 26px;
-  --track-indent: 26px;
-  padding-left: var(--track-gutter);
-}
-/* 分叉靠缩进认，不靠连线：连线要从父一路拉下来，中间隔着的主干卡会被压住 */
-.lane { position: relative; }
-.lane.branch::before {
-  content: ''; position: absolute; left: -13px; top: 14px; bottom: 14px; width: 1px;
-  background: var(--line);
-}
-.step .branch { color: var(--dim); font-family: var(--mono); font-size: 11px; }
-/* 支线标识用中性色：暖色是「需要人动手」的全局专属，一条支线在后台查东西不找人 */
-.step .lanetag {
-  color: var(--dim); font-family: var(--mono); font-size: 11px;
-  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
-}
-.step .refuter { color: var(--bad); font-size: 11.5px; }
+/* ── 舞台上的卡片（ui.md §3）──
+   卡面只留五样：序号 · 类型 · 状态 · 假设句 · 结论。证据与工具调用进右侧详情浮层。
 
-/* 全屏只有这一种曲线，它只表示推翻——一出现就不用读字也知道发生了什么 */
-.refutes { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
-.refutes path { fill: none; stroke: var(--bad); stroke-width: 1.5; opacity: .75; }
-.refutes marker path { fill: var(--bad); stroke: none; }
-
-/* ── step 卡 ── */
-.step {
-  background: var(--panel); border: 1px solid var(--line);
-  border-left: 3px solid var(--line); border-radius: 10px; padding: 12px 14px;
+   🔴 **高度是由 `track.ts` 算好后写在 style 上的，这里的任何一条都不许改变它**：
+   位置是算出来的，一张卡高一点就等于把它下面每一张都推走一截。所以正文一律
+   `-webkit-line-clamp` 按算好的行数裁（行数由 JSX 内联给），padding 也不能加。 */
+.s-card {
+  position: absolute; background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--line); border-radius: 10px; padding: 10px 12px 20px;
+  overflow: hidden; cursor: pointer; transition: border-color .14s ease, background .14s ease;
 }
-.step.confirmed { border-left-color: var(--ok); }
-.step.refuted, .step.superseded { border-left-color: var(--bad); opacity: .82; }
-.step.inconclusive { border-left-color: var(--warn); }
-.step.unclassified { border-style: dashed; }
-.step .head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
-.step .ord { font-family: var(--mono); color: var(--dim); }
-.kind { padding: 1px 7px; border-radius: 4px; background: var(--panel-2); }
-.kind.impact { color: var(--accent); }
-.kind.leftover { color: var(--warn); }
-.kind.unclassified { color: var(--dim); font-style: italic; }
+.s-card:hover { border-color: var(--dim-2); }
+/* 卡面上没有计数行之后，"这张卡点得开"得另有人说。放右下角、只在 hover 时出现：
+   常驻一行小字会让每张卡都像挂着一件待办 */
+.s-card::after {
+  content: '详情 →'; position: absolute; right: 11px; bottom: 5px;
+  font-size: 10.5px; color: var(--dim-2); opacity: 0; transition: opacity .14s ease;
+}
+.s-card:hover::after { opacity: 1; }
+/* 选中不填色：边框 + 极淡底（填色会和语义色打架，ui.md §5） */
+.s-card.picked { border-color: var(--accent); background: var(--tint); box-shadow: 0 0 0 1px var(--fill); }
+.s-card.confirmed { border-left-color: var(--ok); }
+.s-card.refuted, .s-card.superseded { border-left-color: var(--bad); opacity: .86; }
+.s-card.inconclusive { border-left-color: var(--warn); }
+.s-card.open { border-left-color: var(--accent); }
+.s-card.converged { border-left-color: var(--line); }
+.s-card.unclassified { border-style: dashed; }
+
+.s-card .c-head { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--dim); min-height: 17px; }
+.s-card .ord { font-family: var(--mono); }
+.s-card .kind { padding: 0 6px; border-radius: 4px; background: var(--panel-2); font-size: 11px; }
+.s-card .kind.impact { color: var(--accent); }
+.s-card .kind.leftover { color: var(--warn); }
+.s-card .refbadge { color: var(--bad); font-size: 11px; }
+/* 这一步正卡在①档回填或②档闸门上。**暖色是「需要人动手」的全局专属**（ui.md §4）——
+   待办卡自己钉在视口上，不标的话人得在图上一张张找是哪一步停住了 */
+.s-card.waiting { border-color: #45381f; }
+.s-card .waitbadge { color: var(--warn); font-size: 11px; }
+.world[data-lod="far"] .waitbadge { font-size: 20px; }
+.s-card .state { margin-left: auto; font-size: 11.5px; white-space: nowrap; }
 .state.confirmed { color: var(--ok); }
 .state.refuted, .state.superseded { color: var(--bad); }
 .state.inconclusive { color: var(--warn); }
-/* 收口是"这条支线到此为止"，不是一种结论——所以给中性色，与已证实/已推翻分得开。
-   支线在后台查东西并不找人，一律不碰暖色（ui.md §3.2） */
+.state.open { color: var(--accent); }
+/* 收口是"这条支线到此为止"，不是一种结论——所以给中性色，与已证实/已推翻分得开 */
 .state.converged { color: var(--dim); }
-.step.converged { border-left-color: var(--line); }
+/* 进行中的状态呼吸，全屏仅有的两处动效之一（ui.md §5） */
+.state.open .pulse {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; margin-right: 5px; animation: breathe 2.4s ease-in-out infinite;
+}
+@keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .state.open .pulse { animation: none; } }
+
+/* 假设句是这张卡上唯一"要读"的内容，字号不能再往下压（ui.md §5） */
+.s-card .c-dir {
+  margin: 7px 0 0; font-size: 13px; line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+}
+.s-card.refuted .c-dir, .s-card.superseded .c-dir {
+  text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 50%, transparent);
+}
+.s-card .c-vd {
+  margin: 6px 0 0; font-size: 12px; color: var(--dim); line-height: 1.5;
+  border-left: 2px solid var(--line); padding-left: 8px;
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+}
 /* 只停这一条支线：按钮长在那一行上，状态栏那枚「支线 N」说不出要停的是哪一条 */
-.step .stoplane {
-  color: var(--dim); font-size: 11px; line-height: 1.6;
-  border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; background: transparent; cursor: pointer;
+.s-card .stoplane {
+  color: var(--dim); font-size: 11px; line-height: 1.6; gap: 3px;
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 6px;
+  background: transparent; cursor: pointer;
 }
-.step .stoplane:hover { color: var(--bad); border-color: var(--bad); }
-/* 这一枚只有两个字宽，通用的 5px 间距在它身上会把方块推到边上 */
-.step .stoplane { gap: 3px; }
-/* 限定在 head 里：`superseded` 同时是卡片自己的状态类，不限定的话整张卡的正文都会跟着变红，
-   而同样被推翻的 refuted 卡不会——两种推翻看起来成了两回事 */
-.step .head .superseded { color: var(--bad); }
-.step .direction { margin: 8px 0 0; }
-.step.refuted .direction, .step.superseded .direction { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 50%, transparent); }
-.step .verdict { margin: 6px 0 0; color: var(--dim); border-left: 2px solid var(--line); padding-left: 10px; }
+.s-card .stoplane:hover { color: var(--bad); border-color: var(--bad); }
 
-.evidence { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.evidence li {
-  display: grid; grid-template-columns: 190px 110px 1fr auto; gap: 8px; align-items: baseline;
-  padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 12.5px;
+/* 旁白：agent 的判断 / 人的补充。刻意不做成卡、不带边框——它是旁白，不是节点。
+   做成同样一张卡的话，一屏上会有两种长得一样、而其中一种什么证据都没有的东西 */
+.s-say {
+  position: absolute; padding: 2px 0 2px 12px; border-left: 2px solid var(--line);
+  font-size: 12px; color: var(--dim); overflow: hidden;
 }
-.evidence li:hover { background: var(--panel-2); }
-.when { font-family: var(--mono); color: var(--accent); font-size: 12px; white-space: nowrap; }
-.actor:empty::before { content: '—'; color: var(--line); }
-.actor { color: var(--dim); font-size: 12px; }
-.anchor { color: var(--dim); font-family: var(--mono); font-size: 11px; }
+.s-say .who {
+  display: block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--dim-2); margin-bottom: 1px;
+}
+.s-say p { margin: 0; line-height: 1.55; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.s-say.assistant { border-left-color: var(--dim-2); }
+.s-say.assistant p { color: var(--text); }
+.s-say.assistant .who { color: var(--accent); }
+.s-say.user { border-left-color: var(--fill); }
+.s-say.user p { color: var(--text); }
 
-.calls { margin-top: 10px; }
-.call { margin-top: 6px; background: var(--panel-2); border-radius: 7px; padding: 8px 10px; cursor: pointer; }
-.callhead { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--dim); }
-.callhead b { font-family: var(--mono); color: var(--text); }
-.origin.operator { color: var(--warn); }
-.lines { margin-left: auto; }
-.call pre, .sheet pre {
+/* ── 拉远之后的降级（LOD）──
+   画布拉远之后正文是一团读不出来的灰。与其糊在那儿，不如**换一种东西给他看**：
+   远档把卡片退成一块色标 + 大号序号 + 状态，字号按缩放倒着放大。
+   🔴 位置与尺寸一个都不许变：变了就是重排。
+   ⚠️ 只分两档，不设中间档——中间档（藏一段、留框）把卡片掏成一个空盒子，
+   而高度是不许跟着变的，藏掉一段就是在卡里留一块什么都没有的白。 */
+.world[data-lod="far"] .c-vd,
+.world[data-lod="far"] .c-dir,
+.world[data-lod="far"] .kind,
+.world[data-lod="far"] .stoplane,
+.world[data-lod="far"] .s-say p,
+.world[data-lod="far"] .casecard .question,
+.world[data-lod="far"] .casecard .meta,
+.world[data-lod="far"] .casecard .rename,
+.world[data-lod="far"] .s-card::after { display: none; }
+.world[data-lod="far"] .s-card { display: flex; align-items: center; gap: 14px; padding: 0 18px; }
+.world[data-lod="far"] .c-head { width: 100%; font-size: 30px; }
+.world[data-lod="far"] .c-head .ord { font-size: 34px; color: var(--text); }
+.world[data-lod="far"] .c-head .state { font-size: 24px; }
+.world[data-lod="far"] .c-head .state .pulse { width: 14px; height: 14px; margin-right: 10px; }
+/* 「被推翻」跟着放大：拉远正是为了一眼看出它落在哪一步 */
+.world[data-lod="far"] .refbadge { font-size: 20px; }
+.world[data-lod="far"] .casecard h2 { font-size: 30px; -webkit-line-clamp: 2; }
+/* 远档这几个字号是**按缩放倒着放大**的：k 到 0.4 时 30px 才落回 12px 上下。
+   照原尺寸留着的话，缩完只有四五个像素，等于把列头与旁白从图上抹掉 */
+.world[data-lod="far"] .s-say .who { font-size: 26px; }
+.world[data-lod="far"] .lanehead { font-size: 30px; }
+.world[data-lod="far"] .lanehead .tag { padding: 2px 12px; border-radius: 8px; }
+.world[data-lod="far"] .lanehead .note, .world[data-lod="far"] .smark { display: none; }
+
+/* 原文浮层里的原文（`.sheet` 在文件末尾）。工具调用的预览在详情浮层那一节 */
+.sheet pre {
   margin: 6px 0 0; font-family: var(--mono); font-size: 11.5px; color: var(--dim);
   white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: hidden;
 }
@@ -434,62 +522,156 @@ button.primary:has(> .ic) { gap: 6px; }
 }
 .composer textarea:disabled { background: var(--panel); color: var(--dim); cursor: not-allowed; }
 
-/* ── 信息卡：舞台上的第 0 个节点 ──
-   建单信息从顶栏搬下来之后有了自己的行宽：标题能改、问题描述能读全、基准日期是个要对得上的数。
-   它比 step 卡淡一档、左边没有序号槽——它不是一步调查，是这次调查的由来 */
-.casecard {
-  background: var(--panel); border: 1px solid var(--line); border-left: 2px solid var(--dim-2);
-  border-radius: 8px; padding: 12px 14px;
-}
-.casecard .head { display: flex; align-items: baseline; gap: 10px; }
+/* ── 信息卡：舞台上的第一个节点，也是主干那一列的开头 ──
+   建单信息从顶栏搬下来之后有了自己的行宽：标题能改、问题描述读得全、基准日期是个要对得上的数。
+   它比 step 卡淡一档、左边没有序号槽——它不是一步调查，是这次调查的由来。
+   🔴 卡上的东西一律不许改变高度（见 `.s-card` 那段红字）：问题描述在这儿只按算好的
+   行数收着，要读全文点开详情浮层。 */
+.casecard { border-left-color: var(--dim-2) !important; }
+.casecard .head { display: flex; align-items: flex-start; gap: 10px; }
 .casecard h2 {
-  margin: 0; font-size: 15.5px; font-weight: 600; line-height: 1.35;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35;
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
 }
-/* 「改标题」只在鼠标经过时露出来：标题多数时候是拿来读的，一枚常驻的按钮会让人以为它有待办 */
+/* 「改标题」只在鼠标经过时露出来：标题多数时候是拿来读的，一枚常驻的按钮会让人以为它有待办。
+   它是纯图标的例外——挤在定高卡片的标题行里，一个字都放不下（hover 时有 title 说明） */
 .casecard .rename {
   margin-left: auto; flex: none; opacity: 0;
   background: none; border: 1px solid var(--line); color: var(--dim);
-  padding: 2px 9px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 11.5px;
+  padding: 2px 7px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 11.5px;
   transition: opacity .14s ease;
 }
 .casecard:hover .rename, .casecard .rename:focus-visible { opacity: 1; }
 .casecard .titleedit {
   flex: 1; background: var(--code); color: var(--text); border: 1px solid var(--fill);
-  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 15.5px; font-weight: 600;
+  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 14.5px; font-weight: 600;
 }
-/* 问题描述是人自己写的那一段，可能很长。默认收成三行，点开在原地展开 */
 .casecard .question {
-  margin: 8px 0 0; color: var(--dim); font-size: 12.5px; white-space: pre-wrap; cursor: pointer;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  margin: 7px 0 0; color: var(--dim); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap;
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
 }
-.casecard .question.full { -webkit-line-clamp: unset; }
 .casecard .meta {
-  display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px;
-  padding-top: 9px; border-top: 1px solid var(--line-soft);
-  font-size: 11.5px; color: var(--dim);
+  display: flex; gap: 16px; flex-wrap: wrap; margin-top: 9px;
+  padding-top: 8px; border-top: 1px solid var(--line-soft);
+  font-size: 11px; color: var(--dim);
 }
-.casecard .meta code { font-family: var(--mono); color: var(--text); font-size: 11px; }
+.casecard .meta code { font-family: var(--mono); color: var(--text); font-size: 10.5px; }
 /* 「未确认」跟在基准日期后面。用暖色但不做成徽章：它要能被看见，
    而它并不是一件待办——多数时候 agent 几秒后就把它确认掉了 */
 .casecard .meta .unconfirmed { color: var(--warn); font-style: normal; margin-left: 6px; }
 
-/* ── 轨道上的一句话（agent 的判断 / 人的补充 / 系统提示）──
-   刻意比 step 窄一档、不带边框：它是旁白，不是节点。做成同样一张卡的话，一屏上会有两种
-   长得一样、而其中一种什么证据都没有的东西 */
-.say { display: flex; gap: 10px; padding: 2px 0 2px 14px; border-left: 2px solid var(--line); }
-.say .who {
-  flex: none; width: 34px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
-  color: var(--dim-2); padding-top: 3px;
+/* ── 待办层：钉在视口右上，不随画布跑 ──
+   🔴 ①档「永远置顶」在滚动条的世界里是 top，**在画布的世界里没有 top**——
+   一张能被人拖出屏幕的卡不叫置顶。所以它整个提出画布，钉在视口上。
+   详情浮层拉开时它让到浮层左边，仍然常驻：被盖住等于把这条设计取消掉。 */
+/* 🔴 宽度与右距**由 `Stage.tsx` 的 `PANEL` 注进来**（`--todo-w` / `--todo-right`）：
+   几何那侧要按它算"右边被盖住多宽"，两处各写一个数迟早对不上，而对不上时不报错 */
+.todolayer {
+  position: absolute; right: var(--todo-right); top: var(--todo-right); width: var(--todo-w); z-index: 12;
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: calc(100% - 28px); overflow-y: auto;
+  transition: right .18s cubic-bezier(.3, 0, .2, 1);
 }
-.say p { margin: 0; font-size: 12.5px; color: var(--dim); white-space: pre-wrap; max-width: 84ch; }
-/* agent 说的是判断，读的人最可能停在这儿；人自己的补充是纠偏，两者都该比系统提示亮 */
-.say.assistant { border-left-color: var(--dim-2); }
-.say.assistant p { color: var(--text); }
-.say.assistant .who { color: var(--accent); }
-.say.user { border-left-color: var(--fill); }
-.say.user p { color: var(--text); }
-.say.system p { font-size: 12px; }
+.stage.sheeting .todolayer { right: calc(var(--sheet-w) + var(--panel-gap)); }
+/* 这一栏只有 372px 宽，回填框与它旁边那一列排不下：改成上下两截，
+   顺序仍是「结果 → 执行时间 → 回填」，①档那条字段顺序（ui.md §4）没动 */
+.todolayer .pending .fill { grid-template-columns: minmax(0, 1fr); }
+.todolayer .pending .side { flex-direction: row; align-items: flex-end; gap: 8px; }
+.todolayer .pending .side label { flex: 1; }
+.todolayer .pending .side input { margin-top: 4px; }
+
+/* ── 画布 HUD：缩放、跟随、导览图 ── */
+.s-hud { position: absolute; left: 14px; bottom: 14px; z-index: 12; display: flex; align-items: flex-end; gap: 10px; }
+.zoomer {
+  display: flex; align-items: center; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.zoomer button { background: none; border: 0; color: var(--dim); width: 30px; height: 28px; cursor: pointer; font-size: 14px; }
+.zoomer button:hover { background: var(--panel-2); color: var(--text); }
+.zoomer .k {
+  min-width: 46px; text-align: center; font-size: 11px; color: var(--dim);
+  font-family: var(--mono); line-height: 28px;
+  border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+}
+.zoomer .txt { width: auto; padding: 0 10px; font-size: 11.5px; }
+/* 「跟随最新」开着时用主色描边那一档，不填色——实底整页只给「发送」（ui.md §0） */
+.zoomer .txt.on { color: var(--accent); }
+/* 导览图：画布一大，"我在整幅图的哪儿"就得有人回答 */
+.minimap {
+  position: relative; background: var(--code); border: 1px solid var(--line);
+  border-radius: 8px; overflow: hidden; cursor: pointer;
+}
+.minimap i { position: absolute; border-radius: 1px; background: var(--dim-2); }
+.minimap i.confirmed { background: var(--ok); }
+.minimap i.refuted, .minimap i.superseded { background: var(--bad); }
+.minimap i.open { background: var(--accent); }
+/* 导览图上唯一的暖色：有事找你的那一步在整幅图的哪儿 */
+.minimap i.wait { background: var(--warn); }
+.minimap .vp { position: absolute; border: 1px solid var(--accent); background: rgba(90, 158, 221, .09); pointer-events: none; }
+
+/* ── 详情浮层：右侧抽屉 ──
+   **不做居中弹窗**：读完这一步多半要接着看它的上一步、或推翻它的那一步；
+   居中的浮层把画布整个盖住，等于每看一步就要关一次。 */
+.stepsheet {
+  position: absolute; right: 0; top: 0; bottom: 0; width: var(--sheet-w); z-index: 14;
+  background: var(--panel); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; box-shadow: -14px 0 34px rgba(0, 0, 0, .34);
+}
+.sh-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.sh-head .ord { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.sh-head .kind { padding: 0 6px; border-radius: 4px; background: var(--panel-2); font-size: 11px; color: var(--dim); }
+.sh-head .x {
+  margin-left: auto; background: none; border: 1px solid var(--line); color: var(--dim);
+  width: 24px; height: 24px; border-radius: 6px; cursor: pointer; line-height: 1;
+}
+.sh-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+.sh-sec { margin-bottom: 18px; }
+.sh-sec > h4 {
+  margin: 0 0 7px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim-2); font-weight: 500;
+}
+.sh-lead { margin: 0; font-size: 14px; line-height: 1.6; }
+.sh-lead.struck { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 50%, transparent); }
+.sh-quote { margin: 0; font-size: 13px; color: var(--text); border-left: 2px solid var(--line); padding-left: 10px; line-height: 1.6; white-space: pre-wrap; }
+.sh-quote .conf { display: block; margin-top: 5px; font-size: 11px; color: var(--dim); font-family: var(--mono); }
+.sh-rel { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--dim); }
+.sh-rel code { font-family: var(--mono); color: var(--text); font-size: 11px; margin-left: 4px; }
+.sh-rel .bad { color: var(--bad); }
+.sh-rel .unconfirmed { color: var(--warn); font-style: normal; margin-left: 6px; }
+.sh-rel .jump { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.sh-rel .stoplane {
+  background: none; border: 1px solid var(--line); color: var(--dim);
+  padding: 2px 9px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 11.5px;
+}
+.sh-rel .stoplane:hover { color: var(--bad); border-color: var(--bad); }
+.sh-evi { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.sh-evi li {
+  display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; align-items: baseline;
+  padding: 6px 7px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+}
+.sh-evi li:hover { background: var(--panel-2); }
+.sh-evi .when { font-family: var(--mono); color: var(--accent); font-size: 11.5px; }
+.sh-evi .who { font-size: 11px; color: var(--dim); margin-right: 6px; }
+.sh-evi .anc { font-family: var(--mono); font-size: 10.5px; color: var(--dim-2); margin-left: 6px; }
+.sh-call { margin-top: 6px; background: var(--panel-2); border-radius: 7px; padding: 8px 10px; cursor: pointer; }
+/* 被拒 / 失败的调用留着，压暗但不删：走过的死路也是排查过程的一部分 */
+.sh-call.denied, .sh-call.failed, .sh-call.abandoned { opacity: .7; }
+.sh-call .ch { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--dim); }
+.sh-call .ch b { font-family: var(--mono); color: var(--text); font-weight: 500; }
+.sh-call .origin.operator { color: var(--warn); }
+.sh-call .gated { color: var(--warn); font-size: 11px; }
+.sh-call .cs.failed { color: var(--bad); }
+.sh-call .lines { margin-left: auto; }
+.sh-call pre {
+  margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--dim);
+  white-space: pre-wrap; word-break: break-all; max-height: 88px; overflow: hidden;
+}
+.sh-foot { flex: 0 0 auto; display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.sh-foot button {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+}
+.sh-foot button:disabled { opacity: .4; cursor: default; }
 
 /* ── 底部状态栏（参照 duetlens 的 `.rev-statusbar`）──
    这一条只说**当前这一轮**：跑没跑、用什么跑、上下文还剩多少，外加两个与"这一轮"同域的手势
@@ -754,7 +936,9 @@ button.primary:has(> .ic) { gap: 6px; }
 /* 🔴 **行与行之间不能有间距**：线是每行自己画的一段，`.track` 那条通用规则给的 `gap`
    在这儿就是四段没人画的空白，轨道会断成五截。行内 11px 的上下留白已经够开，
    而轨道本来就该是密的那一档（ui.md §1）。改这儿要连着上面 `.track` 的 gap 一起想。 */
-.home .track { margin-top: 6px; gap: 0; }
+/* 首页那条轨道是它自己的东西，与工作区的画布无关（同名只是因为都是"一条时间轴"）。
+   工作区那侧改成画布之后这里不再有共用的父规则，所以这一条要自己立得住 */
+.home .track { display: flex; flex-direction: column; margin-top: 6px; }
 .tr {
   position: relative; display: grid;
   /* 两行写死而不是让它隐式生成：隐式网格里 `-1` 解析回第 1 根线，

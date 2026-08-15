@@ -1,32 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CaseMeta } from '../shared/ipc.js';
+import type { StageBox } from './track.js';
 import { Icon } from './Icon.js';
 
 /**
- * 信息卡：舞台上的第一个节点。
+ * 信息卡：舞台上的第一个节点，也是主干那一列的开头。
  *
  * **建单信息不在顶栏。** 顶栏那一条是定高的整幅一格，横向就那么宽，标题、基准日期、
  * 工作区、模型挤进去之后每一项都只剩几个字，而它们的读法各不相同（标题要能改、
- * 问题描述要能读全、基准日期是个要对得上的数）。搬到舞台上之后它们有了自己的行宽，
- * 顶栏也就腾出来只说"这是哪个工作区"。
+ * 问题描述要能读全、基准日期是个要对得上的数）。搬到舞台上之后它们有了自己的行宽。
  *
  * 它同时是**每次会话开场那段话的唯一出处**：轨道不再把开场白当成一条对话织进去
  * （`track.ts` 的 `weaveChat`），因为那段话逐字就是这张卡。
+ *
+ * 🔴 **卡上的东西一律不许改变高度。** 舞台是画布，位置是算出来的（`stage.ts`），
+ * 高度一变就等于把它下面每一张卡都推走一截。所以问题描述在这儿只按估好的行数收着，
+ * 要读全文点开详情浮层——改标题那一档不改高度，所以它照旧在卡上。
  */
 export function CaseCard({
+  box,
   meta,
   onRename,
+  onOpen,
 }: {
+  box: Extract<StageBox, { kind: 'case' }>;
   meta: CaseMeta;
   /** 回执是改没改成；没改成时把编辑框留着，别把人刚敲的字吞掉。 */
   onRename: (title: string) => Promise<boolean>;
+  onOpen: () => void;
 }) {
   /**
    * 编辑中的那份文本。**编辑期间不认快照**：快照 60ms 一轮，而 agent 起的标题可能正好
    * 在这几秒里落地——认快照的话，人正打着字，输入框里的内容被换掉了。
    */
   const [draft, setDraft] = useState<string | null>(null);
-  const [full, setFull] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -43,14 +50,21 @@ export function CaseCard({
   };
 
   return (
-    <section className="casecard">
+    <section
+      className="s-card casecard"
+      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
+      onClick={(e) => {
+        if (draft === null && !(e.target as HTMLElement).closest('button,input')) onOpen();
+      }}
+    >
       <div className="head">
         {draft === null ? (
           <>
-            <h2 title={meta.title}>{meta.title}</h2>
+            <h2 title={meta.title} style={{ WebkitLineClamp: box.titleLines } as React.CSSProperties}>
+              {meta.title}
+            </h2>
             <button className="rename" title="改标题" onClick={() => setDraft(meta.title)}>
               <Icon name="pencil" size={12} />
-              改标题
             </button>
           </>
         ) : (
@@ -69,8 +83,7 @@ export function CaseCard({
         )}
       </div>
 
-      {/* 问题描述是人自己写的那段，可能很长。默认收成几行，展开只在这一张卡里发生 */}
-      <p className={`question ${full ? 'full' : ''}`} onClick={() => setFull(!full)} title="点一下展开 / 收起">
+      <p className="question" style={{ WebkitLineClamp: box.questionLines } as React.CSSProperties}>
         {meta.question}
       </p>
 

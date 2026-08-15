@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>工作区舞台 · 画布版 v2 — Inquestry</title>
+<style>
+/* 色板一个字没动：四阶冷灰蓝 + 三个语义色（ui.md §5）。
+   这份稿新增的只有画布自己需要的三个：世界底、点阵、连线。 */
+:root{
+  --code:#0E1317; --bg:#141A1F; --panel:#1A2128; --panel-2:#212A32; --line:#273038;
+  --text:#DFE5EC; --dim:#8A96A4;
+  --ok:#5A9EDD; --accent:var(--ok); --bad:#C9564C; --warn:#E0A94A;
+  --fill:#2A6598; --on-fill:#F2F8FD; --on-warn:#1A1206;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --line-soft:#1F2831; --dim-2:#6E7A87; --tint:#18222C;
+  --world:#10161B;
+  --wire:#33404C;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);overflow:hidden;
+  font:13.5px/1.6 -apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;
+}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid rgba(90,158,221,.55);outline-offset:2px;border-radius:4px}
+
+/* ══ mockup 自己的控制条，不属于方案 ══ */
+.mk{
+  position:fixed;left:0;right:0;top:0;height:34px;z-index:60;
+  display:flex;align-items:center;gap:13px;padding:0 12px;
+  background:#0B0F13;border-bottom:1px solid #1C242C;font-size:11.5px;color:var(--dim-2);
+}
+.mk b{color:var(--dim);font-weight:600}
+.mk button{background:none;border:1px solid #232C35;color:var(--dim);padding:2px 9px;border-radius:5px;cursor:pointer;font-size:11.5px}
+.mk button:hover{color:var(--text);border-color:var(--fill)}
+.mk .sp{flex:1}
+.mk .note{color:#4E5A66}
+
+/* ══ 外壳：与现有实现同构，只为让舞台落在真实的位置上 ══ */
+.app{
+  position:fixed;left:0;right:0;top:34px;bottom:0;
+  display:grid;grid-template-columns:52px minmax(0,1fr);grid-template-rows:46px minmax(0,1fr);
+}
+.rail{grid-column:1;grid-row:1/-1;position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;padding:56px 0 10px;background:var(--panel)}
+.rail::after{content:'';position:absolute;top:46px;right:0;bottom:0;width:1px;background:var(--line)}
+.rail::before{content:'';position:absolute;left:0;right:0;top:45px;height:1px;background:var(--line)}
+.rb{width:36px;height:36px;border:0;border-radius:9px;background:transparent;color:var(--dim);display:grid;place-items:center;cursor:pointer;position:relative}
+.rb.on{background:var(--panel-2);color:var(--accent)}
+.rb.on::before{content:'';position:absolute;left:-8px;top:8px;bottom:8px;width:2.5px;border-radius:0 3px 3px 0;background:var(--accent)}
+.rb .dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--warn);border:1.5px solid var(--panel)}
+
+.head{grid-column:1/-1;grid-row:1;z-index:2;display:flex;align-items:center;gap:12px;height:46px;padding:0 16px 0 108px;background:var(--panel);border-bottom:1px solid var(--line)}
+.head .root{display:flex;align-items:baseline;gap:7px;min-width:0}
+.head .root code{font-family:var(--mono);font-size:12.5px}
+.head .root em{font-style:normal;font-family:var(--mono);font-size:11.5px;color:var(--dim-2)}
+.head .acts{margin-left:auto;display:flex;gap:8px}
+.head .acts button{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.head .acts button.other{background:none;border-color:var(--warn);color:var(--warn);font-weight:600}
+
+.body{grid-column:2;grid-row:2;min-height:0;display:flex;flex-direction:column}
+
+/* ══ 舞台 = 画布 ══
+   `.canvas` 是视口（不滚动），`.world` 是被 transform 的那一层。
+   卡片与连线**在同一层里共用世界坐标**——分两层各自缩放的话，线与卡必然错位。 */
+.canvas{flex:1;min-height:0;position:relative;overflow:hidden;background:var(--world);cursor:grab;touch-action:none}
+.canvas.grabbing{cursor:grabbing}
+.canvas::before{
+  content:'';position:absolute;inset:0;pointer-events:none;opacity:.55;
+  background-image:radial-gradient(circle at 1px 1px, #263039 1px, transparent 0);
+  background-size:var(--dot,26px) var(--dot,26px);background-position:var(--dotx,0) var(--doty,0);
+}
+.world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.wires{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.wires path{fill:none}
+/* 连线只有三种形，各自只说一件事：
+   实线 = 同一条探索线接着往下 · 虚线 = 跨列（开出去 / 收敛回来）· 曲线 = 推翻 */
+.wires .w-flow{stroke:var(--wire);stroke-width:1.5}
+.wires .w-open{stroke:var(--wire);stroke-width:1.5;stroke-dasharray:4 4}
+.wires .w-join{stroke:var(--wire);stroke-width:1.5;stroke-dasharray:4 4;opacity:.85}
+.wires .w-refute{stroke:var(--bad);stroke-width:1.6;opacity:.82}
+.wires marker path{fill:var(--wire);stroke:none}
+.wires marker.bad path{fill:var(--bad)}
+
+/* ══ 列头：这一列是谁在查 ══
+   列成了语义轴（主干 / 子 agent 支线 / 人工开的方向），那"这一列是什么"就必须写在列头上——
+   光靠缩进和连线，读的人得先追一遍线才知道自己在读谁的推理。 */
+.lanehead{
+  position:absolute;display:flex;align-items:center;gap:7px;
+  font-size:11px;color:var(--dim-2);white-space:nowrap;
+}
+.lanehead .tag{padding:1px 8px;border-radius:4px;border:1px solid var(--line);background:var(--panel)}
+.lanehead.agent .tag{color:var(--dim)}
+.lanehead.human .tag{color:var(--accent);border-color:var(--fill)}
+.lanehead .note{opacity:.8}
+
+/* ══ 卡片 ══
+   卡面定死五样：序号 · 类型 · 状态 · 假设句 · 结论。证据与工具调用一律进详情浮层。 */
+.card{
+  position:absolute;background:var(--panel);border:1px solid var(--line);
+  border-left:3px solid var(--line);border-radius:10px;padding:10px 12px 20px;overflow:hidden;
+  cursor:pointer;transition:border-color .14s ease,background .14s ease;
+}
+.card:hover{border-color:var(--dim-2)}
+/* 卡面上没有计数行之后，"这张卡点得开"得另有人说。放右下角、只在 hover 时出现：
+   常驻一行小字会让每张卡都像挂着一件待办 */
+.card::after{
+  content:'详情 →';position:absolute;right:11px;bottom:5px;
+  font-size:10.5px;color:var(--dim-2);opacity:0;transition:opacity .14s ease;
+}
+.card:hover::after{opacity:1}
+/* 选中不填色：边框 + 极淡底（填色会和语义色打架，ui.md §5） */
+.card.sel{border-color:var(--accent);background:var(--tint);box-shadow:0 0 0 1px var(--fill)}
+.card.confirmed{border-left-color:var(--ok)}
+.card.refuted,.card.superseded{border-left-color:var(--bad);opacity:.86}
+.card.inconclusive{border-left-color:var(--warn)}
+.card.open{border-left-color:var(--accent)}
+.card.converged{border-left-color:var(--line)}
+.card.unclassified{border-style:dashed}
+/* ①档正等着这一步：右上角那张卡说得出"有事找你"，说不出"卡在哪一步" */
+.card.waiting{border-color:#45381F}
+
+.c-head{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);min-height:17px}
+.c-head .ord{font-family:var(--mono)}
+.c-head .kind{padding:0 6px;border-radius:4px;background:var(--panel-2);font-size:11px}
+.c-head .kind.impact{color:var(--accent)}
+.c-head .kind.leftover{color:var(--warn)}
+.c-head .st{margin-left:auto;font-size:11.5px;white-space:nowrap}
+.st.confirmed{color:var(--ok)}
+.st.refuted,.st.superseded{color:var(--bad)}
+.st.inconclusive{color:var(--warn)}
+.st.open{color:var(--accent)}
+.st.converged{color:var(--dim)}
+/* 进行中的呼吸点，全屏仅有的两处动效之一 */
+.st.open .pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:5px;animation:br 2.4s ease-in-out infinite}
+@keyframes br{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* 假设句是这张卡上唯一"要读"的内容，字号不能再往下压（ui.md §5） */
+.c-dir{margin:7px 0 0;font-size:13px;line-height:1.5;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.card.refuted .c-dir,.card.superseded .c-dir{text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--bad) 50%,transparent)}
+.c-vd{margin:6px 0 0;font-size:12px;color:var(--dim);line-height:1.5;border-left:2px solid var(--line);padding-left:8px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.c-refbadge{color:var(--bad);font-size:11px}
+.c-wait{color:var(--warn);font-size:11px}
+
+/* 信息卡：这次调查的由来，不是一步调查——没有序号槽，左边线中性 */
+.card.case{border-left-color:var(--dim-2)}
+.card.case h2{margin:0;font-size:15px;font-weight:600;line-height:1.35}
+.card.case .q{margin:7px 0 0;font-size:12.5px;color:var(--dim);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.card.case .meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--dim)}
+.card.case .meta code{font-family:var(--mono);color:var(--text);font-size:10.5px}
+.card.case .meta .unc{color:var(--warn);font-style:normal;margin-left:5px}
+
+/* 旁白：agent 的判断 / 人的补充，落在主干左侧那条槽里。
+   刻意不做成卡——一屏上不该有两种长得一样、而其中一种什么证据都没有的东西 */
+.say{position:absolute;padding:2px 0 2px 12px;border-left:2px solid var(--line);font-size:12px;color:var(--dim)}
+.say .who{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim-2);display:block;margin-bottom:1px}
+.say p{margin:0;line-height:1.55;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.say.assistant{border-left-color:var(--dim-2)}
+.say.assistant p{color:var(--text)}
+.say.assistant .who{color:var(--accent)}
+.say.user{border-left-color:var(--fill)}
+.say.user p{color:var(--text)}
+
+/* ══ 远看时的降级（LOD）══
+   拉远之后正文是一团读不出来的灰。与其糊在那儿，不如**换一种东西给他看**：
+   远档把卡片退成一块色标 + 大号序号 + 状态，字号按缩放倒着放大。
+   🔴 位置与尺寸一个都不许变：变了就是重排。
+   ⚠️ 只分两档，不设中间档——中间档（藏一段、留框）把卡片掏成一个空盒子。 */
+.world[data-lod="far"] .c-vd,.world[data-lod="far"] .c-dir,
+.world[data-lod="far"] .card.case .q,.world[data-lod="far"] .card.case .meta,
+.world[data-lod="far"] .c-head .kind,.world[data-lod="far"] .say p,
+.world[data-lod="far"] .card::after{display:none}
+.world[data-lod="far"] .card{display:flex;align-items:center;gap:14px;padding:0 18px}
+.world[data-lod="far"] .c-head{width:100%;font-size:30px}
+.world[data-lod="far"] .c-head .ord{font-size:34px;color:var(--text)}
+.world[data-lod="far"] .c-head .st{font-size:24px}
+.world[data-lod="far"] .c-head .st .pulse{width:14px;height:14px;margin-right:10px}
+/* 「被推翻」与「等你回填」跟着放大：拉远正是为了一眼看出这两件事落在哪一步 */
+.world[data-lod="far"] .c-refbadge,.world[data-lod="far"] .c-wait{font-size:20px}
+.world[data-lod="far"] .card.case h2{font-size:30px;-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+.world[data-lod="far"] .say .who{font-size:22px}
+.world[data-lod="far"] .lanehead{font-size:20px}
+.world[data-lod="far"] .lanehead .note{display:none}
+
+/* ══ 待办层：钉在视口右上，不随画布跑 ══
+   ①档「永远置顶」在滚动条的世界里是 top，在画布的世界里没有 top——
+   一张能被人拖出屏幕的卡不叫置顶。 */
+.todos{position:absolute;right:14px;top:14px;width:330px;display:flex;flex-direction:column;gap:10px;z-index:22;transition:right .18s cubic-bezier(.3,0,.2,1)}
+/* 详情抽屉一拉开就正好压在待办层上，而①档是「永远等下去」的那一档——
+   被盖住等于把这条设计取消掉。所以抽屉开着时待办整体让到它左边，仍然常驻 */
+.canvas.dr .todos{right:466px}
+.ask{background:#211A10;border:1px solid #45381F;border-radius:10px;padding:11px 12px}
+.ask .h{display:flex;align-items:center;gap:8px;font-size:11.5px}
+.ask .tag{background:var(--warn);color:var(--on-warn);padding:1px 8px;border-radius:4px;font-weight:600;font-size:11px}
+.ask .eng{color:var(--dim);font-family:var(--mono)}
+.ask .stmt{margin:8px 0 0;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-family:var(--mono);font-size:11.5px;color:var(--text);white-space:pre-wrap}
+.ask .why{margin:7px 0 0;font-size:12px;color:var(--dim);line-height:1.5}
+.ask .row{display:flex;gap:8px;margin-top:9px}
+.ask .row button{flex:1;background:var(--warn);border:0;color:var(--on-warn);font-weight:600;padding:6px 0;border-radius:6px;cursor:pointer;font-size:12px}
+.ask .row button.ghost{flex:0 0 auto;background:none;border:1px solid var(--line);color:var(--dim);font-weight:400;padding:6px 11px}
+
+.gate{background:var(--panel);border:1px solid #45381F;border-radius:10px;padding:11px 12px}
+.gate .h{display:flex;align-items:center;gap:8px;font-size:11.5px}
+.gate .tag{border:1px solid var(--warn);color:var(--warn);padding:0 8px;border-radius:4px;font-size:11px}
+.gate .tool{font-family:var(--mono);color:var(--text)}
+.gate .clock{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--dim);font-size:11px}
+.gate .ring circle{fill:none;stroke:var(--line);stroke-width:2}
+.gate .ring .arc{stroke:var(--warn);transform:rotate(-90deg);transform-origin:50%;animation:tick 120s linear forwards}
+@keyframes tick{from{stroke-dashoffset:0}to{stroke-dashoffset:50.3}}
+.gate .cmd{margin:8px 0 0;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-family:var(--mono);font-size:11px;color:var(--dim);white-space:pre-wrap;word-break:break-all}
+.gate .row{display:flex;gap:8px;margin-top:9px;justify-content:flex-end}
+.gate .row button{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.gate .row button.bad{border-color:var(--bad);color:var(--bad)}
+.locate{background:none;border:0;color:var(--dim-2);font-size:11px;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
+.locate:hover{color:var(--accent)}
+
+/* ══ 画布 HUD ══ */
+.hud{position:absolute;left:14px;bottom:14px;display:flex;align-items:flex-end;gap:10px;z-index:12}
+.zoom{display:flex;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.zoom button{background:none;border:0;color:var(--dim);width:30px;height:28px;cursor:pointer;font-size:14px}
+.zoom button:hover{background:var(--panel-2);color:var(--text)}
+.zoom .k{min-width:46px;text-align:center;font-size:11px;color:var(--dim);font-family:var(--mono);border-left:1px solid var(--line);border-right:1px solid var(--line);line-height:28px}
+.zoom .txt{width:auto;padding:0 10px;font-size:11.5px}
+.zoom .txt.on{color:var(--accent)}
+.mini{position:relative;width:186px;height:124px;background:var(--code);border:1px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer}
+.mini i{position:absolute;border-radius:1px;background:var(--dim-2)}
+.mini i.confirmed{background:var(--ok)}
+.mini i.refuted,.mini i.superseded{background:var(--bad)}
+.mini i.open{background:var(--accent)}
+.mini i.wait{background:var(--warn)}
+.mini .vp{position:absolute;border:1px solid var(--accent);background:rgba(90,158,221,.09);pointer-events:none}
+.hint{position:absolute;left:14px;top:14px;z-index:11;font-size:11px;color:#4E5A66;line-height:1.75;pointer-events:none}
+.hint b{color:var(--dim-2);font-weight:500;font-family:var(--mono)}
+
+/* ══ 详情浮层：右侧抽屉 ══
+   不做居中弹窗：读完这一步多半要看它的上一步、或推翻它的那一步；
+   居中浮层把画布整个盖住，等于每看一步都要关一次。 */
+.drawer{
+  position:absolute;right:0;top:0;bottom:0;width:452px;z-index:20;
+  background:var(--panel);border-left:1px solid var(--line);
+  display:flex;flex-direction:column;transform:translateX(100%);
+  transition:transform .18s cubic-bezier(.3,0,.2,1);box-shadow:-14px 0 34px rgba(0,0,0,.34);
+}
+.drawer.on{transform:none}
+.d-head{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.d-head .ord{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.d-head .kind{padding:0 6px;border-radius:4px;background:var(--panel-2);font-size:11px;color:var(--dim)}
+.d-head .x{margin-left:auto;background:none;border:1px solid var(--line);color:var(--dim);width:24px;height:24px;border-radius:6px;cursor:pointer;line-height:1}
+.d-body{flex:1;min-height:0;overflow-y:auto;padding:14px}
+.d-sec{margin-bottom:18px}
+.d-sec>h4{margin:0 0 7px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim-2);font-weight:500}
+.d-dir{margin:0;font-size:14px;line-height:1.6}
+.d-vd{margin:0;font-size:13px;color:var(--text);border-left:2px solid var(--line);padding-left:10px;line-height:1.6}
+.d-vd .conf{display:block;margin-top:5px;font-size:11px;color:var(--dim);font-family:var(--mono)}
+.d-rel{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--dim)}
+.d-rel .bad{color:var(--bad)}
+.d-rel button{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline;text-underline-offset:2px}
+.evi{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
+.evi li{display:grid;grid-template-columns:82px 1fr;gap:8px;padding:6px 7px;border-radius:6px;cursor:pointer;font-size:12.5px;align-items:baseline}
+.evi li:hover{background:var(--panel-2)}
+.evi .when{font-family:var(--mono);color:var(--accent);font-size:11.5px}
+.evi .who{font-size:11px;color:var(--dim);margin-right:6px}
+.evi .anc{font-family:var(--mono);font-size:10.5px;color:var(--dim-2);margin-left:6px}
+.call{margin-top:6px;background:var(--panel-2);border-radius:7px;padding:8px 10px;cursor:pointer}
+.call .ch{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--dim)}
+.call .ch b{font-family:var(--mono);color:var(--text);font-weight:500}
+.call .ch .sp{flex:1}
+.call pre{margin:6px 0 0;font-family:var(--mono);font-size:11px;color:var(--dim);white-space:pre-wrap;word-break:break-all;max-height:88px;overflow:hidden}
+.d-foot{flex:0 0 auto;display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line)}
+.d-foot button{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:6px 12px;border-radius:7px;cursor:pointer;font-size:12.5px}
+.d-foot button:disabled{opacity:.4;cursor:default}
+.d-foot .sp{flex:1}
+
+/* ══ 底部：输入框 + 状态栏，一个字没动 ══ */
+.dock{flex:0 0 auto;border-top:1px solid var(--line);background:var(--panel)}
+.composer{display:flex;gap:10px;align-items:flex-end;padding:9px 18px}
+.composer textarea{flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 12px;resize:none;height:48px;font:inherit}
+.composer button{background:var(--fill);color:var(--on-fill);border:0;font-weight:600;padding:8px 16px;border-radius:7px;cursor:pointer}
+.composer button small{opacity:.6;font-weight:400}
+.runbar{display:flex;align-items:center;height:28px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--dim)}
+.runbar .state{display:flex;align-items:center;gap:7px;height:100%;padding:0 11px;color:var(--accent);background:#1F3350;box-shadow:inset -1px 0 0 var(--line)}
+.runbar .state .pulse{width:6px;height:6px;border-radius:50%;background:currentColor;animation:br 2s infinite}
+.runbar .it{display:flex;align-items:center;gap:6px;padding:0 10px;white-space:nowrap}
+.runbar .mono{font-family:var(--mono);font-size:11px;color:var(--text)}
+.runbar .lanes{color:var(--accent)}
+.runbar .todo{color:var(--warn);font-weight:600}
+.runbar .sep{width:1px;height:13px;background:var(--line)}
+.runbar .sp{flex:1}
+.modesw{display:flex;margin-right:8px}
+.modesw button{background:none;border:1px solid var(--line);color:var(--dim-2);padding:2px 11px;cursor:pointer;font-size:11.5px}
+.modesw button:first-child{border-radius:5px 0 0 5px;border-right:0}
+.modesw button:last-child{border-radius:0 5px 5px 0}
+.modesw button.on{color:var(--accent);border-color:var(--fill);background:var(--tint)}
+</style>
+</head>
+<body>
+
+<!-- mockup 自己的控制条，不属于方案。五个选择都已定下，这里只剩两个"让它动起来"的按钮 -->
+<div class="mk">
+  <b>mockup 控制条</b>
+  <span class="note">列 = 一条探索线 · 行 = 到达顺序 · 坐标只在出生时算一次</span>
+  <div class="sp"></div>
+  <button id="t-step">+ 主干追加一步</button>
+  <button id="t-lane">+ 人工开一条新探索列</button>
+  <button id="t-reset">重置</button>
+</div>
+
+<div class="app">
+  <nav class="rail">
+    <button class="rb"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></button>
+    <button class="rb on"><span class="dot"></span><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></button>
+    <button class="rb"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+    <button class="rb"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></button>
+  </nav>
+
+  <header class="head">
+    <div class="root"><code>order-api</code><em>~/Projects/order-api</em></div>
+    <div class="acts"><button class="other">别的调查 1</button><button>报告</button><button>新调查</button></div>
+  </header>
+
+  <div class="body">
+    <div class="canvas" id="canvas">
+      <div class="world" id="world">
+        <svg class="wires" id="wires"><defs>
+          <marker id="tip" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L6 3 L0 6 z"/></marker>
+          <marker id="tip-bad" class="bad" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L6 3 L0 6 z"/></marker>
+        </defs></svg>
+      </div>
+
+      <div class="hint">
+        <b>滚轮</b> 平移 · <b>⌘/ctrl+滚轮</b> 缩放 · <b>拖背景</b> 平移<br>
+        <b>点卡片</b> 出详情 · <b>双击背景</b> 适应全图 · <b>拉远</b> 自动退成图例
+      </div>
+
+      <div class="todos" id="todos">
+        <article class="ask">
+          <div class="h"><span class="tag">等你</span><span class="eng">mysql · prod-读库</span>
+            <button class="locate" style="margin-left:auto" data-goto="s5">定位到 #5</button></div>
+          <pre class="stmt">SELECT count(*) FROM t_order
+ WHERE created_at &gt; '2026-03-11'
+ GROUP BY cart_key HAVING count(*) &gt; 1;</pre>
+          <p class="why">影响面要的是"多少订单、多长窗口"——这条只有生产读库跑得了。</p>
+          <div class="row"><button>粘贴结果并回填 ⌘↵</button><button class="ghost">改语句</button></div>
+        </article>
+        <article class="gate">
+          <div class="h"><span class="tag">放行？</span><span class="tool">Bash</span>
+            <span class="clock"><svg class="ring" width="15" height="15" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/><circle class="arc" cx="10" cy="10" r="8" stroke-dasharray="50.3"/></svg>1:38</span></div>
+          <pre class="cmd">kubectl -n prod logs deploy/order-api --since=30m | grep u1001</pre>
+          <div class="row"><button class="bad">拒绝并留话 D</button><button>改写 E</button><button>放行 A</button></div>
+        </article>
+      </div>
+
+      <div class="hud">
+        <div class="zoom">
+          <button id="z-out">−</button><span class="k" id="z-k">100%</span><button id="z-in">+</button>
+          <button class="txt" id="z-fit">适应</button>
+          <button class="txt on" id="z-follow">跟随最新</button>
+        </div>
+        <div class="mini" id="mini"><div class="vp" id="vp"></div></div>
+      </div>
+
+      <aside class="drawer" id="drawer">
+        <div class="d-head">
+          <span class="ord" id="d-ord">#3</span><span class="kind" id="d-kind">排查</span>
+          <span class="st" id="d-st">已证实</span><button class="x" id="d-x">×</button>
+        </div>
+        <div class="d-body" id="d-body"></div>
+        <div class="d-foot">
+          <button id="d-prev">← 上一步</button><button id="d-next">下一步 →</button>
+          <span class="sp"></span><button>就这一步补充</button>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="dock">
+      <div class="composer">
+        <textarea placeholder="补充点信息..."></textarea>
+        <button>发送 <small>⌘↵</small></button>
+      </div>
+      <div class="runbar">
+        <div class="state"><span class="pulse"></span>进行中</div>
+        <div class="it">claude <span class="mono">opus[1m]</span> · high</div>
+        <div class="sep"></div>
+        <div class="it lanes">支线 1</div>
+        <div class="it todo">等你 2</div>
+        <div class="sep"></div>
+        <div class="it">上下文 <span class="mono">63.4k / 200k</span> · 32%</div>
+        <div class="sp"></div>
+        <div class="it"><span class="modesw"><button>自动</button><button class="on">接管</button></span></div>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   布局：**列是语义轴，不是排版手段**
+
+   - 列 = 一条探索线：主干 / 子 agent 支线 / 人工开出来的新方向。一列自己往下长。
+   - 行 = 到达顺序。坐标只在节点出生时算一次，此后永不重算。
+   - 新的探索线永远向右开一列，**列号不回收**——回收会让同一列上下两张卡分属两条
+     互不相干的推理，而"顺着一列往下读"正是这个轴唯一的读法。代价是列会越来越多，
+     而这正好是画布存在的理由。
+
+   D23（主干永不重排）因此原样成立：新节点每几秒钻出来一个，正读着的那张卡不许动。
+   控制条上那两枚按钮就是拿来验这一条的——追加一步、开一列，已落笔的一张都不动。
+
+   跨列只有两种关系，都用虚线：**开出去**（父卡右沿 → 新列首卡左沿）与
+   **收敛回来**（子列末卡左沿 → 主干那一步右沿）。收敛的那一步带 `after`：
+   它是在子列收口之后才出生的，所以它的 y 不该早于子列末卡的底边。
+   ══════════════════════════════════════════════════════════════════ */
+
+const W = 336, SAYW = 292, SAYGAP = 64, COLGAP = 96, VGAP = 24, PADX = 420, PADY = 52;
+
+/** 列 = 探索线。`col` 在开列那一刻分配，之后不动。 */
+const LANES = [
+  { id:'L0', kind:'trunk', col:0, tag:'主干' },
+  { id:'L1', kind:'agent', col:1, tag:'支线 · 子 agent', note:'lane_a · 已收口' },
+  { id:'L2', kind:'human', col:2, tag:'你开的方向', note:'12:54 · 已收敛回 #4' },
+];
+
+const NODES = [
+  { id:'case', type:'case', lane:'L0', title:'订单提交产生了两条重复记录',
+    q:'线上反馈：12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。',
+    root:'~/Projects/order-api', date:'2026-08-15', unconfirmed:true },
+
+  { id:'y1', type:'say', lane:'L0', role:'user', lines:2,
+    text:'线上反馈：12:03 前后用户 u1001 只提交了一次订单，系统里出现了两条重复记录。' },
+
+  { id:'s0', type:'step', lane:'L0', ord:'#0', kind:'未归类', kcls:'unclassified', status:'converged', stLabel:'已收口',
+    dir:'（未归类：agent 在声明方向之前就先查了一次）',
+    callsList:[['Grep','order-api 里 cart_key 的引用','14 行'],['Read','src/order/submit.ts','120 行']] },
+
+  { id:'s1', type:'step', lane:'L0', ord:'#1', kind:'排查', status:'refuted', stLabel:'已推翻',
+    dir:'怀疑是前端重复提交：同一个按钮被点了两次，发出两个独立请求',
+    vd:'网关日志里 u1001 在 12:03 只有一个客户端会话，两条记录的 req_id 出自同一条 TCP 连接。前端没有重复发。',
+    evidence:[
+      ['12:03:01.220','gateway','u1001 建立会话，client_id 全程只有一个','L42'],
+      ['12:03:01.244','gateway','POST /v1/order req_id=a91f 进入','L44'],
+      ['12:03:03.384','gateway','req_id=a91f 上游超时 2140ms','L61'],
+    ],
+    callsList:[['cls_search','service:gateway AND uid:u1001','412 行'],['cls_search','req_id:a91f','86 行']] },
+
+  { id:'y2', type:'say', lane:'L0', role:'assistant', lines:3,
+    text:'两条记录来自两个 req_id，第一条超时了 2140ms。方向改成「幂等键为什么没拦住第二次」。' },
+
+  { id:'s2', type:'step', lane:'L0', ord:'#2', kind:'排查', status:'confirmed', stLabel:'已证实', conf:0.9,
+    dir:'网关在第一次请求超时后自动重试了一次，两条订单出自同一次点击',
+    vd:'gateway 的 retry_of 字段指向 a91f，重试请求 b7c2 在 12:03:03 发出，两条订单的 cart_key 完全相同。',
+    evidence:[
+      ['12:03:03.390','gateway','req_id=b7c2 retry_of=a91f 发出','L63'],
+      ['12:03:03.512','order-api','order_88213 写入成功 cart_key=ck_7f21','L118'],
+      ['12:03:03.559','order-api','order_88214 写入成功 cart_key=ck_7f21','L131'],
+    ],
+    callsList:[['cls_search','service:order-api AND cart_key:ck_7f21','96 行']] },
+
+  // ── 子 agent 支线：它自己是一列，能往下长第二步 ──
+  { id:'a1', type:'step', lane:'L1', parent:'s2', ord:'#2.a', kind:'排查', status:'converged', stLabel:'已收口',
+    dir:'（支线：子 agent 自己的调用都记在这里，方向由主线在收敛回来时给）',
+    vd:'近 30 分钟 order-api 共 41 次上游超时，其中 12 次触发了网关重试，全部落在 12:00–12:10。',
+    evidence:[['12:00–12:10','order-api','超时 41 次，重试 12 次','—']],
+    callsList:[['cls_search','service:order-api AND level:WARN','1204 行']] },
+
+  { id:'a2', type:'step', lane:'L1', ord:'#2.b', kind:'排查', status:'converged', stLabel:'已收口',
+    dir:'（支线第二步：顺着超时往下看连接池）',
+    vd:'wait_count 在 12:04 冲到 233，池子确实被打满过——但它解释的是超时，不是重复写入。',
+    evidence:[['12:04:10','order-api','连接池 wait_count 峰值 233','L88']],
+    callsList:[['cls_sql','count by minute','18 行']] },
+
+  { id:'s3', type:'step', lane:'L0', ord:'#3', kind:'排查', status:'superseded', stLabel:'被推翻', refutedBy:'#3.b',
+    dir:'幂等键 cart_key 上应该有唯一索引，第二次写入本该被数据库自己挡住',
+    vd:'从 ORM 的 model 定义看 cart_key 声明了 unique=True，所以写入应当报冲突。',
+    evidence:[['—','codebase','models/order.py:41 cart_key = Column(..., unique=True)','L41']],
+    callsList:[['Grep','unique=True src/models','9 行'],['Read','models/order.py','60 行']] },
+
+  { id:'y3', type:'say', lane:'L0', role:'user', lines:2,
+    text:'别信 ORM 的声明，另开一条：直接拿线上真表结构和迁移脚本核。' },
+
+  // ── 人工开的探索列：从 #3 开出去，两步之后收敛回主干 ──
+  { id:'h1', type:'step', lane:'L2', parent:'s3', ord:'#3.a', kind:'排查', status:'confirmed', stLabel:'已证实', conf:0.95,
+    dir:'拿线上真实建表语句核 cart_key 的索引类型',
+    vd:'SHOW CREATE TABLE 返回的是 KEY `idx_cart_key`，不是 UNIQUE KEY——线上压根没有唯一约束。',
+    evidence:[['13:01:40','operator','建表语句里是 KEY `idx_cart_key` (`cart_key`)','—']],
+    callsList:[['ask_operator','SHOW CREATE TABLE `t_order`;','24 行']] },
+
+  { id:'h2', type:'step', lane:'L2', ord:'#3.b', kind:'排查', status:'confirmed', stLabel:'已证实', conf:0.9, refutes:'#3',
+    dir:'那这个唯一约束是什么时候丢的',
+    vd:'2026-03 那次分表迁移的 V37 脚本漏写了 UNIQUE 那一行，此后重试写入畅通无阻。',
+    evidence:[['2026-03-11','migration','V37__split_order.sql 里没有 UNIQUE 那一行','L28']],
+    callsList:[['Read','migrations/V37__split_order.sql','31 行'],['Bash','git log -1 --format=%an V37__split_order.sql','1 行']] },
+
+  { id:'s4', type:'step', lane:'L0', after:'h2', ord:'#4', kind:'排查', status:'confirmed', stLabel:'已证实', conf:0.9,
+    dir:'根因：唯一约束从 2026-03 起就没建上，网关重试因此写出了第二条',
+    vd:'采纳 #3.b 的结论收口。两条记录的写入间隔 47ms，落在同一个重试窗口内。',
+    evidence:[['13:04:02','order-api','88213 与 88214 写入间隔 47ms','L131']],
+    callsList:[['cls_search','order_88213 OR order_88214','44 行']] },
+
+  { id:'s5', type:'step', lane:'L0', ord:'#5', kind:'影响面', kcls:'impact', status:'open', stLabel:'进行中', waiting:true,
+    dir:'这次索引缺失一共影响了多少订单、多长的时间窗口',
+    callsList:[['ask_operator','按 cart_key 聚合重复订单（等你回填）','—']] },
+
+  { id:'s6', type:'step', lane:'L0', ord:'#6', kind:'遗留问题', kcls:'leftover', status:'inconclusive', stLabel:'未查清',
+    dir:'网关的重试为什么没带幂等头——它在 3 月之前是带的',
+    vd:'翻到 gateway 的两次配置变更都没动这一段，暂时没查清。',
+    callsList:[['Bash','git log -S idempotency-key','44 行']] },
+];
+
+const EDGES = [
+  ['case','s0','flow'], ['s0','s1','flow'], ['s1','s2','flow'],
+  ['s2','a1','open'], ['a1','a2','flow'],
+  ['s2','s3','flow'],
+  ['s3','h1','open'], ['h1','h2','flow'],
+  ['h2','s4','join'],            // 子列收敛回主干
+  ['s3','s4','flow'],
+  ['s4','s5','flow'], ['s5','s6','flow'],
+  ['h2','s3','refute'],          // 全屏唯一的曲线
+];
+
+const byId = new Map(), laneById = new Map(LANES.map(l => [l.id, l]));
+
+function heightOf(n){
+  if (n.type === 'say') return n.lines === 3 ? 74 : 60;
+  if (n.type === 'case') return 148;
+  return n.vd ? 128 : 92;        // 卡面只有五样，没有计数行，所以比 v1 矮一档
+}
+
+/** 坐标只在这里算，且只算一次；追加时只给新的那个算。 */
+function layout(reset){
+  if (reset){ byId.clear(); layout.cur = {}; }
+  for (const n of NODES){
+    if (byId.has(n.id)) continue;
+    const lane = laneById.get(n.lane);
+    n.h = heightOf(n);
+    n.w = n.type === 'say' ? SAYW : W;
+    const colX = PADX + lane.col * (W + COLGAP);
+
+    if (n.type === 'say'){
+      // 旁白落在主干左侧那条槽里：它是旁白不是节点，不该把主干顶下去，也不占主干的行宽
+      n.x = colX - SAYW - SAYGAP;
+      const trunkY = layout.cur['L0'] ?? PADY;
+      n.y = Math.max(trunkY, layout.cur['say'] ?? PADY);
+      layout.cur['say'] = n.y + n.h + 14;
+    } else {
+      n.x = colX;
+      const p = n.parent ? byId.get(n.parent) : null;      // 开列：与父卡齐平再往下错一点
+      const a = n.after ? byId.get(n.after) : null;        // 收敛：不早于子列末卡的底边
+      let floor = PADY;
+      if (p) floor = Math.max(floor, p.y + 26);
+      if (a) floor = Math.max(floor, a.y + a.h + 14);
+      n.y = Math.max(layout.cur[n.lane] ?? PADY, floor);
+      layout.cur[n.lane] = n.y + n.h + VGAP;
+      if (!lane.firstId){ lane.firstId = n.id; }
+    }
+    byId.set(n.id, n);
+  }
+}
+
+/* ── 渲染 ───────────────────────────────────────────────── */
+const world = document.getElementById('world');
+const wires = document.getElementById('wires');
+const canvas = document.getElementById('canvas');
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function cardHTML(n){
+  const pos = `left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px`;
+  if (n.type === 'say') return `
+    <div class="say ${n.role}" style="${pos}" data-id="${n.id}">
+      <span class="who">${n.role === 'user' ? '补充' : 'agent'}</span><p>${esc(n.text)}</p></div>`;
+  if (n.type === 'case') return `
+    <article class="card case" style="${pos}" data-id="${n.id}">
+      <h2>${esc(n.title)}</h2><p class="q">${esc(n.q)}</p>
+      <div class="meta"><span>工作区 <code>${esc(n.root)}</code></span>
+        <span>基准日期 <code>${n.date}</code>${n.unconfirmed ? '<em class="unc">未确认</em>' : ''}</span></div>
+    </article>`;
+  return `
+    <article class="card step ${n.status}${n.kcls === 'unclassified' ? ' unclassified' : ''}${n.waiting ? ' waiting' : ''}" style="${pos}" data-id="${n.id}">
+      <div class="c-head">
+        <span class="ord">${n.ord}</span>
+        <span class="kind ${n.kcls || ''}">${n.kind}</span>
+        ${n.refutedBy ? `<span class="c-refbadge">← 被 ${n.refutedBy} 推翻</span>` : ''}
+        ${n.waiting ? '<span class="c-wait">等你回填</span>' : ''}
+        <span class="st ${n.status}">${n.status === 'open' ? '<span class="pulse"></span>' : ''}${n.stLabel}</span>
+      </div>
+      <p class="c-dir">${esc(n.dir)}</p>
+      ${n.vd ? `<p class="c-vd">${esc(n.vd)}</p>` : ''}
+    </article>`;
+}
+
+function laneHeadHTML(l){
+  const first = byId.get(l.firstId);
+  if (!first) return '';
+  return `<div class="lanehead ${l.kind}" style="left:${first.x}px;top:${first.y - 27}px">
+    <span class="tag">${esc(l.tag)}</span>${l.note ? `<span class="note">${esc(l.note)}</span>` : ''}</div>`;
+}
+
+function render(){
+  world.querySelectorAll('.card,.say,.lanehead').forEach(el => el.remove());
+  world.insertAdjacentHTML('beforeend', NODES.map(cardHTML).join('') + LANES.map(laneHeadHTML).join(''));
+  drawWires();
+  drawMini();
+}
+
+/* ── 连线 ──────────────────────────────────────────────── */
+function elbowH(x1,y1,x2,y2,r){
+  if (Math.abs(y2-y1) < 2) return `M${x1},${y1} L${x2},${y2}`;
+  const mx = x1 + (x2-x1)/2, sy = Math.sign(y2-y1) || 1, sx = Math.sign(x2-x1) || 1;
+  const rr = Math.min(r, Math.abs(x2-x1)/2, Math.abs(y2-y1)/2);
+  return `M${x1},${y1} H${mx-rr*sx} Q${mx},${y1} ${mx},${y1+rr*sy} V${y2-rr*sy} Q${mx},${y2} ${mx+rr*sx},${y2} H${x2}`;
+}
+function elbowV(x1,y1,x2,y2,r){
+  if (Math.abs(x2-x1) < 2) return `M${x1},${y1} L${x2},${y2}`;
+  const my = y1 + (y2-y1)/2, s = Math.sign(x2-x1) || 1;
+  const rr = Math.min(r, Math.abs(y2-y1)/2, Math.abs(x2-x1)/2);
+  return `M${x1},${y1} V${my-rr} Q${x1},${my} ${x1+rr*s},${my} H${x2-rr*s} Q${x2},${my} ${x2},${my+rr} V${y2}`;
+}
+
+function drawWires(){
+  [...wires.querySelectorAll('path')].forEach(p => { if (!p.closest('marker')) p.remove(); });
+  let maxX = 0, maxY = 0, minX = 1e9;
+  NODES.forEach(n => { maxX = Math.max(maxX, n.x+n.w); maxY = Math.max(maxY, n.y+n.h); minX = Math.min(minX, n.x); });
+  wires.setAttribute('width', maxX + 240);
+  wires.setAttribute('height', maxY + 240);
+
+  for (const [fromId, toId, kind] of EDGES){
+    const a = byId.get(fromId), b = byId.get(toId);
+    if (!a || !b) continue;
+    let d;
+    if (kind === 'flow'){
+      const x1 = a.x + 22, y1 = a.y + a.h, x2 = b.x + 22, y2 = b.y;
+      d = elbowV(x1,y1,x2,y2,10);
+    } else if (kind === 'open'){
+      d = elbowH(a.x + a.w, a.y + 22, b.x - 5, b.y + 22, 10);
+    } else if (kind === 'join'){
+      // 收敛回主干：从子列末卡左沿拐回主干那一步的右沿，箭头朝左
+      d = elbowH(a.x, a.y + a.h - 22, b.x + b.w + 5, b.y + 22, 10);
+    } else {
+      // 推翻：整条走在主干左侧那条空槽里，不压任何一个字
+      const x1 = a.x, y1 = a.y + 22, x2 = b.x - 5, y2 = b.y + 22;
+      const g = byId.get('case').x - 30;
+      d = `M${x1},${y1} C${g},${y1} ${g},${y2} ${x2},${y2}`;
+    }
+    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d', d); p.setAttribute('class', 'w-' + kind);
+    if (kind !== 'flow') p.setAttribute('marker-end', kind === 'refute' ? 'url(#tip-bad)' : 'url(#tip)');
+    wires.appendChild(p);
+  }
+}
+
+/* ── 视口变换 ───────────────────────────────────────────── */
+let tx = 40, ty = 20, k = 1, follow = true;
+
+function apply(){
+  world.style.transform = `translate(${tx}px,${ty}px) scale(${k})`;
+  world.dataset.lod = k < 0.46 ? 'far' : 'near';
+  document.getElementById('z-k').textContent = Math.round(k*100) + '%';
+  const dot = 26 * k;
+  canvas.style.setProperty('--dot', dot + 'px');
+  canvas.style.setProperty('--dotx', (tx % dot) + 'px');
+  canvas.style.setProperty('--doty', (ty % dot) + 'px');
+  drawMini();
+}
+function zoomAt(px, py, next){
+  next = Math.min(1.8, Math.max(0.22, next));
+  const wx = (px - tx)/k, wy = (py - ty)/k;
+  k = next; tx = px - wx*k; ty = py - wy*k; apply();
+}
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey){
+    const r = canvas.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, k * (1 - e.deltaY * 0.0022));
+  } else { tx -= e.deltaX; ty -= e.deltaY; apply(); }
+}, { passive:false });
+
+let drag = null;
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.card,.say,.todos,.hud,.drawer')) return;
+  drag = { x:e.clientX, y:e.clientY, tx, ty };
+  canvas.classList.add('grabbing'); canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  tx = drag.tx + (e.clientX - drag.x); ty = drag.ty + (e.clientY - drag.y); apply();
+});
+canvas.addEventListener('pointerup', () => { drag = null; canvas.classList.remove('grabbing'); });
+canvas.addEventListener('dblclick', (e) => { if (!e.target.closest('.card,.say')) fit(); });
+
+/**
+ * 可视区 ≠ 视口：右边那条常驻的待办层（以及展开着的详情抽屉）永远盖着一块。
+ * 按视口居中的话，最新那几步会静静躺在待办卡背后——而"适应"与"跟随最新"
+ * 恰恰是拿来保证"我要看的东西在屏幕上"的两个动作。
+ */
+function view(){
+  const r = canvas.getBoundingClientRect();
+  const dr = drawer.classList.contains('on') ? 466 : 0;
+  return { w: r.width - 358 - dr, h: r.height };
+}
+function bounds(){
+  let x1=1e9,y1=1e9,x2=-1e9,y2=-1e9;
+  NODES.forEach(n => { x1=Math.min(x1,n.x); y1=Math.min(y1,n.y-28); x2=Math.max(x2,n.x+n.w); y2=Math.max(y2,n.y+n.h); });
+  return { x1,y1,x2,y2,w:x2-x1,h:y2-y1 };
+}
+function fit(){
+  const b = bounds(), v = view(), m = 48;
+  k = Math.min(1.1, (v.w-m*2)/b.w, (v.h-m*2)/b.h);
+  tx = (v.w - b.w*k)/2 - b.x1*k; ty = (v.h - b.h*k)/2 - b.y1*k; apply();
+}
+function centerOn(id, kk){
+  const n = byId.get(id); if (!n) return;
+  const v = view();
+  if (kk) k = kk;
+  tx = v.w/2 - (n.x + n.w/2)*k; ty = v.h*0.44 - (n.y + n.h/2)*k; apply();
+}
+document.getElementById('z-in').onclick = () => { const r = canvas.getBoundingClientRect(); zoomAt(r.width/2, r.height/2, k*1.2); };
+document.getElementById('z-out').onclick = () => { const r = canvas.getBoundingClientRect(); zoomAt(r.width/2, r.height/2, k/1.2); };
+document.getElementById('z-fit').onclick = fit;
+document.getElementById('z-follow').onclick = (e) => { follow = !follow; e.currentTarget.classList.toggle('on', follow); };
+
+/* ── 导览图 ── */
+const mini = document.getElementById('mini'), vp = document.getElementById('vp');
+function drawMini(){
+  const b = bounds(), pad = 8;
+  const s = Math.min((mini.clientWidth-pad*2)/b.w, (mini.clientHeight-pad*2)/b.h);
+  mini.querySelectorAll('i').forEach(el => el.remove());
+  for (const n of NODES){
+    if (n.type === 'say') continue;
+    const i = document.createElement('i');
+    i.className = n.waiting ? 'wait' : (n.status || '');
+    i.style.left = (pad + (n.x-b.x1)*s) + 'px';
+    i.style.top = (pad + (n.y-b.y1)*s) + 'px';
+    i.style.width = Math.max(3, n.w*s) + 'px';
+    i.style.height = Math.max(2, n.h*s) + 'px';
+    mini.appendChild(i);
+  }
+  const r = canvas.getBoundingClientRect();
+  const L = pad + (-tx/k - b.x1)*s, T = pad + (-ty/k - b.y1)*s;
+  const R = L + r.width/k*s, B = T + r.height/k*s;
+  const cl = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+  const l = cl(L,0,mini.clientWidth), t = cl(T,0,mini.clientHeight);
+  vp.style.left = l+'px'; vp.style.top = t+'px';
+  vp.style.width = (cl(R,0,mini.clientWidth)-l)+'px';
+  vp.style.height = (cl(B,0,mini.clientHeight)-t)+'px';
+}
+mini.addEventListener('pointerdown', (e) => {
+  const b = bounds(), pad = 8, r = mini.getBoundingClientRect();
+  const s = Math.min((mini.clientWidth-pad*2)/b.w, (mini.clientHeight-pad*2)/b.h);
+  const wx = b.x1 + (e.clientX - r.left - pad)/s, wy = b.y1 + (e.clientY - r.top - pad)/s;
+  const c = canvas.getBoundingClientRect();
+  tx = c.width/2 - wx*k; ty = c.height/2 - wy*k; apply();
+});
+
+/* ── 详情浮层 ──────────────────────────────────────────── */
+const drawer = document.getElementById('drawer');
+let selected = null;
+const steps = () => NODES.filter(n => n.type === 'step');
+
+function open(id){
+  const n = byId.get(id);
+  if (!n || n.type === 'say') return;
+  selected = id;
+  world.querySelectorAll('.card').forEach(el => el.classList.toggle('sel', el.dataset.id === id));
+  document.getElementById('d-ord').textContent = n.ord || '信息卡';
+  document.getElementById('d-kind').textContent = n.kind || '这次调查的由来';
+  const st = document.getElementById('d-st');
+  st.textContent = n.stLabel || ''; st.className = 'st ' + (n.status || '');
+
+  const body = document.getElementById('d-body');
+  body.scrollTop = 0;
+  const lane = laneById.get(n.lane);
+  if (n.type === 'case'){
+    body.innerHTML = `
+      <div class="d-sec"><h4>标题</h4><p class="d-dir">${esc(n.title)}</p></div>
+      <div class="d-sec"><h4>问题描述</h4><p class="d-vd">${esc(n.q)}</p></div>
+      <div class="d-sec"><h4>建单信息</h4><div class="d-rel">
+        <span>工作区 · ${esc(n.root)}</span>
+        <span>基准日期 · ${n.date} <span style="color:var(--warn)">未确认（建单那一刻猜的）</span></span>
+        <span>agent · claude · opus[1m] · high</span></div></div>`;
+  } else {
+    body.innerHTML = `
+      <div class="d-sec"><h4>这一步要验证什么</h4><p class="d-dir">${esc(n.dir)}</p></div>
+      ${n.vd ? `<div class="d-sec"><h4>结论</h4><p class="d-vd">${esc(n.vd)}${n.conf ? `<span class="conf">置信度 ${n.conf}</span>` : ''}</p></div>` : ''}
+      <div class="d-sec"><h4>它长在哪一列</h4><div class="d-rel">
+        <span>${esc(lane.tag)}${lane.note ? ' · ' + esc(lane.note) : ''}</span>
+        ${n.parent ? `<span>从 <button data-goto="${n.parent}">${esc(byId.get(n.parent).ord)}</button> 开出去的</span>` : ''}
+        ${n.after ? `<span>收敛自 <button data-goto="${n.after}">${esc(byId.get(n.after).ord)}</button></span>` : ''}
+        ${n.refutedBy ? `<span class="bad">← 被 ${n.refutedBy} 推翻，结论已作废</span>` : ''}
+        ${n.refutes ? `<span class="bad">推翻了 ${n.refutes}</span>` : ''}</div></div>
+      ${n.evidence ? `<div class="d-sec"><h4>证据 ${n.evidence.length} 条 · 点一条看原始输出</h4>
+        <ul class="evi">${n.evidence.map(e => `<li><span class="when">${esc(e[0])}</span>
+          <span><span class="who">${esc(e[1])}</span>${esc(e[2])}<span class="anc">${esc(e[3])}</span></span></li>`).join('')}</ul></div>` : ''}
+      ${n.callsList ? `<div class="d-sec"><h4>工具调用 ${n.callsList.length} 次 · 原始输入输出完整留存</h4>
+        ${n.callsList.map((c,i) => `<div class="call"><div class="ch"><b>#${i+1}</b> ${esc(c[0])}<span class="sp"></span><span>${esc(c[2])}</span></div>
+          <pre>${esc(c[1])}</pre></div>`).join('')}</div>` : ''}`;
+  }
+  const arr = steps(), i = arr.findIndex(x => x.id === id);
+  document.getElementById('d-prev').disabled = i <= 0;
+  document.getElementById('d-next').disabled = i < 0 || i >= arr.length-1;
+  drawer.classList.add('on'); canvas.classList.add('dr');
+  ensureVisible(n);
+}
+function close(){
+  drawer.classList.remove('on'); canvas.classList.remove('dr'); selected = null;
+  world.querySelectorAll('.card.sel').forEach(el => el.classList.remove('sel'));
+}
+/** 抽屉一开就吃掉右边 452px，被点的那张卡很可能正好落在它底下。
+    只在真的被盖住时才挪画布——每点一张都居中一次，读的人会晕。 */
+function ensureVisible(n){
+  const v = view();
+  const l = n.x*k + tx, r = (n.x+n.w)*k + tx, t = n.y*k + ty, b = (n.y+n.h)*k + ty;
+  let dx = 0, dy = 0;
+  if (r > v.w - 16) dx = v.w - 16 - r; else if (l < 16) dx = 16 - l;
+  if (b > v.h - 16) dy = v.h - 16 - b; else if (t < 16) dy = 16 - t;
+  if (dx || dy){ tx += dx; ty += dy; apply(); }
+}
+
+world.addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) open(c.dataset.id); });
+document.getElementById('d-x').onclick = close;
+document.body.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-goto]');
+  if (g){ centerOn(g.dataset.goto, Math.max(k, 0.85)); open(g.dataset.goto); }
+});
+document.getElementById('d-prev').onclick = () => {
+  const arr = steps(), i = arr.findIndex(n => n.id === selected);
+  if (i > 0){ open(arr[i-1].id); centerOn(arr[i-1].id); }
+};
+document.getElementById('d-next').onclick = () => {
+  const arr = steps(), i = arr.findIndex(n => n.id === selected);
+  if (i >= 0 && i < arr.length-1){ open(arr[i+1].id); centerOn(arr[i+1].id); }
+};
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+/* ── mockup 控制条：两枚按钮都是拿来验"不重排"的 ── */
+let extra = 0, extraLane = 0;
+document.getElementById('t-step').onclick = () => {
+  extra++;
+  const prev = NODES.filter(n => n.lane === 'L0' && n.type === 'step').pop();
+  const n = { id:'x'+extra, type:'step', lane:'L0', ord:'#'+(6+extra), kind:'排查', status:'open', stLabel:'进行中',
+    dir:'新钻出来的一步（第 '+extra+' 次追加）：已经落笔的卡片一张都没有动',
+    callsList:[['cls_search','刚发出的查询','进行中']] };
+  NODES.push(n); EDGES.push([prev.id, n.id, 'flow']);
+  layout(false); render();
+  if (follow) centerOn(n.id, Math.max(k, 0.8));
+};
+document.getElementById('t-lane').onclick = () => {
+  extraLane++;
+  const from = NODES.filter(n => n.lane === 'L0' && n.type === 'step').pop();
+  const lane = { id:'E'+extraLane, kind:'human', col:LANES.length, tag:'你开的方向', note:'刚开' };
+  LANES.push(lane); laneById.set(lane.id, lane);
+  const n = { id:'e'+extraLane, type:'step', lane:lane.id, parent:from.id, ord:'#'+from.ord.slice(1)+'.x'+extraLane,
+    kind:'排查', status:'open', stLabel:'进行中',
+    dir:'人工开的第 '+extraLane+' 条探索列：列号只往右发，不回收',
+    callsList:[['Grep','换个角度先扫一遍','进行中']] };
+  NODES.push(n); EDGES.push([from.id, n.id, 'open']);
+  layout(false); render();
+  if (follow) centerOn(n.id, Math.max(k, 0.8));
+};
+document.getElementById('t-reset').onclick = () => location.reload();
+
+layout(true);
+render();
+centerOn('s4', 0.92);   // 打开工作区停在最新一步，不是停在整幅图的缩略
+</script>
+</body>
+</html>

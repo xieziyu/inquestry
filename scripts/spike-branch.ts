@@ -200,16 +200,18 @@ async function main() {
     `inner_r2 落在 ${stepOf('inner_r2')}，先前那步是 ${raceStep}`,
   );
 
-  // ── ③ 轨道：泳道就是一次分叉，trackLayout 不必认识 lane ──────────────────
+  // ── ③ 轨道：一条泳道就是一列，trackLayout 按 lane 键分列 ──────────────────
   const rows = trackLayout(runner.snapshot().steps).rows;
-  const depthOf = (stepId?: string) => rows.find((r) => r.step.id === stepId)?.depth;
+  const colOf = (stepId?: string) => rows.find((r) => r.step.id === stepId)?.col;
   check(
-    '8. 主干深度 0、两条支线深度 1，且行序仍是到达顺序',
-    depthOf(stepOf('main_first')) === 0 &&
-      depthOf(stepOf('inner_a1')) === 1 &&
-      depthOf(stepOf('inner_b1')) === 1 &&
+    '8. 主干在 0 列、并发的两条支线各占一列，且行序仍是到达顺序',
+    colOf(stepOf('main_first')) === 0 &&
+      colOf(stepOf('inner_a1'))! > 0 &&
+      colOf(stepOf('inner_b1'))! > 0 &&
+      colOf(stepOf('inner_a1')) !== colOf(stepOf('inner_b1')) &&
       rows.map((r) => r.step.ordinal).join(',') === rows.map((_, i) => i + 1).join(','),
-    `深度 ${rows.map((r) => r.depth).join(',')} / 序号 ${rows.map((r) => r.step.ordinal).join(',')}`,
+    `列号 ${rows.map((r) => r.col).join(',')} / 序号 ${rows.map((r) => r.step.ordinal).join(',')} —— ` +
+      '两条并发支线合到同一列的话，"顺着一列往下读"读到的是两个 agent 交替的调用',
   );
 
   check(

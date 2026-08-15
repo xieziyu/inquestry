@@ -34,6 +34,55 @@ const min = 60_000;
  */
 const steps = rawSteps.map((s, i) => ({ ...s, startedAt: now - (13 - i) * min }));
 
+/**
+ * 舞台是画布之后，**列**成了语义轴（主干 / 子 agent 支线 / agent 声明的分叉，见 `track.ts`）。
+ * 借来的那份报告夹具全是主干，一列都看不见——所以这儿另接三步，专门把三种列各摆一条出来。
+ *
+ * **只加在预览这一侧**：报告那几屏读的是 `report` / `incident` 两份投影，与这三步无关；
+ * 往共用夹具里加的话，`spike:report` 覆盖的那个案子就和屏幕上这个慢慢变成两回事。
+ */
+const LANE = 'toolu_01ab9f';
+steps.push(
+  {
+    ...rawSteps[0]!,
+    id: 'lane1',
+    ordinal: 7,
+    startedAt: now - 5 * min,
+    lane: LANE,
+    parentStepId: steps[1]!.id,
+    direction: null,
+    status: 'converged',
+    verdict: '近 30 分钟 order-api 共 41 次上游超时，其中 12 次触发了网关重试，全部落在 12:00–12:10。',
+    evidence: [],
+    calls: [],
+  },
+  {
+    ...rawSteps[0]!,
+    id: 'lane2',
+    ordinal: 8,
+    startedAt: now - 4 * min,
+    lane: LANE,
+    parentStepId: steps[1]!.id,
+    direction: null,
+    status: 'converged',
+    verdict: 'wait_count 在 12:04 冲到 233，池子确实被打满过——但它解释的是超时，不是重复写入。',
+    evidence: [],
+    calls: [],
+  },
+  {
+    ...rawSteps[0]!,
+    id: 'fork1',
+    ordinal: 9,
+    startedAt: now - 3 * min,
+    parentStepId: steps[3]!.id,
+    direction: '换个角度：先看这张表的唯一约束是不是从来就没建上过',
+    status: 'confirmed',
+    verdict: '建表语句里是 KEY `idx_cart_key`，不是 UNIQUE KEY——2026-03 那次迁移漏了这一行。',
+    evidence: [],
+    calls: [],
+  },
+);
+
 const CASES: CaseBrief[] = [
   // 五行**各占一档节点**（运行中 / 等你 / 待开始 / 已定稿 / 已归档）：少一档就等于那一档的配色没人看过。
   // 这一条要的是「运行中」那颗，所以待办给 0——挂着待办的话它显示的是「等你」那颗
@@ -48,11 +97,13 @@ const CASES: CaseBrief[] = [
 ];
 
 const CHAT: ChatLine[] = [
-  { role: 'user', at: now - 12 * min, text: '线上反馈：12:03 前后用户 u1001 只提交了一次订单，系统里出现了两条重复记录。' },
-  { role: 'assistant', at: now - 11 * min, text: '先看这两条记录是不是同一个请求写进去的。我去查网关日志里 u1001 那一段。' },
-  { role: 'assistant', at: now - 6 * min, text: '两条记录来自两个 req_id，第一条超时了 2140ms。方向改成「幂等键为什么没拦住第二次」。' },
-  { role: 'system', at: now - 5 * min, text: '已接管：接下来除只读与杂务外，每次工具调用都要你放行。' },
-  { role: 'user', at: now - 2 * min, text: '重点看 t_order 上那个 cart_key 的索引。' },
+  // 开场白由 main 标出来（每次会话最早那条 user 行），舞台不织它——信息卡上已经逐字有了
+  { id: 'ch0', opening: true, role: 'user', at: now - 13 * min, text: '线上反馈：12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。\n基准日期：2026-08-15（时区 +08:00）。' },
+  { id: 'ch1', role: 'user', at: now - 12 * min, text: '线上反馈：12:03 前后用户 u1001 只提交了一次订单，系统里出现了两条重复记录。' },
+  { id: 'ch2', role: 'assistant', at: now - 11 * min, text: '先看这两条记录是不是同一个请求写进去的。我去查网关日志里 u1001 那一段。' },
+  { id: 'ch3', role: 'assistant', at: now - 6 * min, text: '两条记录来自两个 req_id，第一条超时了 2140ms。方向改成「幂等键为什么没拦住第二次」。' },
+  { id: 'ch4', role: 'system', at: now - 5 * min, text: '已接管：接下来除只读与杂务外，每次工具调用都要你放行。' },
+  { id: 'ch5', role: 'user', at: now - 2 * min, text: '重点看 t_order 上那个 cart_key 的索引。' },
 ];
 
 const PENDING: PendingAsk[] = [
@@ -63,6 +114,8 @@ const PENDING: PendingAsk[] = [
     why: '要确认 cart_key 上是唯一索引还是普通索引——这决定第二次写入能不能被数据库自己挡住。',
     expect: '建表语句里 cart_key 那一行的索引类型',
     env: 'prod-读库',
+    // 对上夹具里那次调用：舞台靠它把「等你处理」标回那一步（真实数据由 main 认领后带上来）
+    callId: 'tc1',
     askedAt: now - 90_000,
   },
 ];
@@ -206,7 +259,7 @@ export function installPreviewApi(): void {
       return 'ok';
     },
     send: async (_id, text) => {
-      patch({ chat: [...current.chat, { role: 'user', text, at: Date.now() }] });
+      patch({ chat: [...current.chat, { id: `mem_${current.chat.length}`, role: 'user', text, at: Date.now() }] });
       return true;
     },
     interrupt: async () => patch({ busy: false, sessionStatus: 'ended' }),

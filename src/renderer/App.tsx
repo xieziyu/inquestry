@@ -1,20 +1,16 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
-  type CallNode,
-  type ChatLine,
   type CaseMeta,
   type InquestryApi,
   type PendingAsk,
   type Snapshot,
-  type StepNode,
   type TakeoverResult,
 } from '../shared/ipc.js';
 import { SHAPE_COPY } from '../shared/report.js';
 import { draftKey, pruneDrafts, type CardDrafts } from './drafts.js';
-import { trackLayout, weaveChat, type TrackRow } from './track.js';
-import { CaseCard } from './CaseCard.js';
 import { RunBar } from './RunBar.js';
+import { Stage } from './Stage.js';
 import { GateCard } from './GateCard.js';
 import { Icon } from './Icon.js';
 import { History } from './History.js';
@@ -411,45 +407,44 @@ export function App({
         </div>
       )}
 
-      <main className="stage">
-        {/* 信息卡是轨道的第 0 个节点：标题（可改）、问题描述、基准日期、工作区。
-            **「接着查」不在这儿**——那是个动作，长在底下输入框旁边；
-            摆在舞台顶上的话，点开一次旧调查，第一眼看到的就是一个催你再跑一轮的按钮 */}
-        <CaseCard
-          meta={snap.case}
-          onRename={(title) => window.inquestry.renameCase(openCase, title)}
-        />
-
-        {snap.pending.map((p) => (
-          <PendingCard
-            key={p.id}
-            ask={p}
-            focused={focus === p.id}
-            draft={cardDraft(p.id)}
-            onDraft={(patch) => patchDraft(p.id, patch)}
-            onSubmit={(r) => void window.inquestry.answerOperator(openCase, r).then(disposed(p.id))}
-          />
-        ))}
-        {snap.gates.map((g) => (
-          <GateCard
-            key={g.id}
-            gate={g}
-            focused={focus === g.id}
-            draft={cardDraft(g.id)}
-            onDraft={(patch) => patchDraft(g.id, patch)}
-            onDecide={(d) => void window.inquestry.decideGate(openCase, d).then(disposed(g.id))}
-          />
-        ))}
-
-        <InvestigationTimeline
-          steps={snap.steps}
-          chat={snap.chat}
-          question={snap.case.question}
-          liveLanes={snap.liveLanes}
-          onExcerpt={showExcerpt}
-          onStopLane={(lane) => void window.inquestry.stopLane(openCase, lane)}
-        />
-      </main>
+      {/* 舞台是一整幅可缩放拖拽的画布（ui.md §3）。信息卡是主干那一列的开头，
+          待办与闸门**钉在视口上**、不落进画布——①档「永远置顶」在画布的世界里
+          没有 top，一张能被人拖出屏幕的卡不叫置顶 */}
+      <Stage
+        meta={snap.case}
+        steps={snap.steps}
+        chat={snap.chat}
+        liveLanes={snap.liveLanes}
+        pending={snap.pending}
+        gates={snap.gates}
+        onExcerpt={showExcerpt}
+        onStopLane={(lane) => void window.inquestry.stopLane(openCase, lane)}
+        onRename={(title) => window.inquestry.renameCase(openCase, title)}
+        todos={
+          <>
+            {snap.pending.map((p) => (
+              <PendingCard
+                key={p.id}
+                ask={p}
+                focused={focus === p.id}
+                draft={cardDraft(p.id)}
+                onDraft={(patch) => patchDraft(p.id, patch)}
+                onSubmit={(r) => void window.inquestry.answerOperator(openCase, r).then(disposed(p.id))}
+              />
+            ))}
+            {snap.gates.map((g) => (
+              <GateCard
+                key={g.id}
+                gate={g}
+                focused={focus === g.id}
+                draft={cardDraft(g.id)}
+                onDraft={(patch) => patchDraft(g.id, patch)}
+                onDecide={(d) => void window.inquestry.decideGate(openCase, d).then(disposed(g.id))}
+              />
+            ))}
+          </>
+        }
+      />
 
       <footer className="dock">
         <div className="composer">
@@ -512,284 +507,5 @@ function frozenText(meta: CaseMeta) {
     : `本次调查已归档（人为终止）。${shape}证据一条没少，可导出半程报告——它没有根因栏，因为没查出来就是没查出来。`;
 }
 
-/**
- * 排查时间线**按 case 取而非按 session 取**：一次调查跨多会话，按 session 取的话
- * 重开旧调查主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
- *
- * 轨道的形状是主干 + 分叉（D23 / ui.md §3）：顺序逐字是到达顺序，分叉只往右缩进。
- * x 由 `trackLayout` 算，y 交给文档流——绝对定位的 y 得先量高度，而卡片展开工具调用时
- * 高度会变；走文档流则不重排的保证照旧（顺序不动、新节点只在末尾），还白得一个自适应。
- */
-function InvestigationTimeline({
-  steps,
-  chat,
-  question,
-  liveLanes,
-  onExcerpt,
-  onStopLane,
-}: {
-  steps: StepNode[];
-  /** agent 与人说的话，织进轨道（`weaveChat`）——不再压成底部一条带。 */
-  chat: ChatLine[];
-  /** 开场白认不出来就会与信息卡重复一遍，见 `weaveChat`。 */
-  question: string;
-  /** 还在跑的泳道。只有这几条给得出「停」——停一条已经收尾的支线什么都不会发生。 */
-  liveLanes: string[];
-  onExcerpt: (callId: string, anchor: string | null, title: string) => void;
-  onStopLane: (lane: string) => void;
-}) {
-  const layout = useMemo(() => trackLayout(steps), [steps]);
-  const items = useMemo(() => weaveChat(layout.rows, chat, question), [layout.rows, chat, question]);
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  const nodes = useRef(new Map<string, HTMLElement>());
-  const [curves, setCurves] = useState<{ id: string; d: string }[]>([]);
-  const drawn = useRef('');
-
-  /**
-   * 推翻回指线要量出来才画得了：卡片高度随证据条数和"展开工具调用"变，算不出来。
-   *
-   * 曲线整条走在最左边的槽里（`--track-gutter`），两头贴着卡片左沿——那一带在各自那一行
-   * 都是空的，所以它不会盖住任何字。多条并排时把槽位错开，否则两条推翻会叠成一条。
-   */
-  const measure = useCallback(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    const b = box.getBoundingClientRect();
-    const next: { id: string; d: string }[] = [];
-    layout.edges.forEach((e, i) => {
-      const from = nodes.current.get(e.fromId);
-      const to = nodes.current.get(e.toId);
-      if (!from || !to) return;
-      const f = from.getBoundingClientRect();
-      const t = to.getBoundingClientRect();
-      const g = 7 + (i % 3) * 6;
-      const fy = f.top - b.top + 15;
-      const ty = t.top - b.top + 15;
-      next.push({
-        id: `${e.fromId}->${e.toId}`,
-        d: `M${f.left - b.left} ${fy}C${g} ${fy},${g} ${ty},${t.left - b.left - 3} ${ty}`,
-      });
-    });
-    // 量出来一样就别 setState：ResizeObserver 每次滚动惯性都可能回调，白刷新一遍整条轨道
-    const sig = `${b.width}x${b.height}|${next.map((n) => n.d).join('|')}`;
-    if (sig === drawn.current) return;
-    drawn.current = sig;
-    setCurves(next);
-  }, [layout]);
-
-  useLayoutEffect(() => {
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (boxRef.current) ro.observe(boxRef.current);
-    // 卡片自己展开时轨道总高度也变，但按每张卡各观察一份才盖得住"高度没变、位置变了"
-    for (const el of nodes.current.values()) ro.observe(el);
-    return () => ro.disconnect();
-  }, [measure]);
-
-  return (
-    <div className="track" ref={boxRef}>
-      {items.map((item) =>
-        item.kind === 'chat' ? (
-          <SayCard key={item.id} line={item.line} />
-        ) : (
-          <Fragment key={item.id}>
-          {item.row.sessionBreak && (
-            <div className="sessionmark">第 {item.row.step.sessionIndex} 次会话</div>
-          )}
-          <div
-            className={item.row.depth ? 'lane branch' : 'lane'}
-            style={{ marginLeft: `calc(${item.row.depth} * var(--track-indent))` }}
-          >
-            <StepCard
-              row={item.row}
-              live={!!item.row.step.lane && liveLanes.includes(item.row.step.lane)}
-              onExcerpt={onExcerpt}
-              onStopLane={onStopLane}
-              nodeRef={(el) => {
-                if (el) nodes.current.set(item.id, el);
-                else nodes.current.delete(item.id);
-              }}
-            />
-          </div>
-          </Fragment>
-        ),
-      )}
-      {curves.length > 0 && (
-        <svg className="refutes" aria-hidden>
-          <defs>
-            {/* 箭头指向被推翻的那一步：没有它，曲线两头一样，得读字才知道谁推翻了谁 */}
-            <marker id="refute-tip" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
-              <path d="M0 0 L6 3 L0 6 z" />
-            </marker>
-          </defs>
-          {curves.map((c) => (
-            <path key={c.id} d={c.d} markerEnd="url(#refute-tip)" />
-          ))}
-        </svg>
-      )}
-    </div>
-  );
-}
-
-/**
- * 轨道上的一句话：agent 的判断、人的补充、harness 的提示。
- *
- * 三种角色**用同一张卡的三个变体**，不做成三种东西：它们在轨道上占的位置是同一种
- * ——"某一步与某一步之间说了句话"。区别只在左边那枚角色标与色相。
- *
- * 卡片刻意比 step 窄一档、不带边框：它是旁白，不是节点。做成同样的一张卡的话，
- * 一屏上会有两种长得一样但一种带证据、一种什么都没有的东西。
- */
-function SayCard({ line }: { line: ChatLine }) {
-  return (
-    <div className={`say ${line.role}`}>
-      <span className="who">{sayLabel(line.role)}</span>
-      <p>{line.text}</p>
-    </div>
-  );
-}
-
-/** 「补充」而不是「你」：人在这儿说的话语义是**异步入队的补充**（ui.md §8.2），不是聊天。 */
-function sayLabel(role: ChatLine['role']) {
-  return ({ assistant: 'agent', user: '补充', system: '系统' } as const)[role];
-}
-
-function StepCard({
-  row,
-  live,
-  onExcerpt,
-  onStopLane,
-  nodeRef,
-}: {
-  row: TrackRow;
-  /** 这条支线还在跑（§3.4：支线默认在后台跑，主线这一轮收了它还可能在查）。 */
-  live: boolean;
-  onExcerpt: (callId: string, anchor: string | null, title: string) => void;
-  onStopLane: (lane: string) => void;
-  nodeRef: (el: HTMLElement | null) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const step = row.step;
-  return (
-    <section className={`step ${step.status} ${step.kind}`} ref={nodeRef}>
-      <div className="head">
-        <span className="ord">{row.label}</span>
-        <span className={`kind ${step.kind}`}>{kindLabel(step.kind)}</span>
-        {/* 缩进只说明"接在谁下面"，说不出是不是另一条 agent 在查——
-            支线里的调用没经过主线的判断，读的人有权知道 */}
-        {step.lane && (
-          <span className="lanetag" title={`子 agent 泳道 ${step.lane}`}>
-            支线 {step.lane.slice(-6)}
-          </span>
-        )}
-        {/* 停一条支线只停它自己（§3.4），所以按钮长在那一行上而不是顶栏——
-            顶栏那枚「支线 N」说不出要停的是哪一条 */}
-        {live && step.lane && (
-          <button
-            className="stoplane"
-            title="只停这一条支线，主线与别的支线照旧"
-            onClick={() => onStopLane(step.lane!)}
-          >
-            <Icon name="stop" size={9} />停
-          </button>
-        )}
-        <span className={`state ${step.status}`}>{statusLabel(step.status)}</span>
-        {row.parentLabel && (
-          <span className="branch" title={row.depthCapped ? '缩进已到头，父子关系仍在' : undefined}>
-            ↳ 接 {row.parentLabel}
-            {row.depthCapped && ' ⇥'}
-          </span>
-        )}
-        {/* 推翻者不在这条轨道上时曲线画不出来，划线和这句话照旧——
-            少一道划线就是把一个已经作废的结论显示成仍然成立的 */}
-        {row.refutedBy !== null && (
-          <span className="superseded">← {row.refutedBy ? `被 ${row.refutedBy} 推翻` : '已被推翻'}</span>
-        )}
-        {row.refutes.length > 0 && <span className="refuter">推翻了 {row.refutes.join('、')}</span>}
-      </div>
-      <p className="direction">
-        {step.direction ??
-          (step.lane
-            ? '（支线：子 agent 自己的调用都记在这里，方向由主线在收敛回来时给）'
-            : '（未归类：agent 在声明方向之前就先查了一次）')}
-      </p>
-      {step.verdict && <p className="verdict">{step.verdict}</p>}
-
-      {step.evidence.length > 0 && (
-        <ul className="evidence">
-          {step.evidence.map((e) => (
-            <li key={e.id} onClick={() => onExcerpt(e.callId, e.anchor, e.claim)}>
-              <span className="when">{e.occurredAtRaw ?? '—'}</span>
-              <span className="actor">{e.actor ?? ''}</span>
-              <span className="claim">{e.claim}</span>
-              <span className="anchor">{e.anchor ? `L${e.anchor}` : ''}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {step.calls.length > 0 && (
-        <div className="calls">
-          <button className={`toggle ${open ? 'up' : ''}`} onClick={() => setOpen(!open)}>
-            <Icon name="chevron" />
-            {open ? '收起' : '展开'} {step.calls.length} 次工具调用
-          </button>
-          {open &&
-            step.calls.map((c) => (
-              <div key={c.id} className={`call ${c.status}`} onClick={() => onExcerpt(c.id, null, c.toolName)}>
-                <div className="callhead">
-                  <b>#{c.callNumber}</b> {c.toolName}
-                  <span className={`origin ${c.origin}`}>{c.origin === 'operator' ? '人工' : 'agent'}</span>
-                  {gateLabel(c.gate) && <span className="gated">{gateLabel(c.gate)}</span>}
-                  {callStatusLabel(c.status) && <span className={`cs ${c.status}`}>{callStatusLabel(c.status)}</span>}
-                  <span className="lines">{c.outputLines} 行</span>
-                </div>
-                <pre>{c.outputPreview}</pre>
-              </div>
-            ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-/** 只管 step 的状态。会话那几档由底部状态栏自己说（`RunBar` 的 `stateLabel`）——
-    那儿要分"这一轮"与"这次调查"，与一步的结论不是一套词。 */
-function statusLabel(s: StepNode['status']) {
-  return (
-    { open: '进行中', confirmed: '已证实', refuted: '已推翻', inconclusive: '未查清', superseded: '被推翻', converged: '已收口' } as const
-  )[s];
-}
-
-/**
- * 跑完的是多数，不标。其余三种都要写出来：一次查不到东西，原因常常是它压根没跑成，
- * 而不是"这里确实没有数据"——这两件事在报告里的分量完全不同。
- * `denied` 不在这儿，它由闸门那个标签说了。
- */
-function callStatusLabel(status: string) {
-  return ({ pending: '进行中', failed: '失败', abandoned: '已放弃' } as Record<string, string>)[status];
-}
-
-/**
- * 自动放行的是多数（`auto`），标出来只会成噪声；其余都要在节点上留痕。
- *
- * **两种拒必须分得开**：`auto_deny` 是 backend 那侧按后果判的，人根本没被问到——
- * 写成同一个「被拒」的话，读轨道的人会以为那是自己当时拦的（§8.1）。
- */
-function gateLabel(gate: CallNode['gate']) {
-  return (
-    {
-      allow: '已放行',
-      rewrite: '参数被改写',
-      deny: '被你拒了',
-      auto_deny: '被自动拒了',
-      timeout: '自动放行',
-    } as Record<string, string>
-  )[gate ?? ''];
-}
-
-function kindLabel(k: StepNode['kind']) {
-  return ({ normal: '排查', unclassified: '未归类', impact: '影响面', leftover: '遗留问题' } as const)[k];
-}
 
 export type { PendingAsk };
