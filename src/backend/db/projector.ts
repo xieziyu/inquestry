@@ -61,6 +61,12 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       db.prepare(`UPDATE cases SET status=? WHERE id=?`).run(p.status, p.caseId);
       return;
     }
+    case 'case.renamed': {
+      const p = ev.payload;
+      db.prepare(`UPDATE cases SET title=? WHERE id=?`).run(p.title, p.caseId);
+      // 检索索引不跟着改：`case.opened` 那一条进的是 question，标题本来就没单独进过表
+      return;
+    }
     case 'case.verdict_decided': {
       const p = ev.payload;
       db.prepare(`UPDATE cases SET verdict_shape=? WHERE id=?`).run(p.shape, p.caseId);
@@ -296,6 +302,7 @@ const REQUIRED_KEYS: { [N in EventName]: { [K in RequiredKeys<DomainEvents[N]>]:
     at: true,
   },
   'case.status_changed': { caseId: true, status: true, at: true },
+  'case.renamed': { caseId: true, title: true, source: true, at: true },
   'case.verdict_decided': { caseId: true, shape: true, at: true },
   'session.started': { sessionId: true, caseId: true, backend: true, at: true },
   'session.ended': { sessionId: true, status: true, at: true },

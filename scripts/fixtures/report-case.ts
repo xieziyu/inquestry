@@ -20,6 +20,8 @@ let seq = 0;
 export function step(p: Partial<StepNode> & { id: string }): StepNode {
   return {
     ordinal: ++seq,
+    // 轨道织对话用它排位置；夹具里按到达顺序给一串递增值就够
+    startedAt: seq * 1000,
     sessionId: 'se1',
     sessionIndex: 1,
     parentStepId: null,

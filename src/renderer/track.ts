@@ -1,4 +1,4 @@
-import type { StepNode } from '../shared/ipc.js';
+import type { ChatLine, StepNode } from '../shared/ipc.js';
 
 /**
  * 轨道布局（D23 / ui.md §3）。
@@ -109,4 +109,46 @@ export function trackLayout(steps: StepNode[]): TrackLayout {
     .map((s) => ({ fromId: s.supersededBy!, toId: s.id }));
 
   return { rows, edges };
+}
+
+/**
+ * 舞台上的一项：一步，或 agent / 人说的一句话。
+ *
+ * **对话不再压在底部一条带里。** 原先只露最后一句 assistant 文本，理由是"agent 的文字里
+ * 已经没有证据搬运，只剩判断"——判断没错，但那条带把判断放在了离它所属的那一步最远的地方：
+ * 屏幕最底下、输入框上面，读起来像一句悬空的总结。判断属于轨道，所以它就长在轨道上。
+ */
+export type StageRow =
+  | { kind: 'step'; id: string; row: TrackRow }
+  | { kind: 'chat'; id: string; line: ChatLine };
+
+/**
+ * 把对话织进轨道。**不改轨道自己的顺序**（D23）：行序仍旧逐字是 `rows` 的顺序，
+ * 每句话只是插到"它说出口时已经开出来的最后一步"后面。
+ *
+ * 两个值都不会再变（`startedAt` 与 `at` 都是落库那一刻定的），所以插好的位置也不会再动——
+ * 拿"当前时间"或"当前在跑哪一步"去定位的话，同一句话会随着排查往下走而挪位置。
+ *
+ * **每次会话开场那条不织进去**：它是 harness 用建单信息拼的（问题正文 + 基准日期 + 工作区），
+ * 立案卡上已经逐字有了，织进来就是同一段话在一屏上出现两次。认法是"以问题正文开头的 user 句"
+ * ——`session_id` 在快照里没有，而 role 与正文是有的。
+ */
+export function weaveChat(rows: TrackRow[], chat: ChatLine[], question?: string): StageRow[] {
+  const q = question?.trim();
+  const said = chat.filter((c) => !(q && c.role === 'user' && c.text.trim().startsWith(q)));
+  const out: StageRow[] = [];
+  let i = 0;
+  const drain = (before: number) => {
+    while (i < said.length && said[i]!.at < before) {
+      const line = said[i]!;
+      out.push({ kind: 'chat', id: `chat-${line.at}-${i}`, line });
+      i += 1;
+    }
+  };
+  for (const row of rows) {
+    drain(row.step.startedAt);
+    out.push({ kind: 'step', id: row.step.id, row });
+  }
+  drain(Number.POSITIVE_INFINITY);
+  return out;
 }

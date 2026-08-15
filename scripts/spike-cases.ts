@@ -24,7 +24,7 @@ import { readBlobHead, storeBlob } from '../src/backend/db/blobs.js';
 import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../src/backend/db/database.js';
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
-import { readIntake, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
+import { readIntake, renameCase, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import type { CaseHit } from '../src/shared/ipc.js';
 import { cacheBlob, cacheHit } from '../src/backend/agent/capabilities.js';
 import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/shared/settings.js';
@@ -161,6 +161,27 @@ async function main() {
     '对话带按时间排，不按会话分段（读的人要的是一条连续的带）',
     chat.length === 2 && chat[0]!.at <= chat[1]!.at,
     chat.map((c) => c.at).join(' → ') || '（空的）',
+  );
+
+  // ── 标题：**它会被改两次**，所以不能跟建单信息一起冻在 `case.opened` 里 ──────
+  //
+  // 立案那一刻先落一句由问题首行截出的兜底，agent 读完问题后改成一句短的，人还能再改。
+  // 直接 `UPDATE cases` 的错法是静默的：库里改成了，一重放就被 `case.opened` 抹回兜底那句。
+  const beforeTitle = readIntake(db, 'case_x')!.title;
+  const renamed = renameCase(db, { caseId: 'case_x', blobDir: blobs, now: () => Date.now() }, '订单重复写入', 'agent');
+  check(
+    '改标题落库，快照上跟着变',
+    renamed && readIntake(db, 'case_x')?.title === '订单重复写入' && beforeTitle !== '订单重复写入',
+    `${beforeTitle} → ${readIntake(db, 'case_x')?.title}`,
+  );
+  const renameEvents = () =>
+    (db.prepare(`SELECT COUNT(*) c FROM events WHERE type='case.renamed'`).get() as { c: number }).c;
+  const once = renameEvents();
+  const sameAgain = renameCase(db, { caseId: 'case_x', blobDir: blobs, now: () => Date.now() }, '订单重复写入', 'operator');
+  check(
+    '同一句话再落一次是空操作，不发第二条事件',
+    !sameAgain && renameEvents() === once,
+    `事件数 ${once} → ${renameEvents()} —— 每次快照都发一条的话，事件表会被"标题没变"刷满`,
   );
 
   // ── 重放前的载荷体检：迁移这条路的地基（data-model.md §2） ────────────────
@@ -364,6 +385,13 @@ async function main() {
     '重放不该把 case_ui_state 一起冲掉（它对 cases 有级联删除，而里面装的重建不出来）',
     keptUi?.value.includes('probe-model') === true && keptUi.value.includes('"takeover":true'),
     `重放后=${keptUi?.value ?? '(没了)'}`,
+  );
+
+  // 标题是 `case.opened` 之后才改的，重放次序一乱（或改标题不走事件）它就被抹回兜底那句
+  check(
+    '重放之后标题还是改过的那一个，不被 case.opened 抹回去',
+    readIntake(db, 'case_x')?.title === '订单重复写入',
+    `重放后=${readIntake(db, 'case_x')?.title} —— 直接 UPDATE cases 的话这里会变回问题首行`,
   );
 
   // 缺一级就整条走不通：跳过那一级等于把它那几列悄悄留空

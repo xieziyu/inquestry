@@ -148,6 +148,13 @@ export class CaseRunner {
   private allowed: Set<string>;
   /** 接管模式：每一次非放行档的调用都推到闸门上，由人当场处置（overview §3.5）。 */
   private takeover: boolean;
+  /**
+   * 上下文窗口用掉多少（底部状态栏读它）。
+   *
+   * **每轮收尾时问一次，不每帧算**：`getContextUsage()` 是一次控制往返，而快照 60ms 一轮。
+   * 一轮之内它也不会变——变的是这一轮往上下文里塞了什么，那要等这一轮结束才数得清。
+   */
+  private context: Snapshot['context'] = null;
   private onChange: () => void;
 
   constructor(private init: CaseRunnerInit) {
@@ -324,6 +331,7 @@ export class CaseRunner {
           sessionStatus: this.status,
           takeover: this.takeover,
           lastError: this.lastError,
+          context: this.context,
           cases,
         },
       );
@@ -361,6 +369,8 @@ export class CaseRunner {
     if (this.q) return this.send(opening);
     const session = this.beginSession();
     this.lastError = null;
+    // 新会话是新的上下文窗口：留着上一轮那个百分比的话，屏幕上是一个刚开的会话已经用掉了七成
+    this.context = null;
     this.pushChat('user', opening);
     this.busy = true;
     this.status = 'live';
@@ -472,6 +482,7 @@ export class CaseRunner {
           this.lastError = r.is_error
             ? r.result?.trim() || '这一轮失败了，但 backend 没有给出原因。'
             : null;
+          void this.refreshContext(q);
           this.onChange();
         }
       }
@@ -495,6 +506,30 @@ export class CaseRunner {
         this.lanes.reset();
         this.onChange();
       }
+    }
+  }
+
+  /**
+   * 问一次上下文用量。**认准自己那一次查询**，理由同 `consume`：`restart()` 会在旧的还没停稳时
+   * 就把新的建起来，旧那次的回答落到新会话头上，屏幕上是一个刚开的会话顶着上一轮的百分比。
+   *
+   * 问不到就保持原样、**不清空**：那多半是会话正在收尾。清成 null 的话，
+   * 底部那一格会在每轮结束时闪一下没有。
+   */
+  private async refreshContext(q: Query) {
+    try {
+      const u = await q.getContextUsage();
+      if (this.q !== q) return;
+      this.context = {
+        usedTokens: u.totalTokens,
+        maxTokens: u.maxTokens,
+        percent: u.percentage,
+        // 落到哪一代模型只有 backend 说得出（ui.md §8.1）：面板上选的是 `sonnet` 这样的档位名
+        model: u.model || null,
+      };
+      this.onChange();
+    } catch (err) {
+      console.error('[case] 取上下文用量失败', err);
     }
   }
 

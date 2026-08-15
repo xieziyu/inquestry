@@ -20,8 +20,8 @@
 
 import { blobDir, openDatabase } from '../src/backend/db/database.js';
 import { createInvestigationSession } from '../src/backend/store/sqlite-store.js';
-import { MAX_DEPTH, trackLayout } from '../src/renderer/track.js';
-import type { StepNode } from '../src/shared/ipc.js';
+import { MAX_DEPTH, trackLayout, weaveChat } from '../src/renderer/track.js';
+import type { ChatLine, StepNode } from '../src/shared/ipc.js';
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -30,6 +30,7 @@ let seq = 0;
 function step(p: Partial<StepNode> & { id: string }): StepNode {
   return {
     ordinal: ++seq,
+    startedAt: seq * 1000,
     sessionId: 'se1',
     sessionIndex: 1,
     parentStepId: null,
@@ -253,6 +254,69 @@ async function storeChecks() {
     (db.prepare(`SELECT parent_step_id p FROM steps WHERE id=?`).get(good.stepId) as { p: string | null }).p ===
       root.stepId && good.warnings.length === 0,
     '校验写紧了会把真分叉也打成主干',
+  );
+}
+
+/**
+ * 对话织进轨道（`weaveChat`）。**要验的是"织进去之后轨道自己一个字没动"**——
+ * 这一段与上面那条前缀稳定性同源：对话每几秒来一句，只要它能推动已有的行，
+ * 正读着的那一步就会跑。
+ */
+{
+  const question = '订单出现了两条重复记录';
+  const talk = (at: number, role: ChatLine['role'], text: string): ChatLine => ({ role, text, at });
+  // 夹具里的步是 `seq * 1000`，第 1 到第 9 步分别落在 1000…9000
+  const chat: ChatLine[] = [
+    // 开场白：harness 用建单信息拼的，正文以问题开头，立案卡上已经逐字有了
+    talk(500, 'user', `${question}\n基准日期：2026-08-15（时区 +08:00）。`),
+    talk(1500, 'assistant', '先看这两条是不是同一个请求写进去的。'),
+    talk(4200, 'user', '别查网关了，先看从库。'),
+    // 比最后一步还晚：它该落在末尾，而不是被丢掉
+    talk(99_000, 'assistant', '影响面已经数出来了。'),
+  ];
+  const woven = weaveChat(L.rows, chat, question);
+  const stepsOnly = woven.filter((i) => i.kind === 'step').map((i) => i.id);
+
+  check(
+    '织进对话之后，步的顺序一个字没动',
+    stepsOnly.join(',') === L.rows.map((r) => r.step.id).join(','),
+    `实得 ${stepsOnly.join(',')} —— 按时间重排整条轨道的话，晚到的分叉会把已读的行推走`,
+  );
+
+  check(
+    '开场白不织进去（立案卡上已经逐字有了）',
+    !woven.some((i) => i.kind === 'chat' && i.line.text.startsWith(question)),
+    '不认出来的话，同一段问题描述会在一屏上出现两次：立案卡一次、轨道第一行一次',
+  );
+
+  const at = (id: string) => woven.findIndex((i) => i.kind === 'chat' && i.line.text.startsWith(id));
+  check(
+    '每句话插在"它说出口时已经开出来的最后一步"之后',
+    at('先看这两条') === 1 && woven[0]!.id === 'a' && at('别查网关了') === 5,
+    `实得下标 ${at('先看这两条')} / ${at('别查网关了')} —— a 起于 1000、d 起于 5000，两句分别落在 a 与 fwd 之后`,
+  );
+
+  check(
+    '比所有步都晚的那句落在末尾，不丢',
+    woven[woven.length - 1]!.kind === 'chat',
+    '拿"最后一步之前"当唯一落点的话，一轮跑完之后 agent 那句收尾的话就没有位置了',
+  );
+
+  // 追加一句不动已有的任何一项：与上面那条前缀检查同一条约束，只是换成对话在增长
+  let stableTalk = true;
+  for (let n = 1; n <= chat.length; n++) {
+    const pre = weaveChat(L.rows, chat.slice(0, n), question).map((i) => i.id);
+    const full = woven.map((i) => i.id);
+    for (let i = 0; i < pre.length; i++) {
+      // 前缀里第 i 项在全量里未必还是第 i 项（后来的话会插在它前面），
+      // 但**相对顺序**必须不变——这才是"已读的东西不会跑"那句话的形式化
+      if (full.indexOf(pre[i]!) < (i > 0 ? full.indexOf(pre[i - 1]!) : -1)) stableTalk = false;
+    }
+  }
+  check(
+    '新说一句不打乱已有各项的相对顺序',
+    stableTalk,
+    '按"当前在跑哪一步"定位的话，同一句话会随排查往下走而挪位置',
   );
 }
 

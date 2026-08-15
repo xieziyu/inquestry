@@ -181,6 +181,11 @@ export type EvidenceNode = {
 export type StepNode = {
   id: string;
   /**
+   * 这一步开始的时刻。**只用来把对话插进轨道里**（`track.ts` 的 `weaveChat`）：
+   * 轨道自己的顺序永远是到达顺序，不按时间排——按时间排就等于允许重排（D23）。
+   */
+  startedAt: number;
+  /**
    * 会话内序号，**不是排查内的**：一次排查跨多会话，重开一次它就从 1 重来。
    * 轨道上因此会出现两个 #1，得靠 `sessionIndex` 标出断点。
    */
@@ -390,6 +395,19 @@ export type Snapshot = {
   lastError: string | null;
   busy: boolean;
   /**
+   * 这一轮结束时上下文窗口用掉多少（底部状态栏那一格）。
+   *
+   * **会话没起来、或还没跑完第一轮时是 null**，那时不显示——编一个 0%
+   * 与"真的还没用"在屏幕上长得一样，而前者是"我们没问到"。
+   */
+  context: {
+    usedTokens: number;
+    maxTokens: number;
+    percent: number;
+    /** backend 报的落地模型（`sonnet` → `claude-sonnet-5`）；报不出就是 null。 */
+    model: string | null;
+  } | null;
+  /**
    * 还有几条子 agent 支线在后台跑（§3.4）。
    *
    * **与 `busy` 分开**：`result` 一到主线就不忙了，而支线默认就在后台跑，那一刻很可能
@@ -478,6 +496,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   takeover: false,
   lastError: null,
   busy: false,
+  context: null,
   backgroundLanes: 0,
   liveLanes: [],
   steps: [],
@@ -516,6 +535,13 @@ export type InquestryApi = {
   /** 打开系统目录选择器；用户取消返回 null。 */
   pickProjectRoot(): Promise<string | null>;
   createCase(draft: IntakeDraft): Promise<IntakeResult>;
+  /**
+   * 改这次排查的标题。**不带"这一屏是哪个排查"的校验**，与那几条动作 IPC 不同：
+   * 改的是哪一条由参数说了算，与"当前跑着的是哪一个"无关。
+   *
+   * 回执是改没改成——同一句话再落一次回 false，界面不必为此做任何事。
+   */
+  renameCase(caseId: string, title: string): Promise<boolean>;
   /** 切到另一次排查。**不中断任何一个**：main 持有全部运行时，这里只是换个投影看。 */
   switchCase(caseId: string): Promise<void>;
   /** 去新建排查面板开新排查；当前排查照旧在后台跑。 */

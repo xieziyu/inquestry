@@ -28,6 +28,15 @@ export type DomainEvents = {
    */
   'case.status_changed': { caseId: string; status: 'open' | 'closed' | 'aborted'; at: number };
   /**
+   * 改标题。**标题不是建单信息的一部分，它会被改两次**：立案那一刻先落一句由问题首行截出的
+   * 兜底，agent 读完问题后改成一句短的，人还能再改。走事件而不是 `UPDATE cases`——
+   * 直接改的值一重放就被 `case.opened` 抹回那句兜底。
+   *
+   * `source` 要留着：人动过手之后 agent 那条迟到的建议就不该再盖上去（见 main 的 `nameCase`）。
+   */
+  'case.renamed': { caseId: string; title: string; source: 'agent' | 'operator'; at: number };
+
+  /**
    * 报告按哪种形态装（D25）。与状态分成两条事件：形态是「报告长什么样」，
    * 状态是「排查还能不能动」，归档那一档两者同时发生但含义不同——
    * 合成一条的话，日后想在冻结之后单独改形态就没有事件表示得出来。

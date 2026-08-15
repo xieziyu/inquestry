@@ -10,10 +10,11 @@ import { fileURLToPath } from 'node:url';
 import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
-import { readIntake, sweepZombies } from '../backend/store/sqlite-store.js';
+import { readIntake, renameCase, sweepZombies } from '../backend/store/sqlite-store.js';
 import { casePage } from '../backend/db/queries.js';
 import { exportStamp, localTzOffset, todayLocal } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
+import { proposeCaseTitle } from './case-namer.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
 import {
@@ -193,7 +194,33 @@ function createCase(draft: IntakeDraft): IntakeResult {
   );
   writeCaseUi(caseId, { agent: draft.agent, takeover: draft.takeover });
   schedulePush();
+  // 起标题是**新建之后的一件后台事**，不挡这一下：它要 spawn 一次 CLI，
+  // 而人点完「新建」的下一个动作是点「开始排查」。落地了自己会推一轮快照
+  void nameCase(caseId, question);
   return { ok: true };
+}
+
+/**
+ * 让 agent 读完问题后给这次排查起个短标题（`case-namer.ts` 说明了为什么它另开一次 spawn）。
+ *
+ * **只在标题仍是那句兜底时才写**：起标题这一趟要几秒，这几秒里人完全可能已经自己改过了，
+ * 而人改过的东西不该被一条迟到的建议盖掉。
+ */
+async function nameCase(caseId: string, question: string) {
+  const proposed = await proposeCaseTitle(question);
+  if (!proposed) return;
+  if (readIntake(db, caseId)?.title !== titleOf(question)) return;
+  if (renameTo(caseId, proposed, 'agent')) schedulePush();
+}
+
+/** 改标题。事件走 `renameCase`，这儿只补上 main 这侧的上下文。 */
+function renameTo(caseId: string, title: string, source: 'agent' | 'operator'): boolean {
+  try {
+    return renameCase(db, { caseId, blobDir: blobs, now: () => Date.now() }, title, source);
+  } catch (err) {
+    console.error('[main] 改标题失败', err);
+    return false;
+  }
 }
 
 /** 按库里的建单信息重建一次排查的运行时。库里没有这个 id 就返回 null（列表会拒绝切过去）。 */
@@ -748,6 +775,13 @@ app.whenReady().then(async () => {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle('case:create', (_e, draft: IntakeDraft) => createCase(draft));
+  // 改标题不经 `currentIf`：历史排查页上改的那一条多半不是当前排查，
+  // 而它与"当前跑着的是哪一个"毫无关系
+  ipcMain.handle('case:rename', (_e, caseId: string, title: string) => {
+    const ok = renameTo(caseId, title, 'operator');
+    if (ok) schedulePush();
+    return ok;
+  });
   ipcMain.handle('case:switch', (_e, caseId: string) => {
     cases.switchTo(caseId);
     schedulePush();

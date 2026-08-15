@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Icon } from './Icon.js';
 import type { OperatorReply, PendingAsk } from '../shared/ipc.js';
 
 /**
@@ -91,6 +92,7 @@ export function PendingCard({
             />
           </label>
           <button className="primary" disabled={!answer.trim()} onClick={submit}>
+            <Icon name="send" />
             回填 <small>⌘↵</small>
           </button>
         </div>

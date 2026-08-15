@@ -128,6 +128,32 @@ export function openCase(db: Db, ctx: CaseContext, intake: CaseIntake): CaseInta
 }
 
 /**
+ * 改标题。返回改没改成——同一句话再落一次是空操作，界面不必为此再推一轮快照。
+ *
+ * **标题与建单信息分开**：`openCase` 只在 case 不存在时发一次事件，之后它那份 intake
+ * 一个字都不再动（基准日期改了已落库的 `occurred_at_ms` 就对不上）。标题却是要改的，
+ * 所以它自己一条事件。
+ */
+export function renameCase(
+  db: Db,
+  ctx: CaseContext,
+  title: string,
+  source: 'agent' | 'operator',
+): boolean {
+  const next = title.trim();
+  if (!next) return false;
+  const row = db.prepare(`SELECT title FROM cases WHERE id=?`).get(ctx.caseId) as
+    | { title: string }
+    | undefined;
+  if (!row || row.title === next) return false;
+  emitTo(db, ctx, null, {
+    type: 'case.renamed',
+    payload: { caseId: ctx.caseId, title: next, source, at: ctx.now() },
+  });
+  return true;
+}
+
+/**
  * 收尾三档里改状态的那两档（D29）。
  *
  * 走事件而不是 `UPDATE cases`：重放时 `case.opened` 会把 status 写回 `open`，

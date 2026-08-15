@@ -49,7 +49,10 @@ CREATE TABLE IF NOT EXISTS blobs (
 -- 收尾三档（D29）：停止仍是 open，定稿 closed，归档 aborted 仍可导出半程报告
 CREATE TABLE IF NOT EXISTS cases (
   id            TEXT    PRIMARY KEY,
-  title         TEXT    NOT NULL,        -- 排查列表上的短标签，由问题首行截出
+  -- 排查列表上的短标签。**会被改两次**：立案先落一句由问题首行截出的兜底，agent 读完问题后
+  -- 改成一句短的，人还能再改（D30）。改动一律走 case.renamed 事件——直接 UPDATE 的话
+  -- 一重放就被 case.opened 抹回兜底那句
+  title         TEXT    NOT NULL,
   question      TEXT,                    -- 新建排查时写的完整问题，新开 session 时用它起头
   status        TEXT    NOT NULL CHECK (status IN ('open','closed','aborted')),
   -- agent 的 cwd。它决定继承哪个项目的 skill / MCP，也决定会话记录落在哪个 ~/.claude/projects 目录

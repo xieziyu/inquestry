@@ -22,10 +22,17 @@ import type {
   Snapshot,
 } from '../../shared/ipc.js';
 import { DEFAULT_UI_SETTINGS } from '../../shared/settings.js';
-import { incident, report, steps } from '../../../scripts/fixtures/report-case.js';
+import { incident, report, steps as rawSteps } from '../../../scripts/fixtures/report-case.js';
 
 const now = Date.now();
 const min = 60_000;
+
+/**
+ * 那份夹具里的 `startedAt` 是一串固定的小整数（它要给 spike 用，不能读时钟）。
+ * 预览这一侧要看的恰恰是**对话织进轨道之后长什么样**，所以在这儿把它挪到最近十几分钟内，
+ * 与下面那份 CHAT 咬得上——不挪的话每一句话都会堆在轨道末尾，那一版看不出织没织对。
+ */
+const steps = rawSteps.map((s, i) => ({ ...s, startedAt: now - (13 - i) * min }));
 
 const CASES: CaseBrief[] = [
   { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 2 * min, current: true, todos: 2, running: true, loaded: true },
@@ -89,6 +96,7 @@ const FULL: Snapshot = {
   takeover: true,
   lastError: null,
   busy: true,
+  context: { usedTokens: 63_400, maxTokens: 200_000, percent: 31.7, model: 'claude-opus-5[1m]' },
   backgroundLanes: 1,
   liveLanes: ['lane_a'],
   steps,
@@ -109,6 +117,8 @@ const EMPTY_LIKE: Snapshot = {
   sessionStatus: 'idle',
   takeover: false,
   busy: false,
+  // 一轮都没跑过就问不到上下文用量，那一格因此整个不显示——编一个 0% 与"真的还没用"长得一样
+  context: null,
   backgroundLanes: 0,
   liveLanes: [],
   steps: [],
@@ -176,6 +186,10 @@ export function installPreviewApi(): void {
     // 浏览器里没有系统目录选择器，给个像样的路径，好让「选中之后」那一版也看得到
     pickProjectRoot: async () => '/Users/ziyu/Projects/order-api',
     createCase: async () => ({ ok: true }),
+    renameCase: async (_id, title) => {
+      patch({ case: current.case && { ...current.case, title } });
+      return true;
+    },
     switchCase: async () => {},
     newCase: async () => {},
     start: async () => {},

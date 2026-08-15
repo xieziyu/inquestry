@@ -1,29 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Icon } from './Icon.js';
 import type { AgentChoice, IntakeDraft, IntakeOptions, IntakeResult, ModelOption } from '../shared/ipc.js';
 import { rootLabel, rootParent } from './caseline.js';
 import { Picker, type PickerItem } from './Picker.js';
-
-/** 与 rail 那几枚同一套（`Rail.tsx` 的 `S`）：24 的 viewBox、1.7 的描边。 */
-const FolderIcon = () => (
-  <svg
-    width="15"
-    height="15"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.7}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M3 7.5a2 2 0 0 1 2-2h3.7l2 2.4H19a2 2 0 0 1 2 2v6.6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-  </svg>
-);
-
-const PlusIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round">
-    <path d="M12 5.5v13M5.5 12h13" />
-  </svg>
-);
 
 /** backend 报出来的「不指定模型」那一档的 value。 */
 const DEFAULT_ROW = 'default';
@@ -156,10 +135,10 @@ export function Intake({
           items={roots}
           onPick={choose}
           placeholder="选择目录…"
-          icon={<FolderIcon />}
+          icon={<Icon name="folder" size={15} />}
           need={!root}
           noteTruncate="head"
-          action={{ label: '打开其他目录…', icon: <PlusIcon />, onSelect: pick }}
+          action={{ label: '打开其他目录…', icon: <Icon name="plus" />, onSelect: pick }}
         />
         {/* 只在提交时才知道目录不合法（可能刚被删掉），那条错误要回到这一格上 */}
         {rootError && <p className="hint err">{rootError}</p>}
@@ -252,6 +231,7 @@ export function Intake({
         <span className="right">
           {!root.trim() && <span className="hint">先选一个工作区目录。</span>}
           <button className="go" disabled={!ready} onClick={() => void submit()}>
+            <Icon name="play" />
             启动 <small>⌘↵</small>
           </button>
         </span>

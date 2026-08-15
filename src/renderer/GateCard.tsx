@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon.js';
 import type { GateDecision, PendingGate } from '../shared/ipc.js';
 import { isPlainKey, isTyping } from './keys.js';
 
@@ -136,14 +137,17 @@ export function GateCard({
       <div className="acts">
         {note === null ? (
           <button className="ghost" onClick={() => { setNote(''); setTimeout(() => message.current?.focus(), 0); }}>
+            <Icon name="deny" />
             拒绝并留话 <small>D</small>
           </button>
         ) : (
           <button className="ghost bad" disabled={!note.trim()} onClick={deny}>
+            <Icon name="deny" />
             确认拒绝 <small>⌘↵</small>
           </button>
         )}
         <button className="primary" disabled={invalid} onClick={allow}>
+          <Icon name={changed ? 'pencil' : 'check'} />
           {changed ? '改写并放行' : '放行'} <small>A</small>
         </button>
       </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CaseBrief, IntakeOptions } from '../shared/ipc.js';
 import { ago, caseState, TodoBadge } from './caseline.js';
+import { Icon } from './Icon.js';
 import { Intake } from './Intake.js';
 import { LogoMark } from './LogoMark.js';
 
@@ -61,6 +62,7 @@ export function Home({
               <span className="c">{rows.length || ''}</span>
               <button className="all" onClick={onAll}>
                 全部历史
+                <Icon name="arrow" size={12} />
               </button>
             </div>
 

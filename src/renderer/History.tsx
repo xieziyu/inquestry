@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon.js';
 import type { CaseBrief, CaseHit, CaseListQuery, CaseListRow } from '../shared/ipc.js';
 import { ago, caseShape, caseState, rootLabel, TodoBadge } from './caseline.js';
 import { freshenHits } from './drafts.js';
@@ -257,6 +258,7 @@ function Row({
             title="导出 Markdown"
             onClick={() => void window.inquestry.exportMarkdown(c.id)}
           >
+            <Icon name="download" size={12} />
             导出
           </button>
         </div>

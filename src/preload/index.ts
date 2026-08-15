@@ -16,6 +16,7 @@ const api: InquestryApi = {
   intakeOptions: () => ipcRenderer.invoke('intake:options'),
   pickProjectRoot: () => ipcRenderer.invoke('intake:pickRoot'),
   createCase: (draft: IntakeDraft) => ipcRenderer.invoke('case:create', draft),
+  renameCase: (caseId: string, title: string) => ipcRenderer.invoke('case:rename', caseId, title),
   switchCase: (caseId: string) => ipcRenderer.invoke('case:switch', caseId),
   newCase: () => ipcRenderer.invoke('case:new'),
   start: (caseId: string, question?: string) => ipcRenderer.invoke('case:start', caseId, question),
