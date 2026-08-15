@@ -24,7 +24,12 @@ import { readBlobHead, storeBlob } from '../src/backend/db/blobs.js';
 import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../src/backend/db/database.js';
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
-import { readIntake, renameCase, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
+import {
+  readIntake,
+  renameCase,
+  setCaseTimebase,
+  type InvestigationSession,
+} from '../src/backend/store/sqlite-store.js';
 import { EMPTY_SNAPSHOT, type CaseBrief, type CaseHit } from '../src/shared/ipc.js';
 import { cacheBlob, cacheHit } from '../src/backend/agent/capabilities.js';
 import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/shared/settings.js';
@@ -119,6 +124,9 @@ async function main() {
   // 直接调 store 的话，把 pushChat 改回只存内存也照样全绿
   (first as unknown as Probe).pushChat('user', '别查网关了，先看从库');
   const createdAt = (db.prepare(`SELECT created_at c FROM cases WHERE id='case_x'`).get() as { c: number }).c;
+  // 确认一次基准日期：下面那条迁移检查要靠「确认过的还是确认过的」才验得到重放，
+  // 光看列在不在的话，DEFAULT 'intake' 会让忘了写投影分支也照样绿
+  setCaseTimebase(db, { caseId: 'case_x', blobDir: blobs, now: () => Date.now() }, '2026-08-08', 'agent');
   first.close();
 
   // 关掉再打开 = 同一次调查的第二次会话（重启 app 走的也是这条路）
@@ -336,37 +344,38 @@ async function main() {
   // 而 `MIGRATIONS` 里真正那一级写没写对是另一回事：写歪了（列名拼错、忘了加进阶梯）
   // 的表现是**开发库被挪走**——app 起得来、界面干净、调查全没了。
   //
-  // 造一份"真的是 v5"的库：把当前库复制一份，删掉 v6 加的那一列，再把版本调回去。
+  // 造一份"真的是上一版"的库：把当前库复制一份，删掉最新一级加的那一列，再把版本调回去。
   // 光改 user_version 不删列的话，`ALTER TABLE ADD COLUMN` 会撞上重复列，
-  // 验到的就成了"迁移会失败"而不是"迁移能成"
+  // 验到的就成了"迁移会失败"而不是"迁移能成"。
+  // ⚠️ **删的必须是阶梯最后一级加的那一列**（这里是 v7 的 `incident_date_source`）——
+  // 跟着阶梯走，加新一级时这儿要一起改
   const real = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-realmig-')), 'inquestry.db');
   db.prepare(`VACUUM INTO ?`).run(real);
   const realOld = new DatabaseCtor(real);
-  realOld.exec(`ALTER TABLE steps DROP COLUMN remediation`);
+  realOld.exec(`ALTER TABLE cases DROP COLUMN incident_date_source`);
   realOld.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
   realOld.close();
-  const fixedBefore = (
-    db.prepare(`SELECT COUNT(*) c FROM steps WHERE remediation IS NOT NULL`).get() as { c: number }
-  ).c;
+  // **数的是"确认过基准的调查"而不是"列非空的行数"**：新列带 DEFAULT 'intake'，
+  // 后者哪怕投影器根本没接 `case.timebase_set` 也照样对得上
+  const CONFIRMED = `SELECT COUNT(*) c FROM cases WHERE incident_date_source='agent'`;
+  const fixedBefore = (db.prepare(CONFIRMED).get() as { c: number }).c;
   // **不传 steps**：走的就是代码里那条内置阶梯
   const realUp = openDatabase(real);
   const realPost = {
     cases: (realUp.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c,
-    fixed: (
-      realUp.prepare(`SELECT COUNT(*) c FROM steps WHERE remediation IS NOT NULL`).get() as { c: number }
-    ).c,
+    fixed: (realUp.prepare(CONFIRMED).get() as { c: number }).c,
     version: Number(realUp.pragma('user_version', { simple: true })),
   };
   realUp.close();
   check(
-    `内置阶梯把 v${SCHEMA_VERSION - 1} 迁到 v${SCHEMA_VERSION}：调查留在原地，新列的值由重放补回来`,
+    `内置阶梯把 v${SCHEMA_VERSION - 1} 迁到 v${SCHEMA_VERSION}：调查留在原地，新列的值由重放补回来（不是 DEFAULT 顶上的）`,
     realPost.cases === casesBefore &&
       realPost.cases > 0 &&
       fixedBefore > 0 &&
       realPost.fixed === fixedBefore &&
       realPost.version === SCHEMA_VERSION &&
       readdirSync(path.dirname(real)).every((f) => !f.includes('.bak')),
-    `调查 ${casesBefore} → ${realPost.cases}，带修复建议的步 ${fixedBefore} → ${realPost.fixed}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}`,
+    `调查 ${casesBefore} → ${realPost.cases}，确认过基准的调查 ${fixedBefore} → ${realPost.fixed}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}`,
   );
 
   // 🔴 **`case_ui_state` 不是投影，却会被投影的清空**：它对 `cases(id)` 带 ON DELETE CASCADE，

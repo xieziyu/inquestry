@@ -9,6 +9,7 @@ import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
 import { effectiveStep, reportSections, timestampedEvidenceCount } from '../db/queries.js';
 import { locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
+import { isTimeOnly, parseOccurredAt, type TimeBase, type TimeBaseSource } from '../db/timebase.js';
 import type { InvestigationStore } from '../tools/definitions.js';
 import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../tools/schemas.js';
 import {
@@ -50,8 +51,6 @@ export type CaseIntake = {
   clues: string | null;
 };
 
-/** 时间基准的最小切面：解析日志时间串只需要这两项。 */
-export type TimeBase = Pick<CaseIntake, 'incidentDate' | 'tzOffset'>;
 
 /** 闸门给出的处置。`input` 只有 rewrite 用得上，`message` 只有 deny 用得上。 */
 export type GateOutcome = {
@@ -117,8 +116,9 @@ type CaseContext = Pick<SessionContext, 'caseId' | 'blobDir'> & { now: () => num
  * **与开会话分开**，因为两者的时机不同：新建调查是人点「新建调查」那一刻，
  * 开会话是真的要跑第一轮的时候。合在一起会让"打开 app 看一眼"也留下一个空 session。
  *
- * 返回生效的建单信息——已存在的 case 以库里那份为准：基准日期一旦变过，
- * 已落库的 occurred_at_ms 就对不上了。
+ * 返回生效的建单信息——已存在的 case 以库里那份为准，本次调用方给的那份不覆盖它：
+ * 重开旧调查时按当天重算基准，会让这一轮的证据与上一轮错开一天。
+ * 要改基准走 `setCaseTimebase`，它带着重算。
  */
 export function openCase(db: Db, ctx: CaseContext, intake: CaseIntake): CaseIntake {
   if (!db.prepare(`SELECT 1 FROM cases WHERE id=?`).get(ctx.caseId)) {
@@ -130,9 +130,9 @@ export function openCase(db: Db, ctx: CaseContext, intake: CaseIntake): CaseInta
 /**
  * 改标题。返回改没改成——同一句话再落一次是空操作，界面不必为此再推一轮快照。
  *
- * **标题与建单信息分开**：`openCase` 只在 case 不存在时发一次事件，之后它那份 intake
- * 一个字都不再动（基准日期改了已落库的 `occurred_at_ms` 就对不上）。标题却是要改的，
- * 所以它自己一条事件。
+ * **标题不在建单信息里**：`openCase` 只在 case 不存在时发一次事件，之后不再碰那份 intake。
+ * 标题却是要改的（建单兜底 → agent 读完问题 → 人再改），所以它自己一条事件。
+ * 基准日期同理，见 `setCaseTimebase`。
  */
 export function renameCase(
   db: Db,
@@ -151,6 +151,49 @@ export function renameCase(
     payload: { caseId: ctx.caseId, title: next, source, at: ctx.now() },
   });
   return true;
+}
+
+/**
+ * 改基准日期。返回改没改成——同一天再落一次是空操作。
+ *
+ * **这是一次会动历史数据的写**：投影器接到事件后按新基准把已落库的 `occurred_at_ms`
+ * 由 `occurred_at_raw` 重算一遍。所以「建单时猜错了日期」不再是不可挽回的——
+ * 这正是 `occurred_at_raw` 一直存着的用处。
+ *
+ * **人动过手之后 agent 不该再盖上去**：判断放在调用方（main 的 `setTimebase`），
+ * 与标题那条同一个理由——这里看不见「是谁在什么时候动的」。
+ */
+export function setCaseTimebase(
+  db: Db,
+  ctx: CaseContext,
+  incidentDate: string,
+  source: 'agent' | 'operator',
+): boolean {
+  const next = incidentDate.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) return false;
+  const row = db
+    .prepare(`SELECT incident_date, incident_date_source FROM cases WHERE id=?`)
+    .get(ctx.caseId) as { incident_date: string; incident_date_source: TimeBaseSource } | undefined;
+  // 日期没变也要落：agent 确认「问题说的就是建单那天」同样是一次确认，
+  // 只比日期的话它落不下来，`incident_date_source` 会永远停在 intake，
+  // 那条提醒也就永远关不掉
+  if (!row || (row.incident_date === next && row.incident_date_source === source)) return false;
+  emitTo(db, ctx, null, {
+    type: 'case.timebase_set',
+    payload: { caseId: ctx.caseId, incidentDate: next, source, at: ctx.now() },
+  });
+  return true;
+}
+
+/** 基准日期与它的来源。**每次落证据都现读**——见 `closeStep` 里那处注释。 */
+export function readTimeBase(db: Db, caseId: string): (TimeBase & { source: TimeBaseSource }) | null {
+  const row = db
+    .prepare(
+      `SELECT incident_date AS incidentDate, tz_offset AS tzOffset,
+              incident_date_source AS source FROM cases WHERE id=?`,
+    )
+    .get(caseId) as (TimeBase & { source: TimeBaseSource }) | undefined;
+  return row ?? null;
 }
 
 /**
@@ -506,13 +549,24 @@ export function createInvestigationSession(
       }
       warnings.push(...shapeWarnings(final, args.status, step.kind));
 
+      // **基准现读，不用闭包里那份 `intake`。** agent 读完问题后可能把基准改到别的日子
+      // （`case.timebase_set`），而这个会话是在那之前开的——用捕获值的话，改基准之前落的
+      // 证据被投影器重算成了新基准，之后落的却还按旧基准算，同一条时间线上两段错开一天。
+      const base = readTimeBase(db, ctx.caseId) ?? { ...intake, source: 'intake' as const };
+      // 一步里可能有好几条纯时分秒的证据，提醒只发一次：同一句话重复几遍，
+      // 剩下那几条真正要 agent 动手的 warning 就被顶下去了
+      let guessedBase = false;
       for (const e of args.evidence) {
         const call = resolveCallRef(args.stepId, e.callRef);
         if (!call) {
           warnings.push(`callRef ${e.callRef} 在本 step 内不存在。`);
           continue;
         }
-        const occurred = parseOccurredAt(e.occurredAt, intake);
+        const occurred = parseOccurredAt(e.occurredAt, base);
+        // 纯时分秒的串把整个基准都用掉了，而基准还只是建单那一刻按本机当天猜的。
+        // 猜错了不会有任何报错，只让这条证据整体挪几天——所以要在**落进去的这一刻**说，
+        // 事后没有任何东西看得出来。给的出路是写全日期：那一档压根不经过基准
+        if (isTimeOnly(e.occurredAt) && base.source === 'intake') guessedBase = true;
         // 只有「自带时间戳的数据源 + 本次确实有命中」才强制 occurredAt：
         // 一刀切会逼 agent 拿查询执行时间凑数，假时间直接进报告主体（tools.md §3）
         const hasHits = (call.line_count ?? 0) > 1;
@@ -547,6 +601,14 @@ export function createInvestigationSession(
             actor: e.actor ?? null,
           },
         });
+      }
+
+      if (guessedBase) {
+        warnings.push(
+          `本步有只写了时分秒的 occurredAt，正按基准日期 ${base.incidentDate} 理解——` +
+            `那是建单当天，还没被确认过。这批日志不是那天的，就把 occurredAt 写成完整日期` +
+            `（如 2026-08-14 23:47:01），带日期的串不经过基准。`,
+        );
       }
 
       emit({
@@ -757,19 +819,3 @@ function anchorKind(anchor?: string): 'lines' | 'jsonpath' | 'whole' {
   return /\d/.test(anchor) ? 'lines' : 'whole';
 }
 
-/**
- * 日志时间串大多既无日期也无时区，必须靠 case 的基准日期与时区补齐；
- * 原始串照样存进 `occurred_at_raw`，解析错了才有得回溯（data-model.md §2）。
- */
-export function parseOccurredAt(raw: string | undefined, ctx: TimeBase) {
-  if (!raw) return { ms: null };
-  const s = raw.trim();
-  const timeOnly = s.match(/^(\d{1,2}):(\d{2}):(\d{2})(\.\d{1,3})?$/);
-  const candidate = timeOnly
-    ? `${ctx.incidentDate}T${s.padStart(8, '0')}${ctx.tzOffset}`
-    : /[zZ]|[+-]\d{2}:?\d{2}$/.test(s)
-      ? s.replace(' ', 'T')
-      : `${s.replace(' ', 'T')}${ctx.tzOffset}`;
-  const ms = Date.parse(candidate);
-  return { ms: Number.isNaN(ms) ? null : ms };
-}

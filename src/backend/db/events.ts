@@ -37,6 +37,24 @@ export type DomainEvents = {
   'case.renamed': { caseId: string; title: string; source: 'agent' | 'operator'; at: number };
 
   /**
+   * 改基准日期（`incidentDate`）。建单那一刻落的是本机当天，只是个猜测——「昨晚出的事、
+   * 今早建的单」很常见，而猜错了没有任何报错，只让所有纯时分秒的证据整体挪一天。
+   *
+   * **它必须是一条事件而不是 `UPDATE cases`**：投影器接到它时要按新基准把已落库的
+   * `occurred_at_ms` 由 `occurred_at_raw` 重算一遍，而重放要能一模一样地复现那次重算。
+   *
+   * `source` 与 `case.renamed` 同一个用法：人动过手之后，agent 那条迟到的推断不该再盖上去。
+   * 这里没有 `tzOffset`——时区没有可推断的来源（日志里那串是哪个区，agent 也只能猜），
+   * 要表达别的时区就在 `occurredAt` 里写全带偏移的串，那一档压根不经过基准。
+   */
+  'case.timebase_set': {
+    caseId: string;
+    incidentDate: string;
+    source: 'agent' | 'operator';
+    at: number;
+  };
+
+  /**
    * 报告按哪种形态装（D25）。与状态分成两条事件：形态是「报告长什么样」，
    * 状态是「调查还能不能动」，归档那一档两者同时发生但含义不同——
    * 合成一条的话，日后想在冻结之后单独改形态就没有事件表示得出来。

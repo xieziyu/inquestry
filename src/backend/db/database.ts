@@ -5,6 +5,8 @@ import { checkEventShapes, rebuildProjections } from './projector.js';
 import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
 
 /**
+ * 7：`cases.incident_date_source` —— 基准日期是建单猜的还是被确认过的。
+ *    默认 `'intake'` 就是老库的真实情况：那时还没有 `case.timebase_set` 这条事件。
  * 6：`steps.remediation` —— 修复建议的写入方（报告四栏最后补齐的那一栏）。
  *    **第一级真正走重放迁移的升级**：只加一个 nullable 列，老事件形状没动过。
  * 5：`tool_calls.gate_decision` 多一档 `auto_deny`（分类器/规则拒的，人没被问到）
@@ -12,7 +14,7 @@ import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
  * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（data-model.md 的 `converged` 一节）。
  * 3：`steps.shape` —— agent 声明的报告形态（v2 只有 `cases.verdict_shape` 这个终态）。
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export type Db = Database.Database;
 
@@ -34,6 +36,17 @@ export type MigrationStep = { to: number; apply: (db: Db) => void };
  */
 const MIGRATIONS: MigrationStep[] = [
   { to: 6, apply: (db) => db.exec(`ALTER TABLE steps ADD COLUMN remediation TEXT`) },
+  {
+    to: 7,
+    // 带 DEFAULT 的 NOT NULL 列：老行当场就有了正确的值，不必等重放。
+    // 与 SCHEMA_SQL 那份声明必须逐字一致——两处写出不同的可空性，只有在很久以后
+    // 某次插入上才会炸，而那时看不出是这里埋的
+    apply: (db) =>
+      db.exec(
+        `ALTER TABLE cases ADD COLUMN incident_date_source TEXT NOT NULL DEFAULT 'intake'
+           CHECK (incident_date_source IN ('intake','agent','operator'))`,
+      ),
+  },
 ];
 
 type Upgrade =

@@ -8,6 +8,7 @@
 import type { Db } from './database.js';
 import type { DomainEvent, DomainEvents, EventName } from './events.js';
 import { readBlobText } from './blobs.js';
+import { parseOccurredAt, type TimeBase } from './timebase.js';
 
 export type ProjectorDeps = {
   /** FTS 需要 blob 正文，而正文不在库里（只存 sha256）——从 blob 目录读回来。 */
@@ -37,8 +38,9 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
     case 'case.opened': {
       const p = ev.payload;
       db.prepare(
-        `INSERT INTO cases (id,title,question,status,project_root,incident_date,tz_offset,clues,created_at,updated_at)
-         VALUES (?,?,?,'open',?,?,?,?,?,?)`,
+        `INSERT INTO cases (id,title,question,status,project_root,incident_date,incident_date_source,
+                            tz_offset,clues,created_at,updated_at)
+         VALUES (?,?,?,'open',?,?,'intake',?,?,?,?)`,
       ).run(
         p.caseId,
         p.title,
@@ -65,6 +67,16 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       const p = ev.payload;
       db.prepare(`UPDATE cases SET title=? WHERE id=?`).run(p.title, p.caseId);
       // 检索索引不跟着改：`case.opened` 那一条进的是 question，标题本来就没单独进过表
+      return;
+    }
+    case 'case.timebase_set': {
+      const p = ev.payload;
+      db.prepare(`UPDATE cases SET incident_date=?, incident_date_source=? WHERE id=?`).run(
+        p.incidentDate,
+        p.source,
+        p.caseId,
+      );
+      recomputeOccurredAt(db, p.caseId);
       return;
     }
     case 'case.verdict_decided': {
@@ -248,6 +260,34 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
   }
 }
 
+/**
+ * 换基准之后，把这次调查已落库的 `occurred_at_ms` 由 `occurred_at_raw` 重算一遍。
+ * `occurred_at_raw` 一直原样存着就是为了这一下（schema 里存它的理由）。
+ *
+ * **全表重跑而不是挑行**：带日期的串走的是「只补时区」那一档，新旧基准算出来是同一个 ms，
+ * 所以重跑对它们是空操作。挑行反而要在这儿再写一份「哪些算纯时分秒」的判断，
+ * 与 `timebase.ts` 里那份分头维护。
+ *
+ * 落库时用的是当时的基准，这里用的是新基准——两条路都只由 `cases` 上那两列决定，
+ * 因此重放到同一个事件位置时结果一致。
+ */
+function recomputeOccurredAt(db: Db, caseId: string): void {
+  const base = db
+    .prepare(`SELECT incident_date AS incidentDate, tz_offset AS tzOffset FROM cases WHERE id=?`)
+    .get(caseId) as TimeBase | undefined;
+  if (!base) return;
+  const rows = db
+    .prepare(
+      `SELECT e.id AS id, e.occurred_at_raw AS raw FROM evidence_refs e
+         JOIN steps s ON s.id = e.step_id
+         JOIN sessions se ON se.id = s.session_id
+        WHERE se.case_id = ? AND e.occurred_at_raw IS NOT NULL`,
+    )
+    .all(caseId) as { id: string; raw: string }[];
+  const put = db.prepare(`UPDATE evidence_refs SET occurred_at_ms=? WHERE id=?`);
+  for (const r of rows) put.run(parseOccurredAt(r.raw, base).ms, r.id);
+}
+
 function insertNarrative(db: Db, caseId: string, refId: string, kind: string, text: string) {
   db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
     refId,
@@ -303,6 +343,7 @@ const REQUIRED_KEYS: { [N in EventName]: { [K in RequiredKeys<DomainEvents[N]>]:
   },
   'case.status_changed': { caseId: true, status: true, at: true },
   'case.renamed': { caseId: true, title: true, source: true, at: true },
+  'case.timebase_set': { caseId: true, incidentDate: true, source: true, at: true },
   'case.verdict_decided': { caseId: true, shape: true, at: true },
   'session.started': { sessionId: true, caseId: true, backend: true, at: true },
   'session.ended': { sessionId: true, status: true, at: true },

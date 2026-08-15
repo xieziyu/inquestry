@@ -365,6 +365,12 @@ export type CaseMeta = {
   question: string;
   projectRoot: string | null;
   incidentDate: string;
+  /**
+   * 基准日期是谁定的。`intake` 是建单那一刻按本机当天猜的——**它可能是错的且不会报错**
+   * （昨晚出的事、今早建的单），所以这一档在界面上要标出来。
+   * agent 读完问题后会确认或改掉它（`case.timebase_set`）。
+   */
+  incidentDateSource: 'intake' | 'agent' | 'operator';
   tzOffset: string;
   /** 历史字段：新建调查面板不再单收「已知现象」，写清楚在 `question` 里就够了。 */
   clues: string | null;

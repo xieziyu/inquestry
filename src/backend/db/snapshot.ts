@@ -21,6 +21,7 @@ import {
   missingClosingSteps,
   readCaseStatus,
   readIntake,
+  readTimeBase,
   readVerdictShape,
   suggestVerdictShape,
 } from '../store/sqlite-store.js';
@@ -261,6 +262,8 @@ function caseMeta(db: Db, caseId: string, agent: AgentChoice): CaseMeta | null {
     intake && {
       id: caseId,
       ...intake,
+      // 'intake' = 建单那一刻按本机当天猜的，还没被确认过。界面靠它把这个日期标出来
+      incidentDateSource: readTimeBase(db, caseId)?.source ?? 'intake',
       agent,
       status: readCaseStatus(db, caseId) ?? 'open',
       verdictShape: readVerdictShape(db, caseId),

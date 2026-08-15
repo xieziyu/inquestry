@@ -80,6 +80,14 @@ export function CaseCard({
             对不上的表现是整条系统时间线平移几天，而那时报告已经导出去了 */}
         <span>
           基准日期 <code>{meta.incidentDate}</code> <code>{meta.tzOffset}</code>
+          {/* 还没确认过的那一档要标出来。**这是这张卡上唯一会错而不报错的东西**：
+              建单那一刻只能按本机当天猜，猜错了整条系统时间线静默挪一天。
+              agent 读完问题会确认或改掉它，这个记号也就消失了 */}
+          {meta.incidentDateSource === 'intake' && (
+            <em className="unconfirmed" title="建单当天，agent 还没从问题描述里确认过">
+              未确认
+            </em>
+          )}
         </span>
       </div>
     </section>

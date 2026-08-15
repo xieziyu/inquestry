@@ -86,6 +86,8 @@ const FULL: Snapshot = {
     question: '线上反馈：12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。',
     projectRoot: '/Users/ziyu/Projects/order-api',
     incidentDate: new Date(now).toISOString().slice(0, 10),
+    // 故意留在未确认这一档：它是信息卡上唯一会多出一个元素的状态，调版面时要看得见
+    incidentDateSource: 'intake',
     tzOffset: '+08:00',
     clues: null,
     agent: { backend: 'claude', model: 'opus[1m]', effort: 'high' },

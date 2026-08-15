@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS cases (
   -- NOT NULL 是有意的：没有基准的调查不该存在，缺了就该在写入时炸，
   -- 而不是留个空值让下游各自现算一个"今天"
   incident_date TEXT    NOT NULL,
+  -- 基准日期是谁定的。建单落的 intake 只是「按本机当天猜的」，agent 读完问题后可能改掉它
+  -- （case.timebase_set）。这一列存在的理由是**猜错了没有任何报错**：靠它，落证据时
+  -- 才判得出该不该提醒 agent，界面上才标得出这个日期还没被确认过
+  incident_date_source TEXT NOT NULL DEFAULT 'intake'
+    CHECK (incident_date_source IN ('intake','agent','operator')),
   tz_offset     TEXT    NOT NULL,   -- 新建调查机器的本机偏移，不由用户填
   clues         TEXT,                  -- 历史字段：面板不再单收，旧调查里的值照旧拼进首轮提问
   -- 决定报告装哪几块（D25）。**收尾那一下才写**，在那之前是 NULL：

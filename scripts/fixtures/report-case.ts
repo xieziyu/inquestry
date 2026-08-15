@@ -106,6 +106,7 @@ export const base = (over: Partial<ReportInput> = {}): ReportInput => ({
     question: '为什么部分租户查不到订单',
     projectRoot: null,
     incidentDate: '2026-08-01',
+    incidentDateSource: 'agent',
     tzOffset: '+08:00',
     clues: null,
     agent: { backend: 'claude', model: null, effort: null },

@@ -10,11 +10,17 @@ import { fileURLToPath } from 'node:url';
 import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
-import { readIntake, renameCase, sweepZombies } from '../backend/store/sqlite-store.js';
+import {
+  readIntake,
+  readTimeBase,
+  renameCase,
+  setCaseTimebase,
+  sweepZombies,
+} from '../backend/store/sqlite-store.js';
 import { casePage } from '../backend/db/queries.js';
 import { exportStamp, localTzOffset, todayLocal } from '../shared/time.js';
 import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
-import { proposeCaseTitle } from './case-namer.js';
+import { proposeCaseFacts } from './case-namer.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
 import {
@@ -196,21 +202,44 @@ function createCase(draft: IntakeDraft): IntakeResult {
   schedulePush();
   // 起标题是**新建之后的一件后台事**，不挡这一下：它要 spawn 一次 CLI，
   // 而人点完「新建」的下一个动作是点「开始排查」。落地了自己会推一轮快照
-  void nameCase(caseId, question);
+  void readCaseFacts(caseId, question, incidentDate);
   return { ok: true };
 }
 
 /**
- * 让 agent 读完问题后给这次调查起个短标题（`case-namer.ts` 说明了为什么它另开一次 spawn）。
+ * 让 agent 读完问题后定下标题与基准日期（`case-namer.ts` 说明了为什么它另开一次 spawn）。
  *
- * **只在标题仍是那句兜底时才写**：起标题这一趟要几秒，这几秒里人完全可能已经自己改过了，
+ * **两处都只在还没被人动过时才写**：这一趟要几秒，这几秒里人完全可能已经自己改过了，
  * 而人改过的东西不该被一条迟到的建议盖掉。
+ *
+ * 基准日期那一条**推不出来时也要落**（沿用建单当天，`source` 变成 agent）：那同样是一次
+ * 确认——「问题里没说别的日子」。不落的话它会一直是未确认态，落证据时那条提醒就永远关不掉。
  */
-async function nameCase(caseId: string, question: string) {
-  const proposed = await proposeCaseTitle(question);
-  if (!proposed) return;
-  if (readIntake(db, caseId)?.title !== titleOf(question)) return;
-  if (renameTo(caseId, proposed, 'agent')) schedulePush();
+async function readCaseFacts(caseId: string, question: string, intakeDate: string) {
+  const facts = await proposeCaseFacts(question, intakeDate);
+  const current = readIntake(db, caseId);
+  if (!current) return;
+  let changed = false;
+  // 标题：兜底那句还在，才轮得到这条建议
+  if (facts.title && current.title === titleOf(question)) {
+    changed = renameTo(caseId, facts.title, 'agent') || changed;
+  }
+  if (readTimeBase(db, caseId)?.source === 'intake') {
+    changed = setTimebase(caseId, facts.incidentDate ?? intakeDate, 'agent') || changed;
+  }
+  if (changed) schedulePush();
+}
+
+/**
+ * 改基准日期。事件走 `setCaseTimebase`，它带着「按新基准重算已落库的 occurred_at_ms」。
+ */
+function setTimebase(caseId: string, date: string, source: 'agent' | 'operator'): boolean {
+  try {
+    return setCaseTimebase(db, { caseId, blobDir: blobs, now: () => Date.now() }, date, source);
+  } catch (err) {
+    console.error('[main] 改基准日期失败', err);
+    return false;
+  }
 }
 
 /** 改标题。事件走 `renameCase`，这儿只补上 main 这侧的上下文。 */
