@@ -329,8 +329,9 @@ button.primary:has(> .ic) { gap: 6px; }
 .state.refuted, .state.superseded { color: var(--bad); }
 .state.inconclusive { color: var(--warn); }
 .state.open { color: var(--accent); }
-/* 收口是"这条支线到此为止"，不是一种结论——所以给中性色，与已证实/已推翻分得开 */
-.state.converged { color: var(--dim); }
+/* 收口是"这条支线到此为止"，不是一种结论——所以给中性色，与已证实/已推翻分得开。
+   收束卡的「已归档」同理：半程放弃也没有结论（`TailCard` 的 `stateLabel`） */
+.state.converged, .state.shut { color: var(--dim); }
 /* 进行中的状态呼吸，全屏仅有的两处动效之一（ui.md §5） */
 .state.open .pulse {
   display: inline-block; width: 6px; height: 6px; border-radius: 50%;
@@ -534,7 +535,8 @@ button.primary:has(> .ic) { gap: 6px; }
 .tailcard { border-left-color: var(--dim-2) !important; padding-bottom: 12px; }
 .tailcard::after { content: none; }
 .tailcard.tail-closed { border-left-color: var(--ok) !important; }
-.tailcard.tail-aborted { border-left-color: var(--bad) !important; }
+/* 🔴 **已归档不给 `--bad`，留上面那档中性色。** 那个色说的是「被推翻」，半程放弃不是推翻
+   （同一条见 `caseline.tsx` 的 `caseTerminal`：首页 `.tr.shut .nd` 与报告纸头的归档说明也都走中性）。 */
 .tailcard .ord { color: var(--dim); letter-spacing: .04em; }
 
 /* 根因那一句是这张卡上唯一"要读"的内容，字号与 step 卡的结论对齐 */

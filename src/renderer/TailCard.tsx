@@ -85,10 +85,13 @@ export function TailCard({
  * 都写成「未定稿」的话，人得自己去数那三个记号。
  *
  * 色调只借用已有的三档，不新造颜色（ui.md §5）：闸没通用暖色——它确实是"还要人动手"。
+ *
+ * 🔴 **已归档走中性的 `shut`，不许借「被推翻」那一档。** 半程放弃不是推翻，借那个色等于给它
+ * 添一层新含义（同一条见 `caseline.tsx` 的 `caseTerminal`，以及卡左边框的 `.tailcard`）。
  */
 function stateLabel(tail: TailSummary): { text: string; tone: string } {
   if (tail.status === 'closed') return { text: '已定稿', tone: 'confirmed' };
-  if (tail.status === 'aborted') return { text: '已归档', tone: 'refuted' };
+  if (tail.status === 'aborted') return { text: '已归档', tone: 'shut' };
   return tail.gaps.length
     ? { text: '未定稿', tone: 'inconclusive' }
     : { text: '可定稿', tone: 'open' };
