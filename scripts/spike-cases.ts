@@ -21,7 +21,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { readBlobHead, storeBlob } from '../src/backend/db/blobs.js';
-import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../src/backend/db/database.js';
+import {
+  blobDir,
+  MIGRATIONS,
+  openDatabase,
+  planUpgrade,
+  SCHEMA_VERSION,
+  type Db,
+} from '../src/backend/db/database.js';
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
 import {
@@ -344,38 +351,74 @@ async function main() {
   // 而 `MIGRATIONS` 里真正那一级写没写对是另一回事：写歪了（列名拼错、忘了加进阶梯）
   // 的表现是**开发库被挪走**——app 起得来、界面干净、调查全没了。
   //
-  // 造一份"真的是上一版"的库：把当前库复制一份，删掉最新一级加的那一列，再把版本调回去。
+  // 造一份"真的是上一版"的库：把当前库复制一份，删掉最后一级加的那些列，再把版本调回去。
   // 光改 user_version 不删列的话，`ALTER TABLE ADD COLUMN` 会撞上重复列，
   // 验到的就成了"迁移会失败"而不是"迁移能成"。
-  // ⚠️ **删的必须是阶梯最后一级加的那一列**（这里是 v7 的 `incident_date_source`）——
-  // 跟着阶梯走，加新一级时这儿要一起改
+  //
+  // **删哪些列问阶梯自己要**（`MigrationStep.adds`），不在这儿写死一句 `DROP COLUMN`：
+  // 写死的那句与阶梯是同一件事的两处描述，加下一级时忘了改这儿的表现是
+  // "去删一列不存在的东西"，报出来的成了「迁移会失败」而不是「自检过期了」
+  const top = MIGRATIONS[MIGRATIONS.length - 1];
+  const topCols = top?.adds ?? [];
   const real = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-realmig-')), 'inquestry.db');
   db.prepare(`VACUUM INTO ?`).run(real);
   const realOld = new DatabaseCtor(real);
-  realOld.exec(`ALTER TABLE cases DROP COLUMN incident_date_source`);
+  for (const c of topCols) realOld.exec(`ALTER TABLE ${c.table} DROP COLUMN ${c.column}`);
   realOld.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
   realOld.close();
-  // **数的是"确认过基准的调查"而不是"列非空的行数"**：新列带 DEFAULT 'intake'，
-  // 后者哪怕投影器根本没接 `case.timebase_set` 也照样对得上
-  const CONFIRMED = `SELECT COUNT(*) c FROM cases WHERE incident_date_source='agent'`;
-  const fixedBefore = (db.prepare(CONFIRMED).get() as { c: number }).c;
+
+  /**
+   * 新列的值是**由重放补回来的**还是**被 DEFAULT 顶上的**，这两件事长得一模一样：
+   * 只数"列非空的行数"的话，投影器压根没接那条新事件也照样对得上。
+   *
+   * 所以逐行比对整列的值，并且要求夹具里**至少有一行的值是 DEFAULT 蒙不到的**。
+   * 那个 DEFAULT 不写死在这儿，问库自己要（`PRAGMA table_info`）——写死的话它就成了
+   * 第三处描述同一件事的地方。整列都等于 DEFAULT 时这条检查是空的，当场 FAIL：
+   * 加下一级迁移时，那意味着夹具还缺一条能证明重放的数据
+   */
+  const columnValues = (d: Db, c: { table: string; column: string }) =>
+    (d.prepare(`SELECT ${c.column} v FROM ${c.table} ORDER BY id`).all() as { v: unknown }[]).map(
+      (r) => (r.v === null ? null : String(r.v)),
+    );
+  const columnDefault = (d: Db, c: { table: string; column: string }) => {
+    const info = d.prepare(`PRAGMA table_info(${c.table})`).all() as {
+      name: string;
+      dflt_value: string | null;
+    }[];
+    const raw = info.find((i) => i.name === c.column)?.dflt_value ?? null;
+    // PRAGMA 给回来的是 SQL 字面量（`'intake'`），要的是它的值
+    return raw === null ? null : raw.replace(/^'([\s\S]*)'$/, '$1');
+  };
+  const valuesBefore = topCols.map((c) => columnValues(db, c));
+  const defaults = topCols.map((c) => columnDefault(db, c));
   // **不传 steps**：走的就是代码里那条内置阶梯
   const realUp = openDatabase(real);
+  const valuesAfter = topCols.map((c) => columnValues(realUp, c));
   const realPost = {
     cases: (realUp.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c,
-    fixed: (realUp.prepare(CONFIRMED).get() as { c: number }).c,
     version: Number(realUp.pragma('user_version', { simple: true })),
   };
   realUp.close();
+  const valuesKept = topCols.every(
+    (_, i) => JSON.stringify(valuesBefore[i]) === JSON.stringify(valuesAfter[i]),
+  );
+  // 「DEFAULT 蒙不到」= 至少有一行的值与它不同（没有 DEFAULT 时，任何非 NULL 都算）
+  const provable =
+    topCols.length > 0 && valuesBefore.every((vals, i) => vals.some((v) => v !== defaults[i]));
   check(
     `内置阶梯把 v${SCHEMA_VERSION - 1} 迁到 v${SCHEMA_VERSION}：调查留在原地，新列的值由重放补回来（不是 DEFAULT 顶上的）`,
     realPost.cases === casesBefore &&
       realPost.cases > 0 &&
-      fixedBefore > 0 &&
-      realPost.fixed === fixedBefore &&
+      provable &&
+      valuesKept &&
       realPost.version === SCHEMA_VERSION &&
       readdirSync(path.dirname(real)).every((f) => !f.includes('.bak')),
-    `调查 ${casesBefore} → ${realPost.cases}，确认过基准的调查 ${fixedBefore} → ${realPost.fixed}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}`,
+    `调查 ${casesBefore} → ${realPost.cases}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}\n` +
+      `      最后一级新增列 ${topCols.map((c, i) => `${c.table}.${c.column}（DEFAULT ${defaults[i] ?? 'NULL'}，${new Set(valuesBefore[i]).size} 种取值）`).join('、') || '（无）'}，值原样回来=${valuesKept}` +
+      (provable
+        ? ''
+        : ' ← 夹具里这一列每一行都等于 DEFAULT，一个默认值就能把它蒙对，这条检查是空的；' +
+          '加了一级迁移就要给夹具补一条能证明重放的数据'),
   );
 
   // 🔴 **`case_ui_state` 不是投影，却会被投影的清空**：它对 `cases(id)` 带 ON DELETE CASCADE，

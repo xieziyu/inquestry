@@ -25,7 +25,28 @@ export type Db = Database.Database;
  * 索引不必写进步骤：DDL 跑在幂等 `SCHEMA_SQL` **之前**，所以那条依赖新列的
  * `CREATE INDEX` 随 schema 一起建得出来。
  */
-export type MigrationStep = { to: number; apply: (db: Db) => void };
+export type MigrationStep = {
+  to: number;
+  /**
+   * 这一级新增的列，**声明式的**：DDL 由它生成（`applyStep`），自检也靠它把库降回上一级
+   * （`spike:cases` 那段「造一份真的是上一版的库」）。
+   *
+   * 一度写成一段手写的 `ALTER TABLE`，而自检那边另写一句 `DROP COLUMN` 与它对着——
+   * 加下一级时忘了改自检的表现是**它去删一列已经不存在的东西**，报出来的成了
+   * 「迁移会失败」而不是「自检过期了」。两处指的既然是同一件事，就只该写一处。
+   */
+  adds?: { table: string; column: string; ddl: string }[];
+  /** 加列之外的 DDL。新表与索引由幂等 `SCHEMA_SQL` 承接，一般用不上这一项。 */
+  apply?: (db: Db) => void;
+};
+
+/** 跑一级升级：先补列，再跑它自己的 DDL。 */
+export function applyStep(db: Db, step: MigrationStep): void {
+  for (const c of step.adds ?? []) {
+    db.exec(`ALTER TABLE ${c.table} ADD COLUMN ${c.column} ${c.ddl}`);
+  }
+  step.apply?.(db);
+}
 
 /**
  * 升级阶梯。v1→v5 每一级都动过 CHECK 约束或字段语义，那类只能重建库，所以阶梯从 v6 起。
@@ -34,18 +55,20 @@ export type MigrationStep = { to: number; apply: (db: Db) => void };
  * 是一个空列，值要靠重放 `step.closed` 才填得回去——而 v5 的老事件里压根没有 `remediation`，
  * 于是它们重放后照旧是 NULL。**这正是 additive 的定义**：老数据不掉、新列由新事件填。
  */
-const MIGRATIONS: MigrationStep[] = [
-  { to: 6, apply: (db) => db.exec(`ALTER TABLE steps ADD COLUMN remediation TEXT`) },
+export const MIGRATIONS: MigrationStep[] = [
+  { to: 6, adds: [{ table: 'steps', column: 'remediation', ddl: 'TEXT' }] },
   {
     to: 7,
     // 带 DEFAULT 的 NOT NULL 列：老行当场就有了正确的值，不必等重放。
     // 与 SCHEMA_SQL 那份声明必须逐字一致——两处写出不同的可空性，只有在很久以后
     // 某次插入上才会炸，而那时看不出是这里埋的
-    apply: (db) =>
-      db.exec(
-        `ALTER TABLE cases ADD COLUMN incident_date_source TEXT NOT NULL DEFAULT 'intake'
-           CHECK (incident_date_source IN ('intake','agent','operator'))`,
-      ),
+    adds: [
+      {
+        table: 'cases',
+        column: 'incident_date_source',
+        ddl: `TEXT NOT NULL DEFAULT 'intake' CHECK (incident_date_source IN ('intake','agent','operator'))`,
+      },
+    ],
   },
 ];
 
@@ -97,7 +120,7 @@ export function openDatabase(file: string, opts: { steps?: MigrationStep[] } = {
       // 给它建索引"的升级会当场炸在 `SCHEMA_SQL` 自己身上：那条 `CREATE INDEX` 落在还没
       // 补列的旧表上，报 `no such column`，而 `apply` 连跑的机会都没有——
       // 也就是说文档里明写支持的那一类升级，会让 app 起不来
-      for (const s of plan.steps) s.apply(db);
+      for (const s of plan.steps) applyStep(db, s);
       db.exec(SCHEMA_SQL);
       rebuildProjections(db, { blobDir: blobDir(file) });
       db.pragma(`user_version = ${SCHEMA_VERSION}`);
