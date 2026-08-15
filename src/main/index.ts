@@ -769,8 +769,9 @@ function createWindow() {
   });
 
   // 渲染进程的错误默认只留在它自己的 devtools 里，转发出来才看得见
-  win.webContents.on('console-message', (_e, level, message, line, source) => {
-    if (level >= 2) console.error(`[renderer] ${message} (${source}:${line})`);
+  // 只接一个参数：Electron 按 listener.length 判断用不用废弃的位置参数签名
+  win.webContents.on('console-message', ({ level, message, lineNumber, sourceId }) => {
+    if (level === 'warning' || level === 'error') console.error(`[renderer] ${message} (${sourceId}:${lineNumber})`);
   });
   win.webContents.on('did-fail-load', (_e, code, desc) => console.error('[renderer] load failed', code, desc));
   win.webContents.on('preload-error', (_e, file, err) => console.error('[preload]', file, err));
