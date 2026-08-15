@@ -430,27 +430,6 @@ button.primary:has(> .ic) { gap: 6px; }
   white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: hidden;
 }
 
-/* ── 系统时间线 ── */
-.incident { display: flex; flex-direction: column; gap: 1px; }
-.incident .note { color: var(--dim); font-size: 12.5px; margin: 0 0 10px; }
-.incident .row {
-  display: grid; grid-template-columns: 190px 120px 1fr 110px; gap: 10px; align-items: baseline;
-  padding: 7px 8px; border-radius: 6px; cursor: pointer; border-left: 2px solid var(--line);
-}
-.incident .row:hover { background: var(--panel); }
-.incident .src { font-family: var(--mono); font-size: 11px; color: var(--dim); text-align: right; }
-.incident .src.refuted, .incident .src.superseded { color: var(--bad); }
-.incident .src.confirmed { color: var(--ok); }
-
-/* ── 报告投影 ── */
-.report { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
-.report h4 { margin: 0 0 8px; font-size: 12px; color: var(--dim); font-weight: 500; }
-.report p { margin: 4px 0; }
-.report b { color: var(--accent); margin-right: 8px; font-size: 12px; }
-.report .meta { color: var(--dim); font-size: 12px; }
-/* 状态型的主体：两截并排读才是"对照"，拆成两行就成了两句话 */
-.report .contrast b:last-of-type { margin-left: 16px; }
-
 /* ── 人工回填 ── */
 .pending { background: #211a10; border: 1px solid #45381f; border-radius: 10px; padding: 12px 14px; }
 .pending .head { display: flex; gap: 8px; align-items: center; font-size: 12px; }
