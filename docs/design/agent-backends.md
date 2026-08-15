@@ -122,6 +122,6 @@ AgentCapabilities {
 | permission mode 不可运行时切（D8） | 「一键接管」按钮不可用 | 隐藏该手势；改档需新建 thread（会丢 turn 内上下文） |
 | 无子 agent 泳道 | Timeline 退化为单主干 | 泳道 UI 按 capability 关闭，不留空槽 |
 
-> **codex backend 的排查体验会整体弱一档，主要弱在控制面。** 这不是不接的理由，但要在接之前就写明，而不是接完当 bug 查。
+> **codex backend 的调查体验会整体弱一档，主要弱在控制面。** 这不是不接的理由，但要在接之前就写明，而不是接完当 bug 查。
 
 > **接入前必须先核实这几条〔推断〕**：codex 的 reject 能否携带消息回给模型且不中断 turn（决定 D6 是否真的无解）· `turn/steer` 的确切语义与取消粒度 · 有没有可用的 subagent / 并行支线概念 · `thread/fork` 的分叉点粒度够不够细。

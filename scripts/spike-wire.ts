@@ -180,7 +180,7 @@ async function run() {
       canUseTool: async (name) =>
         ALLOWED.has(name)
           ? { behavior: 'allow' as const, updatedInput: undefined as never }
-          : { behavior: 'deny' as const, message: `本次排查不要用 ${name}。` },
+          : { behavior: 'deny' as const, message: `本次调查不要用 ${name}。` },
       hooks: {
         PreToolUse: [
           {

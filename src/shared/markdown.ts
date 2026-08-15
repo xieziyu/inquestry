@@ -9,7 +9,7 @@
  * 一旦不渲染就是一大团噪音），mermaid 只作为末尾 `<details>` 里的附加。
  * 除那一个 `<details>` 外全篇纯 Markdown。
  *
- * **纯函数，不读时钟**：生成时间由调用方给。自己取 `Date.now()` 的话同一次排查导两次的产物
+ * **纯函数，不读时钟**：生成时间由调用方给。自己取 `Date.now()` 的话同一次调查导两次的产物
  * 不一致，也就没法拿检查兜住"页脚水印到底印了没有"。
  */
 
@@ -89,15 +89,15 @@ function lede(input: ReportInput, ctx: Ctx): string {
     ].filter(Boolean);
     if (tags.length) lines.push(tags.join(' · '));
   } else {
-    lines.push('**未决**：这次排查没有得出根因。以下是查过的方向与留下的问题。');
+    lines.push('**未决**：这次调查没有得出根因。以下是查过的方向与留下的问题。');
   }
 
   // 这两条是对整份结论的限定，必须与结论同屏——挪到正文里就等于让人先读完再知道它不算数
   if (ctx.plan.abortedAt !== null) {
-    lines.push(`⚠️ 排查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
+    lines.push(`⚠️ 调查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
   }
   if (!ctx.plan.frozen) {
-    lines.push('⚠️ 这次排查还没收尾：形态是按现有数据推的，报告会跟着排查一起变。');
+    lines.push('⚠️ 这次调查还没收尾：形态是按现有数据推的，报告会跟着调查一起变。');
   }
 
   return lines.map((l) => `> ${l}`).join('\n>\n');
@@ -293,7 +293,7 @@ function footnotes(input: ReportInput, ctx: Ctx): string {
         // 认不出那次调用也要出声：静默印成"工具未知"以外的任何写法都会让人以为溯源是全的
         call
           ? `${codeSpan(call.toolName)} 第 ${call.callNumber} 次调用`
-          : `调用 ${codeSpan(e.callId)}（本次排查里找不到这次调用）`,
+          : `调用 ${codeSpan(e.callId)}（本次调查里找不到这次调用）`,
         e.anchor ? `锚点 ${codeSpan(e.anchor)}` : '无锚点（整份输出）',
         e.occurredAtRaw
           ? `时间戳 ${codeSpan(e.occurredAtRaw)}`

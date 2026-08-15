@@ -126,7 +126,7 @@ function record(db: Database.Database, log: Event[], ev: Event) {
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
-/** 排查顺序与事件真实发生顺序**故意错开**——这正是两条时间线要证明的东西。 */
+/** 调查顺序与事件真实发生顺序**故意错开**——这正是两条时间线要证明的东西。 */
 function seed(db: Database.Database): Event[] {
   const log: Event[] = [];
   const S = 'sess_1';
@@ -259,7 +259,7 @@ function main() {
   const discoveryOrder = inc.map((r) => r.step_id);
   const isSorted = discoveryOrder.every((v, i, a) => i === 0 || a[i - 1]! <= v);
   checks.push([
-    '2. 系统时间线的顺序 ≠ 排查顺序',
+    '2. 系统时间线的顺序 ≠ 调查顺序',
     inc.length === 6 && !isSorted,
     `系统线 ${inc.length} 行，其证据的来源 step 序列 = [${discoveryOrder.join(', ')}]（若单调递增就说明样例没构造出错位）`,
   ]);

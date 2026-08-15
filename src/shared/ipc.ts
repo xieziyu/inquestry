@@ -10,7 +10,7 @@ import type { ReportInput } from './report.js';
 import type { UiSettings } from './settings.js';
 
 /**
- * 新建排查面板收集的东西（ui.md §8.1）。
+ * 新建调查面板收集的东西（ui.md §8.1）。
  *
  * agent 三项与其余分开：前者落 `sessions`，后者落 `cases`（D27）。
  */
@@ -23,7 +23,7 @@ export type AgentChoice = {
 /**
  * 基准日期与时区都不在这里：由 main 取立案那一刻的本机日期与偏移落库。
  * 因此本工具的前提是**日志时区 = 立案机器时区、事发就在立案当天**——
- * 排查异地系统或补查前几天的事故时这条会错，错法是无日期的时间串整体挪几小时 / 几天，
+ * 调查异地系统或补查前几天的事故时这条会错，错法是无日期的时间串整体挪几小时 / 几天，
  * 且不会有任何报错，见 ui.md §8.1。
  */
 export type IntakeDraft = {
@@ -38,7 +38,7 @@ export type IntakeDraft = {
   takeover: boolean;
 };
 
-/** 新建排查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
+/** 新建调查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
 export type IntakeResult = { ok: true } | { ok: false; field: 'projectRoot'; error: string };
 
 /**
@@ -60,7 +60,7 @@ export type ModelOption = {
   efforts: string[];
 };
 
-/** 新建排查面板的可选项。model 一栏是真探测出来的，探测不到才退回内置列表。 */
+/** 新建调查面板的可选项。model 一栏是真探测出来的，探测不到才退回内置列表。 */
 export type IntakeOptions = {
   backends: { value: 'claude' | 'codex'; label: string; enabled: boolean; note?: string }[];
   models: ModelOption[];
@@ -76,7 +76,7 @@ export type IntakeOptions = {
   agentDefaults: { agent: AgentChoice; takeover: boolean };
 };
 
-/** 排查列表的一行（D28）。 */
+/** 调查列表的一行（D28）。 */
 export type CaseBrief = {
   id: string;
   title: string;
@@ -85,15 +85,15 @@ export type CaseBrief = {
   current: boolean;
   /**
    * 等你处理的条数。**跨 case 汇总的价值全在这一个字段上**：
-   * 你在排查 A 上工作时排查 B 卡在 ask_operator 上等人，只在当前排查显示的话那条支线会静静挂死。
+   * 你在调查 A 上工作时调查 B 卡在 ask_operator 上等人，只在当前调查显示的话那条支线会静静挂死。
    */
   todos: number;
   /** 有一轮正在跑。 */
   running: boolean;
   /**
-   * 这次排查真的跑过没有（开过会话）。**列表上那句状态按它说**，不按 `loaded`——
+   * 这次调查真的跑过没有（开过会话）。**列表上那句状态按它说**，不按 `loaded`——
    * 后者是内存里的事实，会把"点开看过一眼、一轮没跑"读成「已停止」，
-   * 而那次排查点进去写的是「待开始」。
+   * 而那次调查点进去写的是「待开始」。
    */
   started: boolean;
   /**
@@ -104,23 +104,23 @@ export type CaseBrief = {
 };
 
 /**
- * 历史排查页要的一行（ui.md §8.3）。
+ * 历史调查页要的一行（ui.md §8.3）。
  *
  * 比 `CaseBrief` 多的都是**只在那一页看得见**的：工作区、步数、当前结论摘要。
  * 快照里那份 `cases` 每 60ms 推一轮，把这些塞进去等于每一轮都多跑几条聚合查询，
- * 而它们只有历史排查页开着时才有人看。
+ * 而它们只有历史调查页开着时才有人看。
  */
 export type CaseListRow = CaseBrief & {
   projectRoot: string | null;
   incidentDate: string;
   verdictShape: VerdictShape | null;
   steps: number;
-  /** 当前生效的那条结论，截断过。没有就是 null——半程与刚起步的排查都会这样。 */
+  /** 当前生效的那条结论，截断过。没有就是 null——半程与刚起步的调查都会这样。 */
   headline: string | null;
 };
 
 /**
- * 历史排查页的筛选。**`status` 里没有"进行中"这一档的运行时含义**：
+ * 历史调查页的筛选。**`status` 里没有"进行中"这一档的运行时含义**：
  * 库里只有 open / closed / aborted，"在跑"是运行时状态，由 `running` 合上去。
  */
 export type CaseListQuery = {
@@ -150,14 +150,14 @@ export type AppInfo = {
 };
 
 /**
- * 检索命中的一次排查（ui.md §8.3 的「历史」那一半）。
+ * 检索命中的一次调查（ui.md §8.3 的「历史」那一半）。
  *
  * 与 `CaseBrief` 是同一种东西加三项"为什么命中"——**不另起一种类型**：
  * 两种列表长得一样、点下去做的也是同一件事，分成两种的话
  * 徽标（等你 N / 运行中）迟早只在其中一边跟得上。
  */
 export type CaseHit = CaseBrief & {
-  /** 这次排查里命中了几条。只作展示，不参与排序（排序与最近列表同一条规则）。 */
+  /** 这次调查里命中了几条。只作展示，不参与排序（排序与最近列表同一条规则）。 */
   hits: number;
   /** 命中处附近的原文，已截断。 */
   snippet: string;
@@ -195,17 +195,17 @@ export type StepNode = {
    */
   startedAt: number;
   /**
-   * 会话内序号，**不是排查内的**：一次排查跨多会话，重开一次它就从 1 重来。
+   * 会话内序号，**不是调查内的**：一次调查跨多会话，重开一次它就从 1 重来。
    * 轨道上因此会出现两个 #1，得靠 `sessionIndex` 标出断点。
    */
   ordinal: number;
   sessionId: string;
-  /** 这是本次排查的第几次会话，从 1 起。 */
+  /** 这是本次调查的第几次会话，从 1 起。 */
   sessionIndex: number;
   /**
    * 在哪一步之下细分（`open_step` 的可选入参）。轨道靠它把分叉往右缩进。
    * 认不得的父 id 在写入侧就归一成了 null 并回一条 warning（`parent_step_id` 上有外键，
-   * 原样落库会直接炸），所以这里到手的要么是本次排查里的真 step，要么就是 null。
+   * 原样落库会直接炸），所以这里到手的要么是本次调查里的真 step，要么就是 null。
    */
   parentStepId: string | null;
   /**
@@ -352,13 +352,13 @@ export type ClosingRequest = {
  *
  * 与 `ClosingRequest` 分开是因为两者的语义天差地别：那个只问，这个**执行且不可逆**。
  * 合成一个的话，界面就得靠快照决定"这一下是问还是执行"——而快照是 60ms 合流推的，
- * 隔着这一拍，一次本以为"去补两步"的点击会直接把排查冻上，且完全没经过确认。
+ * 隔着这一拍，一次本以为"去补两步"的点击会直接把调查冻上，且完全没经过确认。
  */
 export type ClosingOutcome =
   | { ok: true; status: 'open' | 'closed' | 'aborted' }
   | { ok: false; missing: ClosingStepKind[] };
 
-/** 当前排查的建单信息投影。为 null 表示还没新建排查，UI 该显示新建排查面板。 */
+/** 当前调查的建单信息投影。为 null 表示还没新建调查，UI 该显示新建调查面板。 */
 export type CaseMeta = {
   id: string;
   title: string;
@@ -366,7 +366,7 @@ export type CaseMeta = {
   projectRoot: string | null;
   incidentDate: string;
   tzOffset: string;
-  /** 历史字段：新建排查面板不再单收「已知现象」，写清楚在 `question` 里就够了。 */
+  /** 历史字段：新建调查面板不再单收「已知现象」，写清楚在 `question` 里就够了。 */
   clues: string | null;
   agent: AgentChoice;
   /** 收尾三档（D29）。`closed` / `aborted` 都是冻结：开不了新会话，只能导出。 */
@@ -388,7 +388,7 @@ export type ReportStepRef = {
 
 export type Snapshot = {
   case: CaseMeta | null;
-  /** 所有排查，含别处的待办数。`case` 为 null = 手上没有打开的排查，而列表照旧要给（首页靠它）。 */
+  /** 所有调查，含别处的待办数。`case` 为 null = 手上没有打开的调查，而列表照旧要给（首页靠它）。 */
   cases: CaseBrief[];
   sessionStatus: 'idle' | 'live' | 'ended' | 'crashed';
   /**
@@ -437,10 +437,10 @@ export type Snapshot = {
   chat: ChatLine[];
   /**
    * 定稿还差哪几步（§6.2）。**放快照里而不是等点了定稿再问**：
-   * 「还差影响面」是排查中途就该看得见的进度，不是按钮弹出来的一句错误。
+   * 「还差影响面」是调查中途就该看得见的进度，不是按钮弹出来的一句错误。
    */
   closingGaps: ClosingStepKind[];
-  /** 定稿确认条的预选形态。排查已冻结时它没有意义——那时看 `case.verdictShape`。 */
+  /** 定稿确认条的预选形态。调查已冻结时它没有意义——那时看 `case.verdictShape`。 */
   shapeSuggestion: ShapeSuggestion;
   /**
    * 报告那几栏的投影。**装的是「哪一步算数」的答案，不是原料**：
@@ -489,10 +489,10 @@ export type ExportResult =
 
 /**
  * 长图渲染视图（`?export=image`）要的东西。**由 main 备好一份交过去**，
- * 不让那一屏自己去查快照：它是离屏开的，等它开起来时当前排查可能已经切走了，
- * 而导出的产物与文件名会因此指着两个排查。
+ * 不让那一屏自己去查快照：它是离屏开的，等它开起来时当前调查可能已经切走了，
+ * 而导出的产物与文件名会因此指着两个调查。
  *
- * `generatedAt` 同 Markdown 那条由调用方给：渲染侧读时钟的话同一次排查导两次的产物不同。
+ * `generatedAt` 同 Markdown 那条由调用方给：渲染侧读时钟的话同一次调查导两次的产物不同。
  */
 export type ExportPayload = { input: ReportInput; generatedAt: string };
 
@@ -529,7 +529,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
 /**
  * 接管切没切成，以及没切成时是哪一种。**几种失败的下一步动作各不相同，不能合成一个 false**：
  *
- * - `gone`：状态冲突（切了排查 / 已收尾）。排查不在手上，切回去再点一次就行
+ * - `gone`：状态冲突（切了调查 / 已收尾）。调查不在手上，切回去再点一次就行
  * - `failed`：这一轮维持原样。要么 backend 的权限模式没切动，要么切动了但落不了库、
  *   已经切回来了——两种都是"什么都没变"，人必须知道自己**没有**拿到想要的那一档，
  *   否则会拿一个并不存在的保护继续查下去
@@ -545,15 +545,15 @@ export type InquestryApi = {
   pickProjectRoot(): Promise<string | null>;
   createCase(draft: IntakeDraft): Promise<IntakeResult>;
   /**
-   * 改这次排查的标题。**不带"这一屏是哪个排查"的校验**，与那几条动作 IPC 不同：
+   * 改这次调查的标题。**不带"这一屏是哪个调查"的校验**，与那几条动作 IPC 不同：
    * 改的是哪一条由参数说了算，与"当前跑着的是哪一个"无关。
    *
    * 回执是改没改成——同一句话再落一次回 false，界面不必为此做任何事。
    */
   renameCase(caseId: string, title: string): Promise<boolean>;
-  /** 切到另一次排查。**不中断任何一个**：main 持有全部运行时，这里只是换个投影看。 */
+  /** 切到另一次调查。**不中断任何一个**：main 持有全部运行时，这里只是换个投影看。 */
   switchCase(caseId: string): Promise<void>;
-  /** 去新建排查面板开新排查；当前排查照旧在后台跑。 */
+  /** 去新建调查面板开新调查；当前调查照旧在后台跑。 */
   newCase(): Promise<void>;
   /**
    * 跨 case 检索（D28 / [data-model](data-model.md) §5）。空串回空数组，不回"全部"——
@@ -566,15 +566,15 @@ export type InquestryApi = {
   /**
    * 下面这四个都要带上**这一屏看到的 caseId**。
    *
-   * 切排查那一瞬 main 那边当时就换了当前排查，而这一屏要等下一次快照（最多 60ms）才换——
-   * 不带的话，在排查 A 里按下的发送/停止会落到排查 B 头上。对不上就不执行。
+   * 切调查那一瞬 main 那边当时就换了当前调查，而这一屏要等下一次快照（最多 60ms）才换——
+   * 不带的话，在调查 A 里按下的发送/停止会落到调查 B 头上。对不上就不执行。
    */
   start(caseId: string, question?: string): Promise<void>;
   /** 收掉当前会话再起一轮。会话卡在 `live` 却每轮都失败时，这是唯一出路。 */
   restart(caseId: string): Promise<void>;
   /**
    * 开 / 关接管模式（overview §3.5）：开着时每次调用都过闸门，由人当场放行 / 改写 / 拒绝。
-   * 回执是切没切成——冻结的排查切不了，静默 return 会让开关在界面上翻过去却什么都没做。
+   * 回执是切没切成——冻结的调查切不了，静默 return 会让开关在界面上翻过去却什么都没做。
    */
   setTakeover(caseId: string, on: boolean): Promise<TakeoverResult>;
   /** 返回是否真的送出去了；没送出去 renderer 要把草稿留着。 */
@@ -609,7 +609,7 @@ export type InquestryApi = {
   excerpt(callId: string, anchor: string | null): Promise<string>;
   /**
    * 导出 Markdown（D26）。**带 caseId 同上**：导出的是一份要交出去的文档，
-   * 落到别的排查头上会得到一个文件名与内容对不上、且没人会察觉的产物。
+   * 落到别的调查头上会得到一个文件名与内容对不上、且没人会察觉的产物。
    *
    * 章节由 `shared/report.ts` 组装、`shared/markdown.ts` 渲染，与报告屏同一份。
    */
@@ -628,7 +628,7 @@ export type InquestryApi = {
   onSnapshot(cb: (s: Snapshot) => void): () => void;
 
   /**
-   * 历史排查页的分页列表。**与快照里那份 `cases` 是两条路**：那一份是最近 20 条 + 钉住的，
+   * 历史调查页的分页列表。**与快照里那份 `cases` 是两条路**：那一份是最近 20 条 + 钉住的，
    * 每 60ms 推一次；这一份是人翻页翻出来的，带筛选、带工作区与结论摘要。
    */
   listCases(q: CaseListQuery): Promise<CaseListPage>;

@@ -293,7 +293,7 @@ async function main() {
     ) &&
       askDecision(realProbe.onToolStart({ tool_name: 'Bash', tool_input: { command: 'rm -rf x' } }, 'call_r_bash')) ===
         'ask',
-    '读代码是排查的地基：把它也堆成卡片的话，接管模式一开就没法用了',
+    '读代码是调查的地基：把它也堆成卡片的话，接管模式一开就没法用了',
   );
   realRunner.close();
 
@@ -352,13 +352,13 @@ async function main() {
     failed === 'failed' && runner.snapshot().takeover === true,
     `回执=${failed} · takeover=${runner.snapshot().takeover}（报成功的话，界面会显示一个从没生效过的开关）`,
   );
-  // 🔴 **两种没切成要分得开。** 都回同一个值的话，界面只能说一句"排查可能切走了"——
-  // 而 backend 切不动时排查明明还在手上，人照着那句切回来再按一次，
+  // 🔴 **两种没切成要分得开。** 都回同一个值的话，界面只能说一句"调查可能切走了"——
+  // 而 backend 切不动时调查明明还在手上，人照着那句切回来再按一次，
   // 然后在没有接管的情况下继续查下去
   setCaseStatus(db, { caseId: 'case_gate_real', blobDir: blobs, now: () => Date.now() }, 'closed');
   const gone = await realRunner.setTakeover(true);
   check(
-    '状态冲突（排查已收尾）与 backend 切不动是两种回执，不是同一个 false',
+    '状态冲突（调查已收尾）与 backend 切不动是两种回执，不是同一个 false',
     gone === 'gone' && failed === 'failed',
     `已收尾=${gone} · 切不动=${failed}（同一个值的话，界面对后者只说得出"再点一次"）`,
   );

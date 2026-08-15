@@ -1,5 +1,5 @@
 /**
- * Spike Tools —— 让真 agent 排查一个玩具故障，验**遵从性**（tools.md）。
+ * Spike Tools —— 让真 agent 调查一个玩具故障，验**遵从性**（tools.md）。
  *
  * 前两个 spike 验的是「能不能做到」，这个验的是「这套设计到底成不成立」：
  * 「agent 填 direction 敷衍」一度是头号风险，只有真跑一次才能证伪（tools.md §4）。
@@ -263,7 +263,7 @@ async function run() {
           ? { behavior: 'allow' as const, updatedInput: undefined as never }
           : {
               behavior: 'deny' as const,
-              message: `本次排查只能用 query_logs 与 open_step / close_step / ask_operator，不要用 ${name}。`,
+              message: `本次调查只能用 query_logs 与 open_step / close_step / ask_operator，不要用 ${name}。`,
             },
     },
   });
@@ -278,7 +278,7 @@ async function run() {
 // ───────────────────────── 评分 ─────────────────────────
 
 /** 「无法被推翻」的空洞 direction 的典型措辞。 */
-const VAGUE = /(进一步|详细|深入)?(分析|查看|检查|排查|了解|确认一下|看看)(一下)?(日志|情况|数据库|问题|接口)?$/;
+const VAGUE = /(进一步|详细|深入)?(分析|查看|检查|调查|了解|确认一下|看看)(一下)?(日志|情况|数据库|问题|接口)?$/;
 const FALSIFIABLE_MARK = /(怀疑|是否|导致|因为|说明|假设|应该是|不是)/;
 
 function report(final: string) {

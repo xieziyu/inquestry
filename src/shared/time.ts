@@ -18,7 +18,7 @@ export function localTzOffset(at: Date = new Date()): string {
 /**
  * 页脚水印上的生成时间。带偏移，否则跨时区转手之后没人知道这是谁的几点。
  *
- * **两种导出共用这一份**：同一次排查的 `.md` 与长图会被并排贴出来，
+ * **两种导出共用这一份**：同一次调查的 `.md` 与长图会被并排贴出来，
  * 两处各写一个格式的话，同一次导出看上去像是两个时间。
  */
 export function exportStamp(ms: number): string {

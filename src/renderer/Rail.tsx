@@ -12,16 +12,16 @@ export type Screen = 'home' | 'workspace' | 'history' | 'settings';
  * （`--head-pad`），rail 的右边线从顶栏下沿才画（`--head-h`，见 styles.css 的外壳网格）。
  * 这两个变量与 `main/index.ts` 里钉死的 `trafficLightPosition` 是一套，改一处要连着改。
  *
- * 排查的切换不在这儿。它在历史排查页（ui.md §8.3）：rail 上有常驻入口之后，
+ * 调查的切换不在这儿。它在历史调查页（ui.md §8.3）：rail 上有常驻入口之后，
  * 切换不再是工作区内的手势，也就不必在工作区里再挂一排 chip。
  */
 export function Rail({
   screen,
   /**
-   * 有排查在等人处理（D28 的跨案汇总）。**是个点不是个数**——ui.md §4：
+   * 有调查在等人处理（D28 的跨案汇总）。**是个点不是个数**——ui.md §4：
    * "有没有事找你是一个颜色的有无，不需要读字"。
    *
-   * 没有它这一条就断了：切换入口搬到历史排查页之后，后台那条卡在 `ask_operator`
+   * 没有它这一条就断了：切换入口搬到历史调查页之后，后台那条卡在 `ask_operator`
    * 上的支线在别的屏上一点痕迹都没有，而①档不处理就是永远等下去。
    */
   todo,
@@ -54,15 +54,15 @@ export function Rail({
 
   return (
     <nav className="rail" aria-label="主导航">
-      {item('home', '首页', '首页 · 新建排查', <HomeIcon />)}
+      {item('home', '首页', '首页 · 新建调查', <HomeIcon />)}
       {item(
         'workspace',
         '工作区',
-        todo ? '工作区 · 有排查在等你处理' : '工作区',
+        todo ? '工作区 · 有调查在等你处理' : '工作区',
         <TrackIcon />,
         todo,
       )}
-      {item('history', '历史排查', '历史排查 · 检索与切换', <HistoryIcon />)}
+      {item('history', '历史调查', '历史调查 · 检索与切换', <HistoryIcon />)}
       <span className="rail-gap" />
       <span
         className={`env ${envBad ? 'bad' : ''}`}

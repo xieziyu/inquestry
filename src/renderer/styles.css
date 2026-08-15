@@ -163,7 +163,7 @@ button:hover > .ic { opacity: 1; }
    顶栏是定高的整幅一格，横向就那么宽——挤进四五项之后每一项都只剩几个字 */
 .pagebody.ws { overflow: hidden; display: flex; flex-direction: column; }
 .pagehead.ws { padding-right: 16px; }
-/* 目录名在前、整条路径压暗跟在后面：认排查靠的是最后那一段，
+/* 目录名在前、整条路径压暗跟在后面：认调查靠的是最后那一段，
    而"是不是那个仓库"要看全路径（同名目录在不同父目录下是常事） */
 .wsroot { display: flex; align-items: baseline; min-width: 0; }
 .wsroot code { font-family: var(--mono); font-size: 12.5px; color: var(--text); flex: none; }
@@ -180,7 +180,7 @@ button:hover > .ic { opacity: 1; }
 .headacts button:hover { border-color: var(--dim-2); }
 
 
-/* rail 上工作区那一格随时点得到，但手上不一定有排查 */
+/* rail 上工作区那一格随时点得到，但手上不一定有调查 */
 .ws-empty { margin: 90px auto; max-width: 440px; text-align: center; color: var(--dim); font-size: 13px; }
 .ws-empty .acts { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
 .ws-empty .acts button {
@@ -436,7 +436,7 @@ button.primary:has(> .ic) { gap: 6px; }
 
 /* ── 立案卡：舞台上的第 0 个节点 ──
    建单信息从顶栏搬下来之后有了自己的行宽：标题能改、问题描述能读全、基准日期是个要对得上的数。
-   它比 step 卡淡一档、左边没有序号槽——它不是一步排查，是这次排查的由来 */
+   它比 step 卡淡一档、左边没有序号槽——它不是一步调查，是这次调查的由来 */
 .casecard {
   background: var(--panel); border: 1px solid var(--line); border-left: 2px solid var(--dim-2);
   border-radius: 8px; padding: 12px 14px;
@@ -552,7 +552,7 @@ button.primary:has(> .ic) { gap: 6px; }
 .modesw button.on + button { border-left-color: var(--fill); }
 
 /* 应用级提示：处置没落地时唯一的出声处。**浮在所有屏之上**——它要说的事
-   （排查切走了、闸门已经自动放行、定稿被回绝）多半发生在那张卡片已经不在屏幕上之后 */
+   （调查切走了、闸门已经自动放行、定稿被回绝）多半发生在那张卡片已经不在屏幕上之后 */
 .appnotice {
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20;
   display: flex; align-items: center; gap: 12px; max-width: 720px;
@@ -577,7 +577,7 @@ button.primary:has(> .ic) { gap: 6px; }
 .sheet pre { max-height: none; color: var(--text); }
 .sheet button { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 7px; cursor: pointer; }
 
-/* ── 新建排查面板 ── */
+/* ── 新建调查面板 ── */
 
 
 /* ── 首页：上下两带 ── */
@@ -794,14 +794,14 @@ button.primary:has(> .ic) { gap: 6px; }
 .home .st.idle { color: var(--dim); }
 .home .st.run { color: var(--accent); }
 
-/* 历史排查那两段列表的外框（首页那条轨道不用框，线本身就是结构） */
+/* 历史调查那两段列表的外框（首页那条轨道不用框，线本身就是结构） */
 .cases { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .badge { font-size: 10.5px; padding: 1px 6px; border-radius: 9px; flex: 0 0 auto; }
 /* 暖色是「需要人动手」的全局专属，列表上只有这一个徽标用它 */
 .badge.todo { background: var(--warn); color: var(--on-warn); font-weight: 600; }
 .badge.cur { color: var(--accent); border: 1px solid var(--fill); }
 
-/* ── 历史排查 ── */
+/* ── 历史调查 ── */
 .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .filters input.q {
   flex: 1; min-width: 220px; background: var(--panel); border: 1px solid var(--line);

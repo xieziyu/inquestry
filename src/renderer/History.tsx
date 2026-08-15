@@ -28,13 +28,13 @@ const FILTERS: { v: NonNullable<CaseListQuery['status']>; label: string }[] = [
 ];
 
 /**
- * 历史排查页（ui.md §8.3）：检索、切换、导出。
+ * 历史调查页（ui.md §8.3）：检索、切换、导出。
  *
- * **这一页同时是切换排查的入口。** 工作区里那排 chip 已经撤掉——rail 上有常驻入口之后，
+ * **这一页同时是切换调查的入口。** 工作区里那排 chip 已经撤掉——rail 上有常驻入口之后，
  * 切换不再是工作区内的手势。代价是切一次多一跳，换来的是每一行放得下
  * 「为什么它被搜出来」（chip 的 title 属性塞不下，而那正是要看的）。
  *
- * 检索**换掉的是这一页的列表本身**，不另开一层：找旧排查的下一步动作就是切过去，
+ * 检索**换掉的是这一页的列表本身**，不另开一层：找旧调查的下一步动作就是切过去，
  * 而切过去的入口就在这一行上。
  */
 export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId: string) => void }) {
@@ -47,7 +47,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
    * ——人会照着一个跟当前输入毫无关系的列表切走。
    *
    * `hits: null` 是**查砸了**，与"查完了、零命中"是两回事：库坏了、FTS 语法不成立、
-   * IPC 断了都会落到这里，一律说成"没有命中"的话，人拿到的是"历史里确实没有这次排查"这个错结论。
+   * IPC 断了都会落到这里，一律说成"没有命中"的话，人拿到的是"历史里确实没有这次调查"这个错结论。
    */
   const [found, setFound] = useState<{ term: string; hits: CaseHit[] | null } | null>(null);
   /**
@@ -65,7 +65,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
         .listCases({ status, limit: PAGE, offset })
         .then((r) => {
           if (pageSeq.current !== mine) return;
-          // 翻页是**追加**不是替换：翻到第三页再回头看第一页那几条正等着人的排查，
+          // 翻页是**追加**不是替换：翻到第三页再回头看第一页那几条正等着人的调查，
           // 换掉的话它们连同「等你 N」一起从屏幕上消失了
           setPage((prev) =>
             offset && prev ? { total: r.total, rows: [...prev.rows, ...r.rows] } : r,
@@ -80,7 +80,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
   );
 
   // 换筛选就从头取。**要连同已经翻出来的那些一起丢掉**：留着的话，
-  // 「已定稿」那一档下面会挂着上一档翻出来的进行中排查
+  // 「已定稿」那一档下面会挂着上一档翻出来的进行中调查
   useEffect(() => {
     setPage(null);
     load(0);
@@ -142,7 +142,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
   return (
     <div className="page history">
       <header className="pagehead">
-        <h1>历史排查</h1>
+        <h1>历史调查</h1>
         <span className="sub">
           {page ? `${page.total} 次` : '…'} · 检索、切换、导出
         </span>
@@ -181,7 +181,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
                   ? `「${t}」没搜成，换个词再试一次`
                   : fresh.hits.length === 0
                     ? `没有命中「${t}」`
-                    : `命中 ${fresh.hits.length} 次排查 · 排序与最近列表同一条规则（不按命中条数排）`}
+                    : `命中 ${fresh.hits.length} 次调查 · 排序与最近列表同一条规则（不按命中条数排）`}
             </p>
           )}
 
@@ -212,7 +212,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
             </>
           )}
 
-          {!searching && page?.total === 0 && <p className="blank">这一档下面还没有排查。</p>}
+          {!searching && page?.total === 0 && <p className="blank">这一档下面还没有调查。</p>}
 
           {more && (
             <button className="loadmore" onClick={() => load(page.rows.length)}>
@@ -227,7 +227,7 @@ export function History({ cases, onOpen }: { cases: CaseBrief[]; onOpen: (caseId
 
 /**
  * 检索命中补齐成一行。**缺的那几项一律给"不知道"而不是编一个**：
- * 命中那条路查的是 FTS，拿不到工作区与步数，填 0 的话它会显示成"一次没有步骤的排查"。
+ * 命中那条路查的是 FTS，拿不到工作区与步数，填 0 的话它会显示成"一次没有步骤的调查"。
  */
 function toRow(h: CaseHit): CaseListRow {
   return { ...h, projectRoot: null, incidentDate: '', verdictShape: null, steps: 0, headline: null };
@@ -274,7 +274,7 @@ function Row({
           </>
         ) : (
           <>
-            <span className="where" title={c.projectRoot ?? '这条排查没有工作区'}>
+            <span className="where" title={c.projectRoot ?? '这条调查没有工作区'}>
               {shape ?? rootLabel(c.projectRoot)}
             </span>
             <span className="snip">

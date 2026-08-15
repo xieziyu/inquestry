@@ -635,7 +635,7 @@ async function runBackground() {
 /**
  * 前两轮都把 `run_in_background` 钉死成 false，因为泳道要看的是"支线在跑"。
  * 但**默认值是后台**——不写这个参数时，主线当场收尾、支线自己跑完再回来。
- * 排查会话里 agent 是不会替我们写这个参数的，所以默认那条路才是常态路径，得单独验。
+ * 调查会话里 agent 是不会替我们写这个参数的，所以默认那条路才是常态路径，得单独验。
  */
 const ASYNC_PROMPT = [
   '请发起一个 Agent（Task）工具调用，subagent_type="lane_probe"，description 写 "gamma"，',

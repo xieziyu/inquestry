@@ -21,8 +21,8 @@ export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
 }
 
 /**
- * 排查列表靠 `updated_at` 把「进行中的」排在前面（ui.md §8.3），
- * 而新建排查那一刻之后没有别的地方会动它——不在这里前移，排序就永远是新建排查先后。
+ * 调查列表靠 `updated_at` 把「进行中的」排在前面（ui.md §8.3），
+ * 而新建调查那一刻之后没有别的地方会动它——不在这里前移，排序就永远是新建调查先后。
  *
  * 时间取事件自己的 `at` 而不是时钟：投影器读时钟的那一刻，重放就不再一致。
  * 只前移不后退，重放次序万一有出入也不会把它拽回去。
@@ -50,7 +50,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
         p.at,
         p.at,
       );
-      // 建单信息进检索：找旧排查的心智是"上次那个从库延迟的"，而人记得的多半是自己写的问题，
+      // 建单信息进检索：找旧调查的心智是"上次那个从库延迟的"，而人记得的多半是自己写的问题，
       // 不是 agent 后来下的结论。**只在这里进一次**——标题就是问题的前 40 字，
       // 两条都索引等于同一段文字在 trigram 表里躺两份，命中一次翻出两条
       insertNarrative(db, deps.caseId, p.caseId, 'case', p.question || p.title);
@@ -275,7 +275,7 @@ export const PROJECTION_TABLES = [
  *
  * **这张表是迁移的地基**（data-model.md §2）：`better-sqlite3` 把 `undefined` 绑成 NULL，
  * 所以一条形状变过的老事件重放时**不会报错，只会静静落一批 NULL**——看起来像迁移成功，
- * 实际是一批半残的排查。曾经就是这么"跑通"过一次的。
+ * 实际是一批半残的调查。曾经就是这么"跑通"过一次的。
  *
  * 只列必填的：可选字段（`expected` / `shape` / `lane` 这些）缺省本来就有意义，
  * 投影侧走 COALESCE 或显式默认。**加新事件类型时要在这里补一行**，漏了会在重放时报"没见过的事件"。
@@ -372,7 +372,7 @@ export function checkEventShapes(db: Db): { checked: number } {
  * 跨事件载荷形状的升级不算，那要 upcaster。所以第一件事是体检，不是重放。
  *
  * caseId 取每条事件自己的，不由调用方给——重放是全库的事，用单个 caseId 会把
- * 别的排查的 FTS 行全标成同一个 case，检索时静默串台。
+ * 别的调查的 FTS 行全标成同一个 case，检索时静默串台。
  */
 export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>): number {
   checkEventShapes(db);
@@ -385,12 +385,12 @@ export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>):
    * 🔴 **`case_ui_state` 不是投影，但会被投影的清空**：它对 `cases(id)` 带
    * `ON DELETE CASCADE`，而 `DELETE FROM cases` 一跑就把它整表带走了。
    *
-   * 里面装的是**重建不出来的东西**——新建排查时选的 agent（会话还没开，别处没有第二份）、
-   * 以及接管模式那个开关。丢了不报错、排查还在，表现是"升级完模型悄悄换回默认、
+   * 里面装的是**重建不出来的东西**——新建调查时选的 agent（会话还没开，别处没有第二份）、
+   * 以及接管模式那个开关。丢了不报错、调查还在，表现是"升级完模型悄悄换回默认、
    * 接管自己关掉了"，与迁移失败长得完全不一样。
    *
-   * 先存后放，都在同一个事务里；只放回**重建之后还存在**的那些排查（重放本就该把它们
-   * 全部建回来，这一手是防重放漏了某个排查时外键当场炸掉整条迁移）。
+   * 先存后放，都在同一个事务里；只放回**重建之后还存在**的那些调查（重放本就该把它们
+   * 全部建回来，这一手是防重放漏了某个调查时外键当场炸掉整条迁移）。
    */
   const uiState = db.prepare(`SELECT case_id, value FROM case_ui_state`).all() as {
     case_id: string;

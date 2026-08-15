@@ -48,12 +48,12 @@ export function ReportPaper({
           {/* 还没收尾时这份是**预览**：形态还会变，章节跟着变。说出来比让人以为它已经定了好 */}
           {!plan.frozen && (
             <p className="preview">
-              这次排查还没收尾，形态是按现有数据推的，报告会跟着排查一起变。定稿那一下才冻。
+              这次调查还没收尾，形态是按现有数据推的，报告会跟着调查一起变。定稿那一下才冻。
             </p>
           )}
           {/* 半程报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
           {plan.abortedAt !== null && (
-            <p className="aborted">排查在第 {plan.abortedAt} 步被人为终止。以下是查到为止的部分。</p>
+            <p className="aborted">调查在第 {plan.abortedAt} 步被人为终止。以下是查到为止的部分。</p>
           )}
         </header>
       )}
@@ -76,7 +76,7 @@ export function ReportPaper({
  * 页脚水印。**每一页都有**（ui.md §7.2）：长图会被转发到看不见上下文的地方，
  * 只有第一页带编号的话，被转走的那一页就成了一段无从溯源的截图。
  *
- * `generatedAt` 由调用方给（同 Markdown 那条）：自己读时钟的话同一次排查导两次的产物不同，
+ * `generatedAt` 由调用方给（同 Markdown 那条）：自己读时钟的话同一次调查导两次的产物不同，
  * 既没法比对两版报告，也没法拿检查兜住这一行。屏幕上那份不印时间——它跟着数据一直在变。
  */
 export function PaperFoot({

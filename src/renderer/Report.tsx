@@ -5,7 +5,7 @@
  * 能做的只有导出与收尾，内容在定稿那一下冻住。色板与工作区完全相同，差别只来自密度与字号
  * （ui.md §1 那张表）——一深一浅会被读成两个应用，而这是同一个工具的两个阶段。
  *
- * **收尾那两档（定稿 / 归档）的入口在这儿，不在工作区顶栏。** 排查到任意进度都能进来看：
+ * **收尾那两档（定稿 / 归档）的入口在这儿，不在工作区顶栏。** 调查到任意进度都能进来看：
  * 没收尾时这份是预览，看完可以就此定稿，也可以直接把半成品导出去。原先把「定稿」摆在
  * 工作区顶栏，等于要人在没看过报告的情况下决定"这份能不能交出去"——而那正是这一屏回答的问题。
  *
@@ -41,7 +41,7 @@ export function Report({
 }: {
   snap: Snapshot;
   onBack: () => void;
-  /** 收尾没落地时的提示挂到应用级：那时这一屏多半已经不是刚才那个排查了。 */
+  /** 收尾没落地时的提示挂到应用级：那时这一屏多半已经不是刚才那个调查了。 */
   onNotice: (text: string) => void;
 }) {
   const page = useRef<HTMLDivElement>(null);
@@ -106,10 +106,10 @@ export function Report({
 
   /**
    * 收尾要人再点一下的那两档（D29）。**必须连 caseId 一起记**：确认条挂在屏幕上的这段时间里
-   * 排查可能被切走，而按钮那一下取的是**当时**的 case——只记动作的话，会把另一次排查
+   * 调查可能被切走，而按钮那一下取的是**当时**的 case——只记动作的话，会把另一次调查
    * 不可逆地收掉，而确认文案讲的还是这一次的事。
    *
-   * 这一屏只在 `reportOf === 当前排查` 时才挂得出来，切走了整屏就卸载、这条 state 随之蒸发；
+   * 这一屏只在 `reportOf === 当前调查` 时才挂得出来，切走了整屏就卸载、这条 state 随之蒸发；
    * 即便如此仍然自己带上下文——它是全应用唯一一个"点下去没有回头路"的手势。
    */
   const [confirm, setConfirm] = useState<{
@@ -138,7 +138,7 @@ export function Report({
    * 点「定稿」。**先问 main 现在还差什么，再决定弹确认还是派活**——
    * 不拿快照上的 `closingGaps` 做这个判断：它是 60ms 合流推来的，agent 可能刚补完最后一步
    * 而这一屏还没收到，那时按钮上写着"差 1 步"、点下去却会走进执行路径，
-   * 把排查不可逆地冻上且完全没经过确认。
+   * 把调查不可逆地冻上且完全没经过确认。
    *
    * 缺步时不是报个错就完：那两步的内容只有查过的人给得出来，所以派给 agent 去补。
    */
@@ -146,7 +146,7 @@ export function Report({
     const caseId = snap.case?.id;
     if (!caseId) return;
     const r = await window.inquestry.requestClosing(caseId).catch(() => null);
-    if (!r) return onNotice('没问到这次排查的状态，可能它已经切走了。切回去再点一次。');
+    if (!r) return onNotice('没问到这次调查的状态，可能它已经切走了。切回去再点一次。');
     if (!r.missing.length) {
       // 冻的是 **main 刚刚算出来的那一份**，不是这一屏快照上的：后者是点击那一帧的闭包值，
       // 隔着这次 await——main 按最新状态放行了弹窗，界面却会冻一个过期的推断值
@@ -162,21 +162,21 @@ export function Report({
 
   /**
    * 确认那一下的落地回执。**没落地就别把确认条收掉**——确认条挂在屏幕上的这段时间里，
-   * 强制 step 可能被推翻、排查可能被切走，两种情况 main 都会回绝；
+   * 强制 step 可能被推翻、调查可能被切走，两种情况 main 都会回绝；
    * 收掉确认条而什么都没发生的话，人会以为已经定稿了。
    */
   const doClose = async (kind: 'closed' | 'aborted', id: string, shape: VerdictShape) => {
     if (kind === 'aborted') {
       const ok = await window.inquestry.archiveCase(id).catch(() => false);
       if (ok) return setConfirm(null);
-      return onNotice('归档没执行：这次排查已经不是当前排查了。切回去再试一次。');
+      return onNotice('归档没执行：这次调查已经不是当前调查了。切回去再试一次。');
     }
     const r = await window.inquestry.closeCase(id, shape).catch(() => null);
     if (r?.ok) return setConfirm(null);
     onNotice(
       r && !r.ok && r.missing.length
         ? `定稿没执行：刚才这会儿又缺了${r.missing.map(closingLabel).join('与')}——多半是那一步刚被推翻。补上再来。`
-        : '定稿没执行：这次排查已经不是当前排查了。切回去再试一次。',
+        : '定稿没执行：这次调查已经不是当前调查了。切回去再试一次。',
     );
   };
 
@@ -214,13 +214,13 @@ export function Report({
             **停止不在此列**——它中断的是一轮，属于工作区那条状态栏 */}
         {!frozen && (
           <>
-            <button className="finish" title="下结论并冻结这次排查" onClick={() => void requestClose()}>
+            <button className="finish" title="下结论并冻结这次调查" onClick={() => void requestClose()}>
               <Icon name="seal" />
               定稿{snap.closingGaps.length ? `（差 ${snap.closingGaps.length} 步）` : ''}
             </button>
             <button
               className="finish"
-              title="放弃这次排查；证据全部保留，半程报告照旧能导"
+              title="放弃这次调查；证据全部保留，半程报告照旧能导"
               onClick={() => snap.case && setConfirm({ caseId: snap.case.id, kind: 'aborted' })}
             >
               <Icon name="archive" />
@@ -247,7 +247,7 @@ export function Report({
           <span>{confirmText(confirm.kind, snap)}</span>
           <button
             className="primary"
-            // 收的是**弹出确认时**那次排查，不是此刻屏幕上的那个。main 那侧还会用 `currentIf`
+            // 收的是**弹出确认时**那次调查，不是此刻屏幕上的那个。main 那侧还会用 `currentIf`
             // 再核一次：切走了就整个不执行，而回绝了这边要说出来，见 doClose
             onClick={() => void doClose(confirm.kind, confirm.caseId, confirm.shape ?? 'open')}
           >
@@ -344,9 +344,9 @@ function shapeSourceLabel(source: 'agent' | 'inferred' | 'operator') {
 /** 确认那一下要说的是**后果**，不是"你确定吗"——两档的后果不一样，说反了就白确认了。 */
 function confirmText(kind: 'closed' | 'aborted', snap: Snapshot) {
   if (kind === 'closed') {
-    return `定稿会冻结这次排查：不能再开会话，只能导出。根因取的是当前置信度最高的那条结论${
+    return `定稿会冻结这次调查：不能再开会话，只能导出。根因取的是当前置信度最高的那条结论${
       snap.report.rootCause ? `（${snap.report.rootCause.text.slice(0, 40)}…）` : '——目前一条已证实的都没有'
     }。`;
   }
-  return '归档 = 明写放弃这次排查。已经查到的证据一条都不删，仍能导出半程报告——但那份报告没有根因栏，主体是排除掉的方向与遗留问题。';
+  return '归档 = 明写放弃这次调查。已经查到的证据一条都不删，仍能导出半程报告——但那份报告没有根因栏，主体是排除掉的方向与遗留问题。';
 }

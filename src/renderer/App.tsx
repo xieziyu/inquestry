@@ -41,24 +41,24 @@ export function App({
 }: { initialScreen?: Screen } = {}) {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   /**
-   * 报告开着的是**哪个排查**的（D21：工作区与报告是两个屏，不是同屏两个 tab）。
+   * 报告开着的是**哪个调查**的（D21：工作区与报告是两个屏，不是同屏两个 tab）。
    *
-   * 记排查而不是记一个 `screen` 枚举：切到别的排查时报告屏得自己让开——
-   * 留着的话，屏幕上是排查 B 的标题配排查 A 的章节，而报告正是这个工具唯一交出去的东西。
+   * 记调查而不是记一个 `screen` 枚举：切到别的调查时报告屏得自己让开——
+   * 留着的话，屏幕上是调查 B 的标题配调查 A 的章节，而报告正是这个工具唯一交出去的东西。
    * 与确认条按 caseId 记是同一条理由，只是那一条的代价大得多。
    */
   const [reportOf, setReportOf] = useState<string | null>(null);
   /**
-   * 输入草稿**按排查分开存**。共用一个的话，在排查 A 写到一半切到排查 B ，输入框里还是那段字，
-   * 一发送就把 A 写到一半的输入发进了 B 的会话——串到别的排查上，而且毫无提示。
+   * 输入草稿**按调查分开存**。共用一个的话，在调查 A 写到一半切到调查 B ，输入框里还是那段字，
+   * 一发送就把 A 写到一半的输入发进了 B 的会话——串到别的调查上，而且毫无提示。
    * 分开存还顺带保住了草稿：切回去它还在。
    */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /**
-   * 现在在哪一屏（ui.md §8.5）。**只是导航，不带任何排查状态**：
-   * 切排查那件事整个搬到了历史排查页，rail 上四格里没有一格记得住"哪个排查"。
+   * 现在在哪一屏（ui.md §8.5）。**只是导航，不带任何调查状态**：
+   * 切调查那件事整个搬到了历史调查页，rail 上四格里没有一格记得住"哪个调查"。
    *
-   * 起手在首页而不是工作区：打开 app 时手上多半没有排查，
+   * 起手在首页而不是工作区：打开 app 时手上多半没有调查，
    * 而工作区在那种情况下是一屏什么都没有的空屏。
    */
   const [screen, setScreen] = useState<Screen>(initialScreen ?? 'home');
@@ -67,13 +67,13 @@ export function App({
   /**
    * 待办处置没落地时的提示。
    *
-   * 挂在应用级而不是卡片上：处置失败多半正是因为排查切走了，那张卡这会儿根本不在屏幕上。
+   * 挂在应用级而不是卡片上：处置失败多半正是因为调查切走了，那张卡这会儿根本不在屏幕上。
    */
   const [notice, setNotice] = useState<string | null>(null);
   /**
    * 待办卡里人已经敲进去的东西（改过的语句 / 粘贴的结果 / 执行时间 / 拒绝理由）。
    *
-   * **按「排查 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一换排查旧卡片就卸载，
+   * **按「调查 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一换调查旧卡片就卸载，
    * 局部 state 随之蒸发——切回来时它会按 ask/gate 的初值重新挂上，人贴的结果、
    * 写好的拒绝理由全没了。只有处置真的落地才清掉。
    */
@@ -94,7 +94,7 @@ export function App({
    * 输入框却还能发，消息进的是一个已经没人消费的队列。
    */
   const live = snap.sessionStatus === 'live';
-  /** 定稿 / 归档之后只能看和导出：开新会话会往一个已下结论的排查里追加步骤。 */
+  /** 定稿 / 归档之后只能看和导出：开新会话会往一个已下结论的调查里追加步骤。 */
   const frozen = !!snap.case && snap.case.status !== 'open';
   /** 接管开关按人最后按的那一下画：回执与快照都要一会儿才到，中间那一下不能显示成没按 */
   const takeover = wanted ?? snap.takeover;
@@ -103,7 +103,7 @@ export function App({
     () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
     [snap.pending, snap.gates],
   );
-  /** 别处等着人的排查。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
+  /** 别处等着人的调查。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
   const elsewhere = useMemo(() => snap.cases.filter((c) => !c.current && c.todos > 0), [snap.cases]);
   const [focus, setFocus] = useState<string | null>(null);
   /** 焦点那条消失后要接上它的**位置**，所以光记 id 不够——id 这时已经不在列表里了。 */
@@ -132,7 +132,7 @@ export function App({
     });
   }, [todos]);
 
-  // 接管的意图不跨排查：留着的话新排查的开关会先画上一次排查按下的那一下
+  // 接管的意图不跨调查：留着的话新调查的开关会先画上一次调查按下的那一下
   useEffect(() => {
     wantSeq.current += 1;
     setWanted(null);
@@ -176,7 +176,7 @@ export function App({
    * 合成一个是因为**人的动作是同一个**——想让它去查点什么。分成"舞台上一枚开始钮 +
    * 输入框一枚发送钮"的话，第一句话得先按一次开始、再回到输入框敲一遍。
    *
-   * 送不出去就把草稿留着。切排查 / 点「新开排查」之后 main 那边当时就没有当前排查了，
+   * 送不出去就把草稿留着。切调查 / 点「新开调查」之后 main 那边当时就没有当前调查了，
    * 而这一屏还要等下一次快照才换——先清空再发的话，那段字直接消失。
    */
   const submit = async () => {
@@ -188,14 +188,14 @@ export function App({
   };
 
   /**
-   * rail 那颗暖色点：**有没有排查在等人**（D28 的跨案汇总）。
+   * rail 那颗暖色点：**有没有调查在等人**（D28 的跨案汇总）。
    *
-   * 算的是全部排查而不只是当前那个——切换入口搬到历史排查页之后，
+   * 算的是全部调查而不只是当前那个——切换入口搬到历史调查页之后，
    * 这一颗点是后台那条卡在 `ask_operator` 上的支线在别的屏上仅有的痕迹。
    */
   const anyTodo = snap.cases.some((c) => c.todos > 0) || todos.length > 0;
 
-  /** 打开某次排查 = 切过去 + 翻到工作区。切换本身不中断任何一个（D28）。 */
+  /** 打开某次调查 = 切过去 + 翻到工作区。切换本身不中断任何一个（D28）。 */
   const open = (id: string) => {
     void window.inquestry.switchCase(id);
     setScreen('workspace');
@@ -211,7 +211,7 @@ export function App({
       </span>
       <div className="frame">{content}</div>
       {/* 没落地的处置要说出来，而且**得在任何一屏上都说得出来**：
-          它多半正是因为排查切走了才没落地，那时那张卡片、甚至整个工作区都不在屏幕上；
+          它多半正是因为调查切走了才没落地，那时那张卡片、甚至整个工作区都不在屏幕上；
           从报告屏按下的定稿被回绝时同理——那一屏没有横幅位 */}
       {notice && (
         <div className="appnotice">
@@ -227,7 +227,7 @@ export function App({
       <Home
         cases={snap.cases}
         onOpen={open}
-        // 建完就翻到工作区：`createCase` 会把新排查设成当前排查，
+        // 建完就翻到工作区：`createCase` 会把新调查设成当前调查，
         // 而人下一步想做的一定是点「开始排查」
         onCreated={() => setScreen('workspace')}
         onAll={() => setScreen('history')}
@@ -237,18 +237,18 @@ export function App({
   if (screen === 'history') return shell(<History cases={snap.cases} onOpen={open} />);
   if (screen === 'settings') return shell(<Settings />);
 
-  // rail 上工作区那一格随时点得到，但手上不一定有排查。
+  // rail 上工作区那一格随时点得到，但手上不一定有调查。
   // 不给出路的话它就是个死胡同——两个出口正好对应"新建"与"找一个旧的"
   if (!snap.case) {
     return shell(
       <div className="page">
         <header className="pagehead">
           <h1>工作区</h1>
-          <span className="sub">当前没有打开的排查</span>
+          <span className="sub">当前没有打开的调查</span>
         </header>
         <div className="pagebody">
           <div className="ws-empty">
-            <p>还没有打开任何排查。</p>
+            <p>还没有打开任何调查。</p>
             <div className="acts">
               <button className="primary" onClick={() => setScreen('home')}>
                 <Icon name="plus" />
@@ -256,7 +256,7 @@ export function App({
               </button>
               <button onClick={() => setScreen('history')}>
                 <Icon name="arrow" />
-                从历史排查里挑一个
+                从历史调查里挑一个
               </button>
             </div>
           </div>
@@ -278,7 +278,7 @@ export function App({
     });
 
   /**
-   * 开 / 关接管。**没切成要说出来**：切了排查之后 main 那边回绝，
+   * 开 / 关接管。**没切成要说出来**：切了调查之后 main 那边回绝，
    * 而开关是跟着快照渲染的——不说的话屏幕上什么都没变，看起来像按钮坏了。
    */
   const takeCharge = async (on: boolean) => {
@@ -293,7 +293,7 @@ export function App({
     // 几种没切成要说成不同的话，且**要说清这一轮到底在哪一档**：
     // 都说成"再点一次就行"的话，人会在没有接管的情况下继续查；而把 `unsaved` 说成没切成，
     // 人再按的那一次正好把已经生效的这一档切回去
-    if (r === 'gone') setNotice('没切成接管模式，这次排查刚切走或已经收尾了。切回去再点一次。');
+    if (r === 'gone') setNotice('没切成接管模式，这次调查刚切走或已经收尾了。切回去再点一次。');
     else if (r === 'failed')
       setNotice(
         on
@@ -321,7 +321,7 @@ export function App({
       });
       return;
     }
-    setNotice('刚才那条没处置成功：可能排查已经切走了，也可能它已经到点自动放行。切回那次排查再看一眼，刚才填的还在。');
+    setNotice('刚才那条没处置成功：可能调查已经切走了，也可能它已经到点自动放行。切回那次调查再看一眼，刚才填的还在。');
   };
 
   /**
@@ -340,10 +340,10 @@ export function App({
         {/* 顶栏只回答"我在哪个工作区、能去哪儿"（ui.md §2）。标题、基准日期、模型都不在这儿：
             那一条是定高的整幅一格，几项挤进去之后每一项都只剩几个字。
             建单信息搬去了舞台上的立案卡，运行态搬去了底部状态栏 */}
-        <span className="wsroot" title={snap.case.projectRoot ?? '这次排查没有工作区'}>
+        <span className="wsroot" title={snap.case.projectRoot ?? '这次调查没有工作区'}>
           {snap.case.projectRoot ? (
             <>
-              {/* 父路径在前、目录名在后：认排查靠最后那一段，而"是不是那个仓库"要看前面
+              {/* 父路径在前、目录名在后：认调查靠最后那一段，而"是不是那个仓库"要看前面
                   ——同名目录挂在不同父目录下是常事。挤不下时截的是前面那截 */}
               <em>{snap.case.projectRoot.split('/').slice(0, -1).join('/')}/</em>
               <code>{snap.case.projectRoot.split('/').slice(-1)[0]}</code>
@@ -361,10 +361,10 @@ export function App({
               title={elsewhere.map((c) => `${c.title}（${c.todos}）`).join('\n')}
               onClick={() => void window.inquestry.switchCase(elsewhere[0]!.id)}
             >
-              别的排查 {elsewhere.reduce((n, c) => n + c.todos, 0)}
+              别的调查 {elsewhere.reduce((n, c) => n + c.todos, 0)}
             </button>
           )}
-          {/* 两条时间线不是顶栏的两个 tab：排查线属于工作区，系统线属于报告（ui.md §1）。
+          {/* 两条时间线不是顶栏的两个 tab：调查线属于工作区，系统线属于报告（ui.md §1）。
               收尾也在那一屏里——先看这份能不能交出去，再决定收不收 */}
           {/* 「预览」是这句话的一部分，不是挂在「报告」后面的一个小字：
               没收尾时这份还会变，收尾之后它就是冻住的那一份，两句话该各说各的 */}
@@ -372,15 +372,15 @@ export function App({
             // `toreport` 现在只是无人值守探针的抓手（`main/index.ts` 的 `INQUESTRY_SHOT_REPORT`
             // 靠它进报告屏），样式走 `.headacts button`。删它之前先看那一段
             className="toreport"
-            title={frozen ? '这次排查已经收尾，报告是冻住的那一份' : '按现有数据看报告：可以就此定稿，也可以直接导出半成品'}
+            title={frozen ? '这次调查已经收尾，报告是冻住的那一份' : '按现有数据看报告：可以就此定稿，也可以直接导出半成品'}
             onClick={() => setReportOf(openCase)}
           >
             <Icon name="report" />
             {frozen ? '查看报告' : '预览报告'}
           </button>
-          <button title="回首页起一次新的排查；这一次照旧在后台跑" onClick={() => setScreen('home')}>
+          <button title="回首页起一次新的调查；这一次照旧在后台跑" onClick={() => setScreen('home')}>
             <Icon name="plus" />
-            新排查
+            新调查
           </button>
         </div>
       </header>
@@ -399,7 +399,7 @@ export function App({
         </div>
       )}
 
-      {/* 冻结之后这条只剩陈述：`restart()` 最终走 `start()`，而它对已收尾的排查直接返回，
+      {/* 冻结之后这条只剩陈述：`restart()` 最终走 `start()`，而它对已收尾的调查直接返回，
           按钮点了没有任何反应。留着错误本身是有用的——多半正是当初放弃的原因 */}
       {snap.lastError && !snap.busy && (
         <div className="banner err">
@@ -414,7 +414,7 @@ export function App({
       <main className="stage">
         {/* 立案卡是轨道的第 0 个节点：标题（可改）、问题描述、基准日期、工作区。
             **「接着查」不在这儿**——那是个动作，长在底下输入框旁边；
-            摆在舞台顶上的话，点开一次旧排查，第一眼看到的就是一个催你再跑一轮的按钮 */}
+            摆在舞台顶上的话，点开一次旧调查，第一眼看到的就是一个催你再跑一轮的按钮 */}
         <CaseCard
           meta={snap.case}
           onRename={(title) => window.inquestry.renameCase(openCase, title)}
@@ -458,7 +458,7 @@ export function App({
             disabled={frozen}
             placeholder={
               frozen
-                ? '这次排查已经收尾了，接着查请另建一次排查。'
+                ? '这次调查已经收尾了，接着查请另建一次调查。'
                 : live
                   ? '补充信息、纠偏方向，或让它换个假设…'
                   : '写下要查的东西，发出去就开一轮会话…'
@@ -508,13 +508,13 @@ export function App({
 function frozenText(meta: CaseMeta) {
   const shape = meta.verdictShape ? `报告按${SHAPE_COPY[meta.verdictShape].label}装。` : '';
   return meta.status === 'closed'
-    ? `本次排查已定稿并冻结。${shape}证据与结论都还在，接着查请另建一次排查。`
-    : `本次排查已归档（人为终止）。${shape}证据一条没少，可导出半程报告——它没有根因栏，因为没查出来就是没查出来。`;
+    ? `本次调查已定稿并冻结。${shape}证据与结论都还在，接着查请另建一次调查。`
+    : `本次调查已归档（人为终止）。${shape}证据一条没少，可导出半程报告——它没有根因栏，因为没查出来就是没查出来。`;
 }
 
 /**
- * 排查时间线**按 case 取而非按 session 取**：一次排查跨多会话，按 session 取的话
- * 重开旧排查主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
+ * 排查时间线**按 case 取而非按 session 取**：一次调查跨多会话，按 session 取的话
+ * 重开旧调查主区是空的。代价是 `ordinal` 每个会话都从 1 重来，所以要标出会话断点。
  *
  * 轨道的形状是主干 + 分叉（D23 / ui.md §3）：顺序逐字是到达顺序，分叉只往右缩进。
  * x 由 `trackLayout` 算，y 交给文档流——绝对定位的 y 得先量高度，而卡片展开工具调用时
@@ -754,7 +754,7 @@ function StepCard({
 }
 
 /** 只管 step 的状态。会话那几档由底部状态栏自己说（`RunBar` 的 `stateLabel`）——
-    那儿要分"这一轮"与"这次排查"，与一步的结论不是一套词。 */
+    那儿要分"这一轮"与"这次调查"，与一步的结论不是一套词。 */
 function statusLabel(s: StepNode['status']) {
   return (
     { open: '进行中', confirmed: '已证实', refuted: '已推翻', inconclusive: '未查清', superseded: '被推翻', converged: '已收口' } as const

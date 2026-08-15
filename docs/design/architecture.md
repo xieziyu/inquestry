@@ -10,7 +10,7 @@
 | --- | --- |
 | 桌面外壳 | **Electron**（自带 Chromium，渲染与 Chrome 一致）；目标平台先做 macOS |
 | 后端 | **Node / TypeScript**，写在 Electron main 进程，不引入独立后端进程 |
-| 排查 agent | **`@anthropic-ai/claude-agent-sdk`**（spawn 本机 `claude`，继承 OAuth 走订阅） |
+| 调查 agent | **`@anthropic-ai/claude-agent-sdk`**（spawn 本机 `claude`，继承 OAuth 走订阅） |
 | 工具回传通道 | main 进程内 **SDK MCP server**（`createSdkMcpServer`），承载 `open_step` / `close_step` / `ask_operator` |
 | 持久化 | 本地 **sqlite**（`better-sqlite3`，WAL + FK + **FTS5**）+ 内容寻址 blob 落盘 |
 | 前端 | React SPA，承载于 Electron renderer |
@@ -38,7 +38,7 @@ SDK 不打包 cli.js，而是通过 platform 专属 optionalDependency 拉一份
 | 用 SDK 自带二进制 | app 体积 **+257MB**（Electron 本体才 ~100MB 级） | 与 SDK 锁死，可复现 | 体积劝退；升级即再下一份 |
 | `pathToClaudeCodeExecutable` 指向用户已装的 `claude` | +0 | 随用户漂移 | 需环境检查 + 版本下限校验；未装则引导安装 |
 
-**取后者**：本工具的用户就是已经在用 Claude Code 排查问题的人（overview §1.1），"已装"是合理前提；配合环境检查屏（缺件时给绝对路径输入框）成本很低。两条路径都能起进程、都能握手。
+**取后者**：本工具的用户就是已经在用 Claude Code 调查问题的人（overview §1.1），"已装"是合理前提；配合环境检查屏（缺件时给绝对路径输入框）成本很低。两条路径都能起进程、都能握手。
 
 ### 剩余的环境风险
 
@@ -62,7 +62,7 @@ SDK 不打包 cli.js，而是通过 platform 专属 optionalDependency 拉一份
 
 一个活跃 case = 一个常驻 `claude` 子进程 + 一个 MCP server，故设上限并按 LRU 逐出。duetlens 的血泪结论**原样适用**，不重新推导：
 
-- **只逐出空闲会话**，忙碌一律避让——拆掉正在跑的会话等于替用户打断一轮排查
+- **只逐出空闲会话**，忙碌一律避让——拆掉正在跑的会话等于替用户打断一轮调查
 - **「忙」从入口算起**，不只是在途 turn；建 MCP、起 session 的那段一个 turn 都没有，拆掉照样打断在起跑线上
 - **会话位原子预留**，不是先判一下；判定与建出会话之间隔着若干 await
 - **满载拦下并告知**，列出在跑的是哪几条、可直达
@@ -86,7 +86,7 @@ overview §4.6 说的"UI 从库投影"是这个意思：**不是读时投影**�
 
 ### 大 payload 分层
 
-overview §1.2 要求"每一次工具调用的原始输入/输出完整落库"，单次云日志查询可达 MB 级、一次排查几十次调用。
+overview §1.2 要求"每一次工具调用的原始输入/输出完整落库"，单次云日志查询可达 MB 级、一次调查几十次调用。
 
 ```
 events 表          → 元数据 + payload 引用（sha256 / size / mime）
@@ -136,7 +136,7 @@ SPA，屏幕划分沿用 duetlens 的 `screens/` 组织：
 
 ### 两条时间线分属两个屏，不是同一屏的两个 tab
 
-两条线是同一批证据的两次投影（[data-model](data-model.md) §3），但**人在它们面前做的事完全不同**：排查线服务于"进行中要及时介入"，系统线服务于"定稿后要讲清楚"。因此排查线留在 case 屏，系统线属于 report 屏。
+两条线是同一批证据的两次投影（[data-model](data-model.md) §3），但**人在它们面前做的事完全不同**：调查线服务于"进行中要及时介入"，系统线服务于"定稿后要讲清楚"。因此调查线留在 case 屏，系统线属于 report 屏。
 
 推论：case 屏顶栏没有时间线切换器；report 屏也不实时刷新，它读的是定稿时冻结的投影。
 

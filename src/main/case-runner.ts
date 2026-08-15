@@ -50,10 +50,10 @@ import { DEFAULT_UI_SETTINGS, type UiSettings } from '../shared/settings.js';
 /** 人工回填的超时兜底（D9）。到点自动作废，节点标注为超时，agent 不会干挂。 */
 const OPERATOR_TIMEOUT_MS = 15 * 60 * 1000;
 /**
- * ②档闸门的倒计时。归零按预设放行并标记"自动放行"（ui.md §4）——人不在时排查不该停。
+ * ②档闸门的倒计时。归零按预设放行并标记"自动放行"（ui.md §4）——人不在时调查不该停。
  *
  * 值由设置屏给（`shared/settings.ts`）。**每次挂闸门时现取，不在构造时抓一份**：
- * runner 是长命的，抓一份的话改完设置要等这个排查被降级重建才生效，
+ * runner 是长命的，抓一份的话改完设置要等这个调查被降级重建才生效，
  * 而"改了没反应"与"这个开关没接线"在界面上分不出来。
  */
 const gateTimeoutMs = (init: CaseRunnerInit) => init.limits?.().gateTimeoutMs ?? DEFAULT_UI_SETTINGS.limits.gateTimeoutMs;
@@ -63,11 +63,11 @@ const gateTimeoutMs = (init: CaseRunnerInit) => init.limits?.().gateTimeoutMs ??
  * 其余一切交给 backend 的分类器按后果判（`permissionMode: 'auto'`，实测见 `scripts/spike-automode.ts`）。
  *
  * 这里一度还有第四组"一律不给"（Bash 与写盘那几个，配套 `disallowedTools`）。
- * 它挡住的不只是危险动作，还有**本机那些只读的查询 CLI**——而排查恰恰全靠它们，
+ * 它挡住的不只是危险动作，还有**本机那些只读的查询 CLI**——而调查恰恰全靠它们，
  * 于是每条查询都要退成 ask_operator 让人贴结果。**别把它加回来。**
  */
 const STRUCTURAL = new Set([toolName('open_step'), toolName('close_step')]);
-/** 只读三件套：读代码是排查的地基，不值得每次拦一下。 */
+/** 只读三件套：读代码是调查的地基，不值得每次拦一下。 */
 const READONLY_BUILTINS = ['Read', 'Grep', 'Glob'];
 /** agent 自理的杂务：记事本与工具检索。它们取不到任何证据，拦下来只会把待办栏刷满。 */
 const CHORES = ['TodoWrite', 'ToolSearch'];
@@ -215,9 +215,9 @@ export class CaseRunner {
    *
    * 会话还没起来时没有什么可等的（下一轮 `start()` 按同一个 getter 建），这时直接落。
    *
-   * 回执是切没切成：冻结的排查没有会话可切，静默 return 的话开关会在界面上翻过去，
+   * 回执是切没切成：冻结的调查没有会话可切，静默 return 的话开关会在界面上翻过去，
    * 而它其实什么都没做。**两种没切成要分开报**（`TakeoverResult`）：状态冲突再点一次就行，
-   * 而 backend 切不动是这个权限入口整个失效——两者说成同一句的话，人会照着"排查切走了"
+   * 而 backend 切不动是这个权限入口整个失效——两者说成同一句的话，人会照着"调查切走了"
    * 切回来再按一次，然后继续在没有接管的情况下往下查。
    */
   async setTakeover(on: boolean): Promise<TakeoverResult> {
@@ -260,7 +260,7 @@ export class CaseRunner {
   }
 
   /**
-   * 下面三个是给排查列表用的**便宜**读数（D28）：全局汇总每次快照都要把所有排查算一遍，
+   * 下面三个是给调查列表用的**便宜**读数（D28）：全局汇总每次快照都要把所有调查算一遍，
    * 走 buildSnapshot 的话每 60ms 就是一轮全库查询。
    */
   get todoCount() {
@@ -268,9 +268,9 @@ export class CaseRunner {
   }
 
   /**
-   * 「这次排查还在跑吗」。**支线也算**：`result` 一到主线就不忙了，而那一刻后台可能
+   * 「这次调查还在跑吗」。**支线也算**：`result` 一到主线就不忙了，而那一刻后台可能
    * 还有几条支线在查。只看主线的话，`trimIdle()` 会把一个正有支线在跑的运行时卸掉，
-   * 排查列表也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
+   * 调查列表也会把它显示成空闲。界面上要分得出是哪一种，看 `backgroundLanes`。
    */
   get isBusy() {
     return this.busy || this.lanes.backgroundLanes > 0;
@@ -315,7 +315,7 @@ export class CaseRunner {
     ));
   }
 
-  /** `cases` 由注册处给：一个 runner 只认得自己那次排查。 */
+  /** `cases` 由注册处给：一个 runner 只认得自己那次调查。 */
   snapshot(cases: CaseBrief[] = []): Snapshot {
     try {
       return buildSnapshot(
@@ -351,7 +351,7 @@ export class CaseRunner {
     return locateEvidence(text, anchor, undefined)?.excerpt ?? text.slice(0, 4000);
   }
 
-  /** 排查的状态以库为准，不在内存里另存一份——收尾之后重建运行时也得照样是冻的。 */
+  /** 调查的状态以库为准，不在内存里另存一份——收尾之后重建运行时也得照样是冻的。 */
   get caseStatus(): CaseStatus {
     return readCaseStatus(this.db, this.caseId) ?? 'open';
   }
@@ -362,8 +362,8 @@ export class CaseRunner {
   }
 
   async start(question?: string) {
-    // 定稿与归档都是冻结：再开一轮会往一个已下结论的排查里追加步骤，
-    // 报告与它记录的过程就此对不上。要接着查就另建一次排查
+    // 定稿与归档都是冻结：再开一轮会往一个已下结论的调查里追加步骤，
+    // 报告与它记录的过程就此对不上。要接着查就另建一次调查
     if (this.caseStatus !== 'open') return;
     const opening = question?.trim() || openingMessage(this.intake);
     if (this.q) return this.send(opening);
@@ -382,12 +382,12 @@ export class CaseRunner {
       options: {
         // 必须加载磁盘上的 settings，否则「继承该工作区的 skill 与 MCP」只是句话：
         // **必须含 `project` 才会读该目录的 CLAUDE.md**（SDK 契约），
-        // 而项目约束正是排查时最不该缺的上下文。
+        // 而项目约束正是调查时最不该缺的上下文。
         //
         // ⚠️ 这不只是放开上下文：磁盘 settings 里的 `hooks` 是 shell 命令，**加载即执行**
         // （实测 SessionStart 在第一次工具调用之前就跑了），项目 `.mcp.json` 同理直接拉起进程。
         // 两者都绕过 PreToolUse / canUseTool / disallowedTools——三分法只管得住 agent
-        // 自己发出的调用。真正的信任边界是「新建排查时选的那个目录」，等价于在那儿直接跑 claude。
+        // 自己发出的调用。真正的信任边界是「新建调查时选的那个目录」，等价于在那儿直接跑 claude。
         // 已决定接受该风险（overview §8 风险表最后一行）。
         settingSources: ['user', 'project', 'local'],
         // 工作区决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
@@ -533,7 +533,7 @@ export class CaseRunner {
     }
   }
 
-  /** 返回是否真的送进去了：冻结的排查没有会话接得住，送了只会静静排在一个没人消费的队列里。 */
+  /** 返回是否真的送进去了：冻结的调查没有会话接得住，送了只会静静排在一个没人消费的队列里。 */
   async send(text: string): Promise<boolean> {
     if (this.caseStatus !== 'open') return false;
     this.pushChat('user', text);
@@ -555,8 +555,8 @@ export class CaseRunner {
     await this.start();
   }
 
-  /** 关窗 / 换排查时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
-  close(why = '排查已关闭。') {
+  /** 关窗 / 换调查时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
+  close(why = '调查已关闭。') {
     this.discardPending(why);
     // 闸门同理：它挂着的也是一个 agent 那侧在等的 Promise
     for (const g of [...this.gates.values()]) g.abandon(why);
@@ -565,7 +565,7 @@ export class CaseRunner {
     // 而 `close()` 之后 SDK 保证不再有任何消息（sdk.d.ts: "After calling close(),
     // no further messages will be received."），PostToolUse 永远不会来。
     // 忙着的时候归档是允许的动作，不收的话冻结后的报告里那条会永远显示「进行中」，
-    // 一直挂到下次启动清扫——而那时排查早就冻上、甚至已经导出了。
+    // 一直挂到下次启动清扫——而那时调查早就冻上、甚至已经导出了。
     // 中断走的是另一条路：它不关查询，在跑的调用会由 PostToolUseFailure 带 is_interrupt 收尾
     this.abandonInFlight(why);
     this.endOnce('ended', why);
@@ -689,7 +689,7 @@ export class CaseRunner {
   }
 
   /**
-   * 收尾第一档：**停止**（D29）。中断当前轮，排查仍是 `open`，随时能接着查。
+   * 收尾第一档：**停止**（D29）。中断当前轮，调查仍是 `open`，随时能接着查。
    *
    * 挂起的两种待办都得散：这一轮已经没了，人再回答也回给不到任何人——
    * 而那条 `ask_operator` 调用会一直挂在 `pending` 上（回填这侧原先漏了这一下）。
@@ -714,7 +714,7 @@ export class CaseRunner {
    * 定稿前的问询。**这条路不改任何状态**，缺了就把那两步派给 agent。
    *
    * 与 `closeCase()` 分开是这一带最要紧的一条边界：界面拿的是 60ms 合流推来的快照，
-   * 隔着这一拍，一次本以为"去补两步"的点击会落进执行路径，把排查直接冻上且没经过确认。
+   * 隔着这一拍，一次本以为"去补两步"的点击会落进执行路径，把调查直接冻上且没经过确认。
    * 分开之后，执行入口只有确认按钮够得到。
    */
   requestClosing(): ClosingRequest {
@@ -745,7 +745,7 @@ export class CaseRunner {
     if (missing.length) return { ok: false, missing };
     // 界面给的形态是人在确认条上按下去的那个选择，认它；认不出来（版本对不上、
     // 或是从别处调进来的）才退回建议值——报告总得有个装法，不能落个 NULL 进去
-    this.freeze('closed', '排查已定稿，', isVerdictShape(shape) ? shape : suggestVerdictShape(this.db, this.caseId).shape);
+    this.freeze('closed', '调查已定稿，', isVerdictShape(shape) ? shape : suggestVerdictShape(this.db, this.caseId).shape);
     return { ok: true, status: 'closed' };
   }
 
@@ -757,17 +757,17 @@ export class CaseRunner {
   archiveCase(): CaseStatus {
     if (this.caseStatus !== 'open') return this.caseStatus;
     // 半程报告的形态**强制 open**，不看 agent 声明过什么（ui.md §8.4）：主体是排除掉的方向
-    // 与遗留问题，没有根因栏。查到一半的排查照它自己的形态装，装出来的是一份看着完整、
+    // 与遗留问题，没有根因栏。查到一半的调查照它自己的形态装，装出来的是一份看着完整、
     // 实则半截的报告——而那正是归档这一档明写要避免的
-    this.freeze('aborted', '排查已归档，', 'open');
+    this.freeze('aborted', '调查已归档，', 'open');
     return 'aborted';
   }
 
   /**
    * 收尾的公共动作：散待办 → 收会话 → 落形态 → 落状态。
    *
-   * **状态最后落**：前面几步失败不该留下个冻住的空壳；反过来，状态一落下排查就宣告冻结了，
-   * 那之后再写形态，写的是一个已经冻上的排查。
+   * **状态最后落**：前面几步失败不该留下个冻住的空壳；反过来，状态一落下调查就宣告冻结了，
+   * 那之后再写形态，写的是一个已经冻上的调查。
    */
   private freeze(status: Exclude<CaseStatus, 'open'>, why: string, shape: VerdictShape) {
     const ctx = { caseId: this.caseId, blobDir: this.blobs, now: () => Date.now() };
@@ -779,7 +779,7 @@ export class CaseRunner {
 
   /**
    * 回执是**处置成功了没有**，不是「有没有这条」。
-   * 找不到就是这条已经不在这次排查手里了（切了排查 / 已经超时作废），
+   * 找不到就是这条已经不在这次调查手里了（切了调查 / 已经超时作废），
    * 静默 return 的话人贴进去的查询结果就凭空消失，那条回填继续挂到超时。
    */
   answerOperator(reply: OperatorReply): boolean {
@@ -838,7 +838,7 @@ export class CaseRunner {
       /**
        * **接管模式下不设超时**（overview §3.5 / ui.md §4 的 ②′）。
        *
-       * 到点按预设放行的前提是"人不在时排查不该停"，而接管模式里人刚刚明说了
+       * 到点按预设放行的前提是"人不在时调查不该停"，而接管模式里人刚刚明说了
        * 每一条自己判——三分钟后替他放行，等于把那句话作废，且挂在闸门上的多半正是敏感写。
        * 不设超时不等于会永久挂死：停止 / 关案 / 中断都会 `abandon` 它。
        *
@@ -1162,13 +1162,13 @@ function laneOutcome(status: string): LaneOutcome {
 function openingMessage(intake: CaseIntake): string {
   const lines = [intake.question.trim()];
   lines.push(`基准日期：${intake.incidentDate}（时区 ${intake.tzOffset}）。日志里只有时分秒的时间串按这一天理解。`);
-  // 只有面板还收「已知现象」那阵子立的排查填得出这一条
+  // 只有面板还收「已知现象」那阵子立的调查填得出这一条
   if (intake.clues?.trim()) lines.push(`已知现象：${intake.clues.trim()}`);
-  // 新建的排查一定有工作区；null 只可能来自这条规则之前立的旧排查
+  // 新建的调查一定有工作区；null 只可能来自这条规则之前立的旧调查
   lines.push(
     intake.projectRoot
       ? `工作区：${intake.projectRoot}。可以读这个仓库的代码与配置；查库、跑命令、动生产数据一律用 ask_operator 交给人执行。`
-      : '这次排查没有工作区：所有取数一律用 ask_operator 交给人执行。',
+      : '这次调查没有工作区：所有取数一律用 ask_operator 交给人执行。',
   );
   return lines.join('\n');
 }

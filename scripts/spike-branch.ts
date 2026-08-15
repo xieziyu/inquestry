@@ -378,7 +378,7 @@ async function main() {
   probe.lanes.absorb(forwarded('task_orph', 'inner_o1') as never);
   start('inner_o1', 'ag_orph');
 
-  // ── ⑤ 后台电平：主线不忙了不等于这次排查闲下来了 ──────────────────────────
+  // ── ⑤ 后台电平：主线不忙了不等于这次调查闲下来了 ──────────────────────────
   const bridge = new LaneBridge();
   check('12. 没有支线时电平是 0', bridge.backgroundLanes === 0, `实得 ${bridge.backgroundLanes}`);
   bridge.absorb({ type: 'system', subtype: 'background_tasks_changed', tasks: [{}, {}] });
@@ -406,7 +406,7 @@ async function main() {
   const busyWithLane = runner.isBusy;
   runner.close('自检收尾。');
   check(
-    '15. 只剩支线在后台时这次排查仍算「在跑」，收尾之后归零',
+    '15. 只剩支线在后台时这次调查仍算「在跑」，收尾之后归零',
     busyWithLane && !runner.isBusy,
     `支线在跑时 ${busyWithLane}，close 之后 ${runner.isBusy}`,
   );

@@ -4,7 +4,7 @@
  * 不起真会话：要验的都是 harness 侧的记账、状态与投影，与模型无关，而这几处的错法都是**静默**的——
  *
  *   1. **状态变更必须走领域事件。** 直接 `UPDATE cases` 的值一重放就被 `case.opened`
- *      抹回 `open`，而重放正是换 schema 时重建投影的唯一手段——结过的排查悄悄又开着了
+ *      抹回 `open`，而重放正是换 schema 时重建投影的唯一手段——结过的调查悄悄又开着了
  *   2. **终止要把挂起的回填也收掉。** 闸门那侧一直有，回填这侧原先没有：
  *      那次 `ask_operator` 调用会永远挂在 `pending` 上，轨道上是一次"发起了但没有结果"的调用
  *   3. **散场的收尾不能被迟到的 PostToolUse 盖掉。** 散场靠的就是给工具那侧一个结果，
@@ -88,7 +88,7 @@ function makeRunner(caseId: string, title?: string): CaseRunner {
 const callStatus = (id: string) =>
   (db.prepare(`SELECT status FROM tool_calls WHERE id=?`).get(id) as { status: string } | undefined)?.status;
 
-/** 跑一步带证据的排查，用来喂定稿前置与"证据不该被销毁"两条。 */
+/** 跑一步带证据的调查，用来喂定稿前置与"证据不该被销毁"两条。 */
 async function work(
   session: InvestigationSession,
   opts: {
@@ -201,7 +201,7 @@ async function main() {
   pReport.q = {} as never;
   const execRefused = await cReport.closeCase();
   check(
-    '执行入口缺步时只回绝，不冻排查也不派活',
+    '执行入口缺步时只回绝，不冻调查也不派活',
     !execRefused.ok &&
       execRefused.missing.length === 2 &&
       readCaseStatus(db, 'case_exec') === 'open' &&
@@ -255,7 +255,7 @@ async function main() {
   // `superseded` 的意思是这条结论已被明确推翻。被**同类**的新 step 顶掉不影响（新的自己补上了），
   // 真正漏的是被别的 kind 推翻：章节看着齐全，而报告那一栏（`reportSections` 不按 status 过滤）
   // 取到的是一份已经作废的影响面
-  // 单独一次排查：case_close 里已经有一个收好的 impact step 了，在那儿验会被它顶掉
+  // 单独一次调查：case_close 里已经有一个收好的 impact step 了，在那儿验会被它顶掉
   const cs = makeRunner('case_super', '影响面被推翻');
   const ss = (cs as unknown as Probe).beginSession();
   await work(ss, { direction: '重试放大', callId: 'call_s1', occurredAt: '12:41:07' });
@@ -297,7 +297,7 @@ async function main() {
 
   // ── ③ 补齐之后定稿成立，且状态走的是事件 ────────────────────────────────
   check(
-    '定稿之前不写形态：排查中途的形态还会变，定死一个只会让报告按过期判断装',
+    '定稿之前不写形态：调查中途的形态还会变，定死一个只会让报告按过期判断装',
     shapeOf('case_close') === null,
     `verdict_shape=${shapeOf('case_close')}`,
   );
@@ -308,7 +308,7 @@ async function main() {
     closed.ok && readCaseStatus(db, 'case_close') === 'closed',
     `status=${readCaseStatus(db, 'case_close')}`,
   );
-  // 这次排查 agent 一次形态都没声明过，走的是推断那条：有已证实的根因，没有应然实然，
+  // 这次调查 agent 一次形态都没声明过，走的是推断那条：有已证实的根因，没有应然实然，
   // 系统时间线上只有一条证据（影响面那一步的 callRef 落空了，所以排不出"顺序"）→ chain。
   // 换成 open 会把一条真实结论从报告里抹掉，换成 sequence 是装一块空的
   check(
@@ -337,7 +337,7 @@ async function main() {
     `sessions=${sessionsBefore} → ${(db.prepare(`SELECT COUNT(*) c FROM sessions WHERE case_id='case_close'`).get() as { c: number }).c} · send=${sent}`,
   );
   check(
-    '重开 app 不会自动回到已定稿的排查',
+    '重开 app 不会自动回到已定稿的调查',
     (db.prepare(`SELECT id FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 1`).get() as
       | { id: string }
       | undefined)?.id !== 'case_close',
@@ -403,7 +403,7 @@ async function main() {
     `末条=${c2.snapshot().chat.at(-1)?.text}`,
   );
   check(
-    '停止不改排查状态：随时能接着查',
+    '停止不改调查状态：随时能接着查',
     readCaseStatus(db, 'case_stop') === 'open',
     `status=${readCaseStatus(db, 'case_stop')}`,
   );
@@ -432,7 +432,7 @@ async function main() {
   // ── ⑥ 迟到的 PostToolUse 不能把 abandoned 盖成 done ──────────────────────
   //
   // 散场靠的正是"给工具那侧一个结果"，所以它随后照样会走完 PostToolUse
-  p2.onToolEnd({ tool_name: ASK, tool_response: '(排查已关闭，这条回填作废)' }, 'call_b');
+  p2.onToolEnd({ tool_name: ASK, tool_response: '(调查已关闭，这条回填作废)' }, 'call_b');
   check(
     '散场之后迟到的成功收尾不算数，abandoned 保持原样',
     callStatus('call_b') === 'abandoned',
@@ -774,7 +774,7 @@ async function main() {
   // ── ⑦.6 修复建议：报告四栏里唯一由 agent 生成的那一块（overview §6.1） ────
   //
   // 它一度**没有写入方**，报告上恒为「无」。补上之后这一带的错法有两个形状：
-  // ① 跟着根因取 —— 未决型与归档的半程报告会永远少一栏，而那种排查最该留下"下一步怎么查"
+  // ① 跟着根因取 —— 未决型与归档的半程报告会永远少一栏，而那种调查最该留下"下一步怎么查"
   // ② 不跟着结论失效 —— 报告里躺一条基于作废判断的修复方案，且没有任何地方看得出来
   const cFix = makeRunner('case_fix', '修复建议');
   const sFix = (cFix as unknown as Probe).beginSession();
@@ -1004,7 +1004,7 @@ async function main() {
     callStatus('call_z1') === 'abandoned' && callStatus('call_b') === 'abandoned' && callStatus('call_g') === 'abandoned',
     `call_z1=${callStatus('call_z1')} · call_b=${callStatus('call_b')} · call_g=${callStatus('call_g')}`,
   );
-  // 比的是重放前后而不是一个写死的条数：后者每加一次排查就要跟着改，
+  // 比的是重放前后而不是一个写死的条数：后者每加一次调查就要跟着改，
   // 而它真正要验的是「收尾没有销毁事实，重放也没有」
   check(
     '重放之后证据仍在：收尾从来不销毁事实',

@@ -1,14 +1,14 @@
 /**
- * Spike Cases —— 验并发多个排查这一带（D28 / ui.md §8.3）。
+ * Spike Cases —— 验并发多个调查这一带（D28 / ui.md §8.3）。
  *
  * 不起真会话：要验的都是 harness 侧的记账与投影，与模型无关，而这几处的错法都是**静默**的——
  *
- *   1. **排查时间线按 case 取而非按 session 取。** 按 session 取时重开旧排查主区是空的，
+ *   1. **排查时间线按 case 取而非按 session 取。** 按 session 取时重开旧调查主区是空的，
  *      查了三轮的东西一条不剩，看起来像数据丢了而不像查错了表
  *   2. **重开是新起一个 session，不是往已收尾的那个里接着写。** 不换 sessionId 的话，
  *      库里会出现「会话结束之后还在产生的步骤」
- *   3. **`cases.updated_at` 得有人前移。** 新建排查之后没有别的地方会动它，
- *      不前移的话切换栏的「最近活动」永远是新建排查先后
+ *   3. **`cases.updated_at` 得有人前移。** 新建调查之后没有别的地方会动它，
+ *      不前移的话切换栏的「最近活动」永远是新建调查先后
  *   4. **降级不能挑挂着待办的那个。** 它会把等着人回答的 pending 就地作废，
  *      等于替人做了「这条不查了」的决定
  *
@@ -75,11 +75,11 @@ function makeRunner(caseId: string, title?: string): CaseRunner {
 
 /**
  * 注册处的工厂，对齐 main 里的 `loadCase`：**库里没有就返回 null**。
- * 这里若像 `makeRunner` 那样兜底造一份建单信息，切换一个不存在的 id 会凭空立出个排查来。
+ * 这里若像 `makeRunner` 那样兜底造一份建单信息，切换一个不存在的 id 会凭空立出个调查来。
  */
 const loadRunner = (caseId: string) => (readIntake(db, caseId) ? makeRunner(caseId) : null);
 
-/** 跑一步完整的排查：开 step → 一次工具调用 → 带证据定稿。 */
+/** 跑一步完整的调查：开 step → 一次工具调用 → 带证据定稿。 */
 async function work(runner: CaseRunner, direction: string, callId: string, occurredAt: string) {
   const session = (runner as unknown as Probe).beginSession();
   const { stepId } = await session.store.openStep({ direction });
@@ -110,7 +110,7 @@ async function main() {
   db = openDatabase(file);
   blobs = blobDir(file);
 
-  // ── ① 一次排查跨两次会话 ──────────────────────────────────────────────
+  // ── ① 一次调查跨两次会话 ──────────────────────────────────────────────
   const first = makeRunner('case_x', '订单查不到');
   await work(first, '主从延迟导致读不到刚写入的记录', 'call_x1', '12:41:07');
   // 人在第一次会话里说的话。**趁这个会话还开着写**——收尾之后再 beginSession 会另起一个，
@@ -121,13 +121,13 @@ async function main() {
   const createdAt = (db.prepare(`SELECT created_at c FROM cases WHERE id='case_x'`).get() as { c: number }).c;
   first.close();
 
-  // 关掉再打开 = 同一次排查的第二次会话（重启 app 走的也是这条路）
+  // 关掉再打开 = 同一次调查的第二次会话（重启 app 走的也是这条路）
   const second = makeRunner('case_x');
   await work(second, '重试逻辑把失败吞了', 'call_x2', '12:43:20');
   const snapX = second.snapshot();
 
   check(
-    '排查时间线按 case 取：重开旧排查看得见上一次会话的步骤',
+    '排查时间线按 case 取：重开旧调查看得见上一次会话的步骤',
     snapX.steps.length === 2,
     `steps=${snapX.steps.length}（按 session 取只会有 1 条）`,
   );
@@ -150,11 +150,11 @@ async function main() {
   // ── 对话带：**唯一重建不出来的东西**（步骤、证据、结论都投影得出来） ──────────
   //
   // 只存内存的话，关掉 app 就只剩 agent 的结论，看不到人当时那句"别查网关了，先看从库"。
-  // 所以它按 case 取、跨会话留——按会话取的话重开旧排查只能看到空的。
+  // 所以它按 case 取、跨会话留——按会话取的话重开旧调查只能看到空的。
   (second as unknown as Probe).pushChat('assistant', '好，我去看复制延迟');
   const chat = second.snapshot().chat;
   check(
-    '对话带落库并按 case 取：重开旧排查还看得见上一次会话里人说过的话',
+    '对话带落库并按 case 取：重开旧调查还看得见上一次会话里人说过的话',
     chat.length === 2 && !!chat[0]?.text.includes('别查网关') && chat[1]?.role === 'assistant',
     chat.map((c) => `${c.role}:${c.text.slice(0, 10)}`).join(' | ') || '（空的）',
   );
@@ -188,7 +188,7 @@ async function main() {
   // ── 重放前的载荷体检：迁移这条路的地基（data-model.md §2） ────────────────
   //
   // `better-sqlite3` 把 `undefined` 绑成 NULL，所以一条形状变过的老事件重放时
-  // **不报错，只静静落一批 NULL**——看起来像迁移成功，其实是一批半残的排查。
+  // **不报错，只静静落一批 NULL**——看起来像迁移成功，其实是一批半残的调查。
   // 曾经就是这么"跑通"过一次的，所以这道闸自己必须有一条会红的检查。
   //
   // ⚠️ 验它必须在**真事件**上：`spike:db` 那份夹具用的是它自己的事件词汇
@@ -273,7 +273,7 @@ async function main() {
   // ── 迁移这条路本身：**要在真库真数据上走一遍** ──────────────────────────
   //
   // 体检只是那道闸，路在 `openDatabase` 里。启动路径不分岔的话，
-  // 哪怕只加一个 nullable 列，现有排查照样会从 app 里消失（文件留成 .bak，界面上没了）。
+  // 哪怕只加一个 nullable 列，现有调查照样会从 app 里消失（文件留成 .bak，界面上没了）。
   //
   // 手法：把这份**真跑出来的库**的 user_version 调低一格假装它是旧的，再给一级假步骤。
   // 不能靠改 SCHEMA_VERSION——那是个常量，而且改了整套自检都会跟着漂
@@ -318,13 +318,13 @@ async function main() {
     schemaAfterSteps ? '步骤删掉的表被 SCHEMA_SQL 重新建了出来' : '步骤删掉的表没回来，说明 schema 先跑了',
   );
   check(
-    '可重放的升级真的走迁移：排查留在原地，新列补上，版本跟着提',
+    '可重放的升级真的走迁移：调查留在原地，新列补上，版本跟着提',
     post.cases === casesBefore && post.cases > 0 && post.steps === stepsBefore && post.hasCol && post.version === SCHEMA_VERSION,
-    `排查 ${casesBefore} → ${post.cases}，步骤 ${stepsBefore} → ${post.steps}，新列=${post.hasCol}，版本=${post.version}`,
+    `调查 ${casesBefore} → ${post.cases}，步骤 ${stepsBefore} → ${post.steps}，新列=${post.hasCol}，版本=${post.version}`,
   );
   check(
     // 挪库那条路会留下 .bak；走迁移就**不该**留——留了说明它其实走的是老路，
-    // 而"排查还在"只是因为这一轮恰好又造了一份
+    // 而"调查还在"只是因为这一轮恰好又造了一份
     '走迁移不留 .bak（留了就说明它其实挪了库，只是看起来像迁移）',
     !existsSync(`${migrated}.v${SCHEMA_VERSION - 1}`) &&
       readdirSync(path.dirname(migrated)).every((f) => !f.includes('.bak')),
@@ -332,9 +332,9 @@ async function main() {
   );
   // ── 内置阶梯本身也要走一遍，不能只验一级假步骤 ─────────────────────────
   //
-  // 上面那一段验的是**这条路**（DDL 与 schema 的先后、排查留不留在原地），用的是替身步骤。
+  // 上面那一段验的是**这条路**（DDL 与 schema 的先后、调查留不留在原地），用的是替身步骤。
   // 而 `MIGRATIONS` 里真正那一级写没写对是另一回事：写歪了（列名拼错、忘了加进阶梯）
-  // 的表现是**开发库被挪走**——app 起得来、界面干净、排查全没了。
+  // 的表现是**开发库被挪走**——app 起得来、界面干净、调查全没了。
   //
   // 造一份"真的是 v5"的库：把当前库复制一份，删掉 v6 加的那一列，再把版本调回去。
   // 光改 user_version 不删列的话，`ALTER TABLE ADD COLUMN` 会撞上重复列，
@@ -359,19 +359,19 @@ async function main() {
   };
   realUp.close();
   check(
-    `内置阶梯把 v${SCHEMA_VERSION - 1} 迁到 v${SCHEMA_VERSION}：排查留在原地，新列的值由重放补回来`,
+    `内置阶梯把 v${SCHEMA_VERSION - 1} 迁到 v${SCHEMA_VERSION}：调查留在原地，新列的值由重放补回来`,
     realPost.cases === casesBefore &&
       realPost.cases > 0 &&
       fixedBefore > 0 &&
       realPost.fixed === fixedBefore &&
       realPost.version === SCHEMA_VERSION &&
       readdirSync(path.dirname(real)).every((f) => !f.includes('.bak')),
-    `排查 ${casesBefore} → ${realPost.cases}，带修复建议的步 ${fixedBefore} → ${realPost.fixed}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}`,
+    `调查 ${casesBefore} → ${realPost.cases}，带修复建议的步 ${fixedBefore} → ${realPost.fixed}，版本=${realPost.version}，目录=${readdirSync(path.dirname(real)).join(' ')}`,
   );
 
   // 🔴 **`case_ui_state` 不是投影，却会被投影的清空**：它对 `cases(id)` 带 ON DELETE CASCADE，
-  // `DELETE FROM cases` 一跑就整表带走。里面装的正是**重建不出来**的两样——新建排查时选的 agent
-  // （会话还没开，别处没有第二份）与接管开关。丢了不报错、排查还在，表现是"升级完模型悄悄
+  // `DELETE FROM cases` 一跑就整表带走。里面装的正是**重建不出来**的两样——新建调查时选的 agent
+  // （会话还没开，别处没有第二份）与接管开关。丢了不报错、调查还在，表现是"升级完模型悄悄
   // 换回默认、接管自己关掉了"，与迁移失败长得完全不一样
   const uiCase = caseList(db, { limit: 1 })[0]!.id;
   db.prepare(
@@ -402,7 +402,7 @@ async function main() {
   staleDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
   staleDb.close();
   // 有人把一级"其实改了载荷形状"的升级声明成可重放时该怎么办：**退回挪库**。
-  // 硬迁的话会落出一批半残的排查，而它与一次成功的迁移长得一模一样；
+  // 硬迁的话会落出一批半残的调查，而它与一次成功的迁移长得一模一样；
   // 直接抛错则是让 app 起不来——声明错的代价不该是"今天用不了这个工具"
   const broken = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-broken-')), 'inquestry.db');
   db.prepare(`VACUUM INTO ?`).run(broken);
@@ -430,7 +430,7 @@ async function main() {
     !threw && salvagedCases === 0 && readdirSync(path.dirname(broken)).some((f) => f.includes('.bak')),
     threw
       ? `抛了：${threw.slice(0, 60)}（app 会起不来）`
-      : `新库里 ${salvagedCases} 个排查，目录里 ${readdirSync(path.dirname(broken)).join(' ')}`,
+      : `新库里 ${salvagedCases} 个调查，目录里 ${readdirSync(path.dirname(broken)).join(' ')}`,
   );
 
   check(
@@ -473,7 +473,7 @@ async function main() {
   // ── ② updated_at 与切换栏排序 ────────────────────────────────────────
   const updatedAt = (db.prepare(`SELECT updated_at u FROM cases WHERE id='case_x'`).get() as { u: number }).u;
   check(
-    'cases.updated_at 随活动前移，不停在新建排查那一刻',
+    'cases.updated_at 随活动前移，不停在新建调查那一刻',
     updatedAt > createdAt,
     `created=${createdAt} updated=${updatedAt}（差 ${updatedAt - createdAt}ms）`,
   );
@@ -491,7 +491,7 @@ async function main() {
       .join(' '),
   );
 
-  // ── ③ 全局待办汇总：别的排查在等人，当前排查的快照里也数得出来 ──────────
+  // ── ③ 全局待办汇总：别的调查在等人，当前调查的快照里也数得出来 ──────────
   const registry = new CaseRegistry<CaseRunner>({ db, create: loadRunner });
   registry.adopt('case_z', idle);
   void (idle as unknown as Probe).askOperator({
@@ -508,7 +508,7 @@ async function main() {
   // ── 列表那句状态与工作区底部那句必须说同一件事 ──────────────────────────
   //
   // 🔴 **这是实际踩到过的一条**：列表原先按 `loaded`（main 还持有它的运行时）分档，
-  // 于是一次点开看过、一轮都没跑的排查在首页写「已停止」，点进去底部写「待开始」。
+  // 于是一次点开看过、一轮都没跑的调查在首页写「已停止」，点进去底部写「待开始」。
   // 两处都不报错，人只能猜哪个是真的。所以两处共用 `runState`，而这条检查验的是
   // **同一个事实喂给两处会得到同一个词**——只验其中一处的映射表证明不了这件事。
   const sameWord = (
@@ -527,7 +527,7 @@ async function main() {
     check(`列表与状态栏用同一个词：${name}`, list === bar, `列表「${list}」/ 状态栏「${bar}」`);
   };
   sameWord('一轮都没跑过', { status: 'open', running: false, started: false }, { sessionStatus: 'idle', busy: false, steps: 0 });
-  // 从历史里重新点开：运行时是新建的（idle），但这次排查确实跑过——就是那条踩到的
+  // 从历史里重新点开：运行时是新建的（idle），但这次调查确实跑过——就是那条踩到的
   sameWord('跑过、从历史重新点开', { status: 'open', running: false, started: true }, { sessionStatus: 'idle', busy: false, steps: 3 });
   sameWord('跑过、这一轮已收', { status: 'open', running: false, started: true }, { sessionStatus: 'ended', busy: false, steps: 3 });
   sameWord('正在跑', { status: 'open', running: true, started: true }, { sessionStatus: 'live', busy: true, steps: 3 });
@@ -555,17 +555,17 @@ async function main() {
     `case_z loaded=${zBrief.loaded} started=${zBrief.started} / case_x started=${briefs.find((c) => c.id === 'case_x')!.started}`,
   );
   check(
-    '切换到别的排查不中断它：运行时还在，待办也还挂着',
+    '切换到别的调查不中断它：运行时还在，待办也还挂着',
     zBrief.loaded && zBrief.todos === 1 && !zBrief.current,
     `case_z loaded=${zBrief.loaded} todos=${zBrief.todos} current=${zBrief.current}`,
   );
   check(
-    '当前排查的快照里带着别处的待办数（D28）',
+    '当前调查的快照里带着别处的待办数（D28）',
     registry.current!.snapshot(briefs).cases.reduce((n, c) => n + c.todos, 0) === 1,
     briefs.map((c) => `${c.id}:${c.todos}`).join(' '),
   );
   check(
-    '库里没有的 case 切不过去，当前排查不受影响',
+    '库里没有的 case 切不过去，当前调查不受影响',
     registry.switchTo('case_nope') === false && registry.currentCaseId === 'case_x',
     `current=${registry.currentCaseId}`,
   );
@@ -592,17 +592,17 @@ async function main() {
       .join(' '),
   );
   check(
-    '挂着待办的排查不会被降级——降级等于替人作废掉那条回填',
+    '挂着待办的调查不会被降级——降级等于替人作废掉那条回填',
     after.get('case_z')!.loaded && after.get('case_z')!.todos === 1,
     `case_z loaded=${after.get('case_z')!.loaded} todos=${after.get('case_z')!.todos}`,
   );
   check(
-    '当前排查不会被降级',
+    '当前调查不会被降级',
     after.get('case_y')!.loaded && after.get('case_y')!.current,
     `case_y loaded=${after.get('case_y')!.loaded} current=${after.get('case_y')!.current}`,
   );
 
-  // 限流不能只在切换时查一次：切过去的时候排查还没开跑（没有进程），
+  // 限流不能只在切换时查一次：切过去的时候调查还没开跑（没有进程），
   // 是点了「开始排查」之后才超的上限。此刻 live 的是 case_z（挂着待办）与 case_y
   small.switchTo('case_w');
   live(small.current!);
@@ -617,10 +617,10 @@ async function main() {
       .join(' '),
   );
 
-  // 被降级的排查重新点开：必须是个全新的运行时，不是那个已收尾的
+  // 被降级的调查重新点开：必须是个全新的运行时，不是那个已收尾的
   small.switchTo('case_x');
   check(
-    '降级过的排查点回去是新运行时，不接着往已收尾的 session 里写',
+    '降级过的调查点回去是新运行时，不接着往已收尾的 session 里写',
     small.current!.sessionStatus === 'idle' && small.briefs().find((c) => c.id === 'case_x')!.loaded,
     `status=${small.current!.sessionStatus}`,
   );
@@ -636,7 +636,7 @@ async function main() {
   const beforeReplay = activity();
   rebuildProjections(db, { blobDir: blobs });
   check(
-    '清空投影后重放，各排查的最近活动时间逐字一致',
+    '清空投影后重放，各调查的最近活动时间逐字一致',
     beforeReplay === activity(),
     beforeReplay === activity() ? '一致' : `重放前=${beforeReplay}\n      重放后=${activity()}`,
   );
@@ -663,21 +663,21 @@ async function main() {
     `取到的是「${reportSections(db, 'case_x').impact?.verdict_text}」`,
   );
 
-  // ── ⑦ 载入着的排查不会被切换栏的条数上限截掉 ────────────────────────────
+  // ── ⑦ 载入着的调查不会被切换栏的条数上限截掉 ────────────────────────────
   //
-  // 待办只活在运行时里：被截掉的话，那次排查连同它的「等你 N」一起从切换栏和
+  // 待办只活在运行时里：被截掉的话，那次调查连同它的「等你 N」一起从切换栏和
   // 全局汇总里消失，人看不见也切不回去——D28 要保的正是这个
   const flood = new CaseRegistry<CaseRunner>({ db, create: loadRunner, maxLive: 2 });
   flood.adopt('case_z', idle); // 挂着一条待办
   for (let i = 0; i < 25; i++) {
     const id = `case_bulk${i}`;
-    makeRunner(id, `批量排查 ${i}`).close();
+    makeRunner(id, `批量调查 ${i}`).close();
     // 让它们的最近活动都比 case_z 新，把 case_z 挤出前 20
     db.prepare(`UPDATE cases SET updated_at=? WHERE id=?`).run(Date.parse('2027-01-01') + i, id);
   }
   const flooded = flood.briefs();
   check(
-    '载入着的排查不会被切换栏的条数上限截掉，待办跟着还在',
+    '载入着的调查不会被切换栏的条数上限截掉，待办跟着还在',
     flooded.some((c) => c.id === 'case_z' && c.todos === 1),
     `共 ${flooded.length} 行，case_z ${flooded.some((c) => c.id === 'case_z') ? '在' : '被截掉了'}`,
   );
@@ -823,18 +823,18 @@ async function main() {
     `读回 ${Buffer.byteLength(head ?? '')} 字节 / 全量 ${Buffer.byteLength(big)} 字节`,
   );
 
-  // ── ⑬ 新建排查面板模式：没有当前排查，但切换栏与全局待办照常 ──────────────────
+  // ── ⑬ 新建调查面板模式：没有当前调查，但切换栏与全局待办照常 ──────────────────
   //
-  // 点「＋ 新排查」的那一刻 currentId 就是 null，而 renderer 要等下一次快照才换屏。
-  // main 侧那些依赖当前排查的 IPC 因此必须判空——用 `!` 的话这中间旧界面发一次消息
+  // 点「＋ 新调查」的那一刻 currentId 就是 null，而 renderer 要等下一次快照才换屏。
+  // main 侧那些依赖当前调查的 IPC 因此必须判空——用 `!` 的话这中间旧界面发一次消息
   // 就是个 TypeError，用户那侧只看到输入框被清空、内容没了。
-  // 同时「别处还有几条待办」在新建排查页上也得数得出来，否则新立一次排查就把它们看丢了
+  // 同时「别处还有几条待办」在新建调查页上也得数得出来，否则新立一次调查就把它们看丢了
   const intakeReg = new CaseRegistry<CaseRunner>({ db, create: loadRunner });
   intakeReg.adopt('case_z', idle);
   intakeReg.toIntake();
   const intakeBriefs = intakeReg.briefs();
   check(
-    '进新建排查面板后没有当前排查，但切换栏与别处的待办还在',
+    '进新建调查面板后没有当前调查，但切换栏与别处的待办还在',
     intakeReg.current === null &&
       intakeReg.currentCaseId === null &&
       intakeBriefs.every((c) => !c.current) &&
@@ -842,14 +842,14 @@ async function main() {
     `current=${intakeReg.current} 共 ${intakeBriefs.length} 行 case_z 待办=${intakeBriefs.find((c) => c.id === 'case_z')?.todos}`,
   );
 
-  // ── ⑭ 切过去之后，旧界面那一下不能落到新排查头上 ──────────────────────────
+  // ── ⑭ 切过去之后，旧界面那一下不能落到新调查头上 ──────────────────────────
   //
-  // 光判空不够：切换是同步生效的，所以 `current` 这时已经是**新**排查了。
-  // renderer 在排查 A 里按下的发送带的还是 A 的 id，不核对就正正好写进 B 的会话，
+  // 光判空不够：切换是同步生效的，所以 `current` 这时已经是**新**调查了。
+  // renderer 在调查 A 里按下的发送带的还是 A 的 id，不核对就正正好写进 B 的会话，
   // 而且还会回一个「送到了」把 A 的草稿清掉
   const stale = new CaseRegistry<CaseRunner>({ db, create: loadRunner });
   stale.switchTo('case_x');
-  stale.switchTo('case_w'); // 人点了排查 B ；旧界面还没换屏
+  stale.switchTo('case_w'); // 人点了调查 B ；旧界面还没换屏
   check(
     '切过去之后，带着旧 caseId 的调用不再被投递',
     stale.currentIf('case_x') === null && stale.currentIf('case_w') === stale.current,
@@ -875,9 +875,9 @@ async function main() {
     `case_z ${loadedIds.includes('case_z') ? '在' : '被收了'} · 当前 case_bulk11 ${loadedIds.includes('case_bulk11') ? '在' : '被收了'}`,
   );
 
-  // ── ⑯ 只是点开看过的老排查，不该靠「载入着」把自己钉进切换栏 ────────────────
+  // ── ⑯ 只是点开看过的老调查，不该靠「载入着」把自己钉进切换栏 ────────────────
   //
-  // 上面那 25 个 bulk 排查都比 case_x 新，所以 case_x 早就在 20 名开外了。
+  // 上面那 25 个 bulk 调查都比 case_x 新，所以 case_x 早就在 20 名开外了。
   // 把它点开看一眼——若「载入着就钉住」，它会重新冒到切换栏上，条数上限就此形同虚设
   // （载入数有上限，所以不会无限长，但仍会稳定地多出一截）
   const pinReg = new CaseRegistry<CaseRunner>({ db, create: loadRunner });
@@ -885,7 +885,7 @@ async function main() {
   pinReg.switchTo('case_bulk24');
   const pinRows = pinReg.briefs();
   check(
-    '只点开看过的老排查不会把自己钉进切换栏',
+    '只点开看过的老调查不会把自己钉进切换栏',
     pinRows.length <= 20 && !pinRows.some((c) => c.id === 'case_x'),
     `共 ${pinRows.length} 行，case_x ${pinRows.some((c) => c.id === 'case_x') ? '还在里面' : '没在'}`,
   );
@@ -894,7 +894,7 @@ async function main() {
   //
   // FTS5 那两张表建好很久了，一直没有人查。接上去之后这一带的错法都很安静：
   // 只列不搜时人还知道"搜不了"，搜出来的东西不对却看不出是漏了一整类索引
-  // 还是那次排查真没提过——所以每一类命中来源都要有一条自己的检查。
+  // 还是那次调查真没提过——所以每一类命中来源都要有一条自己的检查。
   const fx = makeRunner('case_fts', '订单支付回调丢了');
   const fxs = (fx as unknown as Probe).beginSession();
   const fxStep = await fxs.store.openStep({ direction: '怀疑回调被幂等键挡掉了' });
@@ -907,13 +907,13 @@ async function main() {
     confidence: 0.9,
     evidence: [{ callRef: '#1', anchor: '2', claim: '回调在网关层就被丢弃', occurredAt: '09:00:00' }],
   });
-  // 建完单没跑过的排查：**只有建单信息那一条索引救得了它**。不索引 `case.opened` 的话，
+  // 建完单没跑过的调查：**只有建单信息那一条索引救得了它**。不索引 `case.opened` 的话，
   // 它在检索里根本不存在，而"建完单先放着、过几天回来找"正是常态
   makeRunner('case_fts_new', '证书过期导致握手失败');
 
   const hitIds = (t: string) => searchCases(db, t).map((c) => c.id);
   check(
-    '检索按排查归并：一次排查多条命中只出一行，条数照实报',
+    '检索按调查归并：一次调查多条命中只出一行，条数照实报',
     (() => {
       const r = searchCases(db, '幂等');
       const fts = r.find((c) => c.id === 'case_fts');
@@ -922,7 +922,7 @@ async function main() {
     JSON.stringify(searchCases(db, '幂等')),
   );
   check(
-    '建完单还没跑过的排查也搜得到（建单信息进了索引）',
+    '建完单还没跑过的调查也搜得到（建单信息进了索引）',
     hitIds('证书过期').includes('case_fts_new'),
     `命中=${JSON.stringify(searchCases(db, '证书过期'))}`,
   );
@@ -950,17 +950,17 @@ async function main() {
     '按 String.length 判的话这里是 0 条（"🔥🔥".length === 4 却只有 2 个字符）',
   );
   check(
-    'LIKE 那条路上的通配符要转义：搜一个 % 不该把全部排查翻出来',
+    'LIKE 那条路上的通配符要转义：搜一个 % 不该把全部调查翻出来',
     searchCases(db, '%').length === 0,
-    `"%"→${searchCases(db, '%').length} 个排查（不转义的话它匹配一切）`,
+    `"%"→${searchCases(db, '%').length} 个调查（不转义的话它匹配一切）`,
   );
   check(
     '空串回空数组，不回"全部"',
     searchCases(db, '').length === 0 && searchCases(db, '   ').length === 0,
     `""→${searchCases(db, '').length} · "   "→${searchCases(db, '   ').length}`,
   );
-  // 排序与最近列表同一条规则。按命中条数排的话，同一次排查在两份列表里的位置会对不上，
-  // 而两份列表长得一模一样——人会以为搜到的是另一次排查
+  // 排序与最近列表同一条规则。按命中条数排的话，同一次调查在两份列表里的位置会对不上，
+  // 而两份列表长得一模一样——人会以为搜到的是另一次调查
   check(
     '检索结果的排序与最近列表同一条规则（进行中在前、同档按最近活动倒序）',
     (() => {
@@ -994,7 +994,7 @@ async function main() {
   );
   // 命中出处的优先级：人记得的是自己写的问题，其次才是结论；对话带最长最杂，排最后
   check(
-    '同一排查里多类命中时，摘要挑优先级最高的那一类',
+    '同一调查里多类命中时，摘要挑优先级最高的那一类',
     (() => {
       db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
         'probe_chat',
@@ -1008,10 +1008,10 @@ async function main() {
     })(),
     '按到达顺序取的话，摘要会变成对话带里那句"好的我这就查"',
   );
-  // 指不到 cases 的命中是脏索引：拿它渲染出的 chip 点下去会切到一个不存在的排查，
+  // 指不到 cases 的命中是脏索引：拿它渲染出的 chip 点下去会切到一个不存在的调查，
   // 而 `switchTo` 只是回个 false——界面一动不动，看起来像按钮坏了
   check(
-    '指不到排查的命中直接丢掉，不渲染成一个点不动的 chip',
+    '指不到调查的命中直接丢掉，不渲染成一个点不动的 chip',
     (() => {
       db.prepare(`INSERT INTO narrative_fts (ref_id,ref_kind,case_id,text) VALUES (?,?,?,?)`).run(
         'probe_orphan',
@@ -1063,10 +1063,10 @@ async function main() {
   check(
     '一次检索最多搬回 MAX_HITS 条命中，代价与库的大小脱钩',
     cappedHits === MAX_HITS && floodedCases > 0,
-    `${MAX_HITS + 500} 条可命中 → 搬回 ${cappedHits} 条 / ${floodedCases} 个排查（不截的话 5 万行的表上一个常见词就是 30ms 卡在 main 线程）`,
+    `${MAX_HITS + 500} 条可命中 → 搬回 ${cappedHits} 条 / ${floodedCases} 个调查（不截的话 5 万行的表上一个常见词就是 30ms 卡在 main 线程）`,
   );
 
-  // 检索结果与最近列表是同一种 chip：少合运行时那一半，一个正等着人的排查
+  // 检索结果与最近列表是同一种 chip：少合运行时那一半，一个正等着人的调查
   // 会被搜出来显示成"已停"，而跨 case 汇总要保的正是别让那条支线静静挂死
   const fxReg = new CaseRegistry<CaseRunner>({ db, create: loadRunner });
   const fxLive = makeRunner('case_fts');
@@ -1127,7 +1127,7 @@ async function main() {
 
   // ── ⑰ 待办处置要有回执，不能静默丢掉 ────────────────────────────────────
   //
-  // 这两个手势按 id 查表，切了排查之后查的是**新**排查的表，随机 id 当然对不上——
+  // 这两个手势按 id 查表，切了调查之后查的是**新**调查的表，随机 id 当然对不上——
   // 于是静默什么也不做。①档那侧是人贴进去的查询结果凭空消失、回填继续挂到超时；
   // ②档那侧更重：人明明按了「拒绝」，这条却继续挂着，三分钟后按预设**自动放行**
   const disp = makeRunner('case_r', '处置回执');
@@ -1141,7 +1141,7 @@ async function main() {
   dispProbe.beginSession();
 
   check(
-    '处置一条不在本次排查手里的待办，回 false 而不是静默丢掉',
+    '处置一条不在本次调查手里的待办，回 false 而不是静默丢掉',
     disp.answerOperator({ id: 'ask_nope', statement: 'x', answer: 'y' }) === false &&
       disp.decideGate({ id: 'call_nope', action: 'deny', message: '不行' }) === false,
     `回填=${disp.answerOperator({ id: 'ask_nope', statement: 'x', answer: 'y' })} 闸门=${disp.decideGate({ id: 'call_nope', action: 'deny', message: '不行' })}`,
@@ -1208,17 +1208,17 @@ async function main() {
   const drafts: CardDrafts = {
     [draftKey('case_a', 'ask_gone')]: { answer: '粘了很长一段的查询结果' },
     [draftKey('case_a', 'gate_live')]: { note: '这条不行' },
-    [draftKey('case_b', 'ask_elsewhere')]: { answer: '另一次排查上写到一半的' },
+    [draftKey('case_b', 'ask_elsewhere')]: { answer: '另一次调查上写到一半的' },
   };
   const pruned = pruneDrafts(drafts, 'case_a', ['gate_live']);
   check(
-    '本次排查里已经消失的条目，草稿跟着清掉',
+    '本次调查里已经消失的条目，草稿跟着清掉',
     !(draftKey('case_a', 'ask_gone') in pruned) && draftKey('case_a', 'gate_live') in pruned,
     `剩下 ${Object.keys(pruned).join(' ')}`,
   );
   check(
-    '别的排查的草稿一条都不动——它们的待办这会儿根本不在快照里',
-    pruned[draftKey('case_b', 'ask_elsewhere')]?.answer === '另一次排查上写到一半的',
+    '别的调查的草稿一条都不动——它们的待办这会儿根本不在快照里',
+    pruned[draftKey('case_b', 'ask_elsewhere')]?.answer === '另一次调查上写到一半的',
     `case_b 的草稿${draftKey('case_b', 'ask_elsewhere') in pruned ? '还在' : '被误删了'}`,
   );
   check(
@@ -1274,13 +1274,13 @@ async function main() {
 
   // ── 应用级设置的夹逼（shared/settings.ts）──
   // 这几个值原先写死在源码里，搬进设置屏之后**每一个填过头都不会报错，只会安静地不工作**：
-  // 闸门 0 秒 = 每次调用当场自动放行；在跑上限 0 = 一个排查也跑不起来。
+  // 闸门 0 秒 = 每次调用当场自动放行；在跑上限 0 = 一个调查也跑不起来。
   {
     const d = DEFAULT_UI_SETTINGS;
     check(
       '空对象归一成默认值，不是一堆 0 / undefined',
       JSON.stringify(normalizeSettings({})) === JSON.stringify(d),
-      '库里没存过设置时走的就是这条；给出 0 的话闸门当场放行、排查一个也跑不起来',
+      '库里没存过设置时走的就是这条；给出 0 的话闸门当场放行、调查一个也跑不起来',
     );
     check(
       '闸门超时夹在上下界内',
@@ -1299,7 +1299,7 @@ async function main() {
     check(
       '🔴 载入上限不会小于在跑上限（跨字段，单独夹逼每一个夹不出来）',
       normalizeSettings({ limits: { maxLiveCases: 8, maxLoadedCases: 1 } }).limits.maxLoadedCases === 8,
-      '两个数各自都在自己的合法区间里，合起来却会让刚 spawn 起来的排查被当场降级掉——' +
+      '两个数各自都在自己的合法区间里，合起来却会让刚 spawn 起来的调查被当场降级掉——' +
         '表现同样是"点了开始排查什么都不发生"。逐字段夹逼的写法在这条上会给出 1',
     );
     check(
@@ -1314,7 +1314,7 @@ async function main() {
       '认不得的 backend 归到 claude，不原样留着',
       normalizeSettings({ intake: { agent: { backend: 'gpt' } } } as unknown).intake.agent.backend ===
         'claude',
-      '原样留着的话，新建排查会拿一个 backend 抽象不认识的值去建会话',
+      '原样留着的话，新建调查会拿一个 backend 抽象不认识的值去建会话',
     );
     check(
       'takeover 只认 true，别的一律 false',
@@ -1362,7 +1362,7 @@ async function main() {
     check(
       '存歪的 JSON 与空缓存都当没缓存过，不抛',
       cacheHit('{{{', now) === null && cacheHit(null, now) === null,
-      '这份东西存在 ui_settings 里，手改过一次就可能不是合法 JSON；抛出去的表现是新建排查面板整个白掉',
+      '这份东西存在 ui_settings 里，手改过一次就可能不是合法 JSON；抛出去的表现是新建调查面板整个白掉',
     );
   }
 

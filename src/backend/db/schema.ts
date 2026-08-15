@@ -49,23 +49,23 @@ CREATE TABLE IF NOT EXISTS blobs (
 -- 收尾三档（D29）：停止仍是 open，定稿 closed，归档 aborted 仍可导出半程报告
 CREATE TABLE IF NOT EXISTS cases (
   id            TEXT    PRIMARY KEY,
-  -- 排查列表上的短标签。**会被改两次**：立案先落一句由问题首行截出的兜底，agent 读完问题后
+  -- 调查列表上的短标签。**会被改两次**：立案先落一句由问题首行截出的兜底，agent 读完问题后
   -- 改成一句短的，人还能再改（D30）。改动一律走 case.renamed 事件——直接 UPDATE 的话
   -- 一重放就被 case.opened 抹回兜底那句
   title         TEXT    NOT NULL,
-  question      TEXT,                    -- 新建排查时写的完整问题，新开 session 时用它起头
+  question      TEXT,                    -- 新建调查时写的完整问题，新开 session 时用它起头
   status        TEXT    NOT NULL CHECK (status IN ('open','closed','aborted')),
   -- agent 的 cwd。它决定继承哪个项目的 skill / MCP，也决定会话记录落在哪个 ~/.claude/projects 目录
   project_root  TEXT,
   -- 基准日期与时区不是"可选背景"：日志时间串多半既无日期也无时区，
   -- 没有它们 occurred_at_ms 落不成绝对时刻，系统时间线就是空的（D11 / D27）。
-  -- NOT NULL 是有意的：没有基准的排查不该存在，缺了就该在写入时炸，
+  -- NOT NULL 是有意的：没有基准的调查不该存在，缺了就该在写入时炸，
   -- 而不是留个空值让下游各自现算一个"今天"
   incident_date TEXT    NOT NULL,
-  tz_offset     TEXT    NOT NULL,   -- 新建排查机器的本机偏移，不由用户填
-  clues         TEXT,                  -- 历史字段：面板不再单收，旧排查里的值照旧拼进首轮提问
+  tz_offset     TEXT    NOT NULL,   -- 新建调查机器的本机偏移，不由用户填
+  clues         TEXT,                  -- 历史字段：面板不再单收，旧调查里的值照旧拼进首轮提问
   -- 决定报告装哪几块（D25）。**收尾那一下才写**，在那之前是 NULL：
-  -- 排查中途的形态是会变的，定死一个只会让报告按一个过期的判断装。取值见 overview §6.1.1
+  -- 调查中途的形态是会变的，定死一个只会让报告按一个过期的判断装。取值见 overview §6.1.1
   verdict_shape TEXT CHECK (verdict_shape IN ('sequence','state','chain','distribution','open')),
   report_md     TEXT,
   created_at    INTEGER NOT NULL,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS cases (
 );
 
 -- backend / native_session_ref 是 D20 纪律 1：接第二个 backend 时不必迁移历史数据
--- model / effort 落这里而不是 cases（D27）：一次排查跨多会话，中途换模型是常态，
+-- model / effort 落这里而不是 cases（D27）：一次调查跨多会话，中途换模型是常态，
 -- 报告里要能标出"这一步是哪个模型跑的"
 CREATE TABLE IF NOT EXISTS sessions (
   id                 TEXT    PRIMARY KEY,

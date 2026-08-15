@@ -46,7 +46,7 @@
  * ## 两条顺带打出来的环境观测
  *
  * - **`settingSources: []` 不隔离用户环境**：用户的 slash command 与全部 MCP 照样加载。
- *   overview §2「白送用户已有的 skill 和 MCP」因此成立，但反面是排查无关的工具会一起进来，
+ *   overview §2「白送用户已有的 skill 和 MCP」因此成立，但反面是调查无关的工具会一起进来，
  *   而工具集一大模型会先走一跳 ToolSearch
  * - **主线调用的 hook input 里没有 `agent_id`**（与 §4.4 一致：它只在子 agent 内出现）。
  *   子 agent 那一侧由 `spike:lane` 补齐

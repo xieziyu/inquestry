@@ -5,13 +5,13 @@ import { Icon } from './Icon.js';
 import { Intake } from './Intake.js';
 import { LogoMark } from './LogoMark.js';
 
-/** 首页最多列这么多次排查（ui.md §8.5）。再往前走历史排查页。 */
+/** 首页最多列这么多次调查（ui.md §8.5）。再往前走历史调查页。 */
 const RECENT_LIMIT = 20;
 
 /**
- * 首页：起一次新排查，或接着上次那个。
+ * 首页：起一次新调查，或接着上次那个。
  *
- * 与历史排查页的分工要守住——**这一页只回答"接着上次那个"**：固定最近 20 条、
+ * 与历史调查页的分工要守住——**这一页只回答"接着上次那个"**：固定最近 20 条、
  * 不筛选、不检索、不分页。两页都做成全量列表的话，人得先想"该去哪一页找"，
  * 而那正是把一个入口拆成两个的唯一代价。
  */
@@ -67,7 +67,7 @@ export function Home({
             </div>
 
             {rows.length === 0 ? (
-              <p className="blank">还没有排查。选个工作区、写下问题就能开始。</p>
+              <p className="blank">还没有调查。选个工作区、写下问题就能开始。</p>
             ) : (
               <div className="track">
                 {rows.map((c) => (
@@ -83,10 +83,10 @@ export function Home({
 }
 
 /**
- * 轨道上的一条排查。
+ * 轨道上的一条调查。
  *
  * ⚠️ 节点分档的次序**不是 `caseState` 那一套**：等人处理排在运行中之前。
- * 暖色是「需要人动手」的全局专属（ui.md §4），一条边跑边等人的排查该先说它在等你。
+ * 暖色是「需要人动手」的全局专属（ui.md §4），一条边跑边等人的调查该先说它在等你。
  */
 function TrackRow({ c, onOpen }: { c: CaseBrief; onOpen: (id: string) => void }) {
   const st = caseState(c);

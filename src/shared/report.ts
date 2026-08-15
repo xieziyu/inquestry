@@ -78,7 +78,7 @@ export type ReportPlan = {
   shape: VerdictShape;
   frozen: boolean;
   /**
-   * stepId → 读者看得见的编号。**`ordinal` 是会话内序号，一次排查重开一次就从 1 重来**，
+   * stepId → 读者看得见的编号。**`ordinal` 是会话内序号，一次调查重开一次就从 1 重来**，
    * 直接印的话跨会话的报告里会有两个 `#1`，而"被 stX 推翻"这类引用也就无处可对。
    * 多会话时带上会话号（`S2#1`），单会话时保持 `#N` 不加噪声。
    *
@@ -92,7 +92,7 @@ export type ReportPlan = {
    */
   evidenceCount: number;
   /**
-   * 归档的半程报告顶上那句「排查在第 N 步被人为终止」（ui.md §8.4）。
+   * 归档的半程报告顶上那句「调查在第 N 步被人为终止」（ui.md §8.4）。
    * 其余一律为 null——它是**人为放弃**的标记，不是"步数"这个中性事实。
    */
   abortedAt: number | null;
@@ -133,7 +133,7 @@ export function reportPlan(input: ReportInput): ReportPlan {
 
   /**
    * **未决型没有根因栏，哪怕库里正躺着一条已证实的结论**（ui.md §8.4）。
-   * 归档强制未决型，而被归档的排查多半已经查出了点什么——按"有就装"写的话，
+   * 归档强制未决型，而被归档的调查多半已经查出了点什么——按"有就装"写的话，
    * 半程报告会顶着一条根因，而它明写的是"没查出来"。
    */
   if (shape !== 'open' && report.rootCause) {
@@ -212,7 +212,7 @@ function mainBody(input: ReportInput): ReportSection[] {
  * 而这一节的整个意思就是"一路推到这里"。它们没有丢，排查路径那一节照旧全列。
  *
  * ⚠️ 库里**没有真正表达因果关系的字段**（`parent_step_id` 说的是"在这一步之下细分"，不是"由它引起"），
- * 所以这条链的先后取的是排查先后，不是因果先后。并行分支上的已证实结论仍会被串进来。
+ * 所以这条链的先后取的是调查先后，不是因果先后。并行分支上的已证实结论仍会被串进来。
  * 拿 `parent_step_id` 当因果用是在编一个数据里没有的东西，宁可不编。
  *
  * 最弱一环取置信度最低的那一环——它是这条链上最先该被追问的地方。
@@ -263,7 +263,7 @@ function splitGroups(steps: StepNode[]): SplitGroup[] {
 }
 
 /**
- * 只有真的跨了会话才加 `S{n}` 前缀：单会话的排查是绝大多数，
+ * 只有真的跨了会话才加 `S{n}` 前缀：单会话的调查是绝大多数，
  * 给每一行都挂个恒等于 `S1` 的前缀只是噪声。
  */
 function stepLabels(steps: StepNode[]): Record<string, string> {

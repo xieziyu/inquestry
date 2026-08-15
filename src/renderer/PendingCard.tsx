@@ -19,7 +19,7 @@ export function PendingCard({
   focused: boolean;
   /**
    * 人已经敲进去的东西**存在 App 那边**，不放这张卡的局部 state。
-   * 卡片是跟着快照渲染的，一换排查它就卸载——粘了半天的查询结果会随之蒸发。
+   * 卡片是跟着快照渲染的，一换调查它就卸载——粘了半天的查询结果会随之蒸发。
    */
   draft: Record<string, string>;
   onDraft: (patch: Record<string, string | undefined>) => void;

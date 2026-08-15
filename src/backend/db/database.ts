@@ -47,7 +47,7 @@ type Upgrade =
  *
  * **版本对不上时分两条路**（data-model.md §2）：
  *
- * - 阶梯上每一级都有步骤 → **重放迁移**：补 DDL、按 events 重建投影，排查留在原地
+ * - 阶梯上每一级都有步骤 → **重放迁移**：补 DDL、按 events 重建投影，调查留在原地
  * - 缺任何一级（或降级、或没打过版本号的老库）→ **挪开重建**，旧库改名留着
  *
  * 顺序是**先体检再动土**：`checkEventShapes` 抛错时这个库一个字节都没被改过，
@@ -68,7 +68,7 @@ export function openDatabase(file: string, opts: { steps?: MigrationStep[] } = {
     // **先体检再动土**：这一刻库还一个字节都没被改过。
     // 体检不过 = 有人把一级"其实改了载荷形状"的升级声明成了可重放——那是代码写错了，
     // 不是数据的错。此时**退回挪库**：既不硬迁一半（那与成功的迁移长得一样），
-    // 也不让 app 起不来。声明错的代价因此是"这次没迁成"，而不是"迁出一批半残的排查"
+    // 也不让 app 起不来。声明错的代价因此是"这次没迁成"，而不是"迁出一批半残的调查"
     const problem = shapeProblem(db);
     if (problem) {
       db.close();
@@ -89,7 +89,7 @@ export function openDatabase(file: string, opts: { steps?: MigrationStep[] } = {
       rebuildProjections(db, { blobDir: blobDir(file) });
       db.pragma(`user_version = ${SCHEMA_VERSION}`);
     })();
-    console.warn(`[db] schema v${plan.from} → v${SCHEMA_VERSION}：按 events 重放迁移，排查留在原地`);
+    console.warn(`[db] schema v${plan.from} → v${SCHEMA_VERSION}：按 events 重放迁移，调查留在原地`);
     return db;
   }
   db.exec(SCHEMA_SQL);
@@ -143,7 +143,7 @@ export function planUpgrade(file: string, steps: MigrationStep[] = MIGRATIONS): 
 }
 
 /**
- * 旧库改名让路，不删——排查记录哪怕格式过时也不该被工具自己抹掉。
+ * 旧库改名让路，不删——调查记录哪怕格式过时也不该被工具自己抹掉。
  * WAL 的两个边车文件必须一起挪走，留下任何一个都会让新库读到半截旧状态。
  */
 function archive(file: string, version: number) {

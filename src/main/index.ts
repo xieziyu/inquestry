@@ -55,7 +55,7 @@ function schedulePush() {
   if (pushTimer) return;
   pushTimer = setTimeout(() => {
     pushTimer = null;
-    // 排查是在真的开跑那一刻才 spawn 出进程的，光在切换时查限流会漏掉
+    // 调查是在真的开跑那一刻才 spawn 出进程的，光在切换时查限流会漏掉
     cases.enforceLimit();
     // broadcast 而非 reply-to-sender：第一阶段只有一个窗口，但多窗口时零成本
     for (const w of BrowserWindow.getAllWindows()) {
@@ -64,13 +64,13 @@ function schedulePush() {
   }, 60);
 }
 
-/** 当前排查的投影 + 全部排查的概览。后者哪个排查在看都得有，否则别处的待办没人看得见。 */
+/** 当前调查的投影 + 全部调查的概览。后者哪个调查在看都得有，否则别处的待办没人看得见。 */
 function snapshot(): Snapshot {
   const briefs = cases.briefs();
   return cases.current?.snapshot(briefs) ?? { ...EMPTY_SNAPSHOT, cases: briefs };
 }
 
-/** 当前排查；正在立新案时为空，这时除了新建排查什么都点不到。 */
+/** 当前调查；正在立新案时为空，这时除了新建调查什么都点不到。 */
 const current = () => cases.current;
 
 function setting(key: string): string | null {
@@ -104,7 +104,7 @@ function settings(): UiSettings {
  *
  * 这一步最容易漏：只写库的话，改完的上限要到下次启动才生效，而界面上那个数字
  * 看起来已经改好了。限流是唯一一个"存起来还不够"的——闸门那个每次挂闸门时现取，
- * 新建排查的默认值也是下次打开面板时现读，只有它活在 registry 的字段里。
+ * 新建调查的默认值也是下次打开面板时现读，只有它活在 registry 的字段里。
  */
 function saveSettings(patch: UiSettings): UiSettings {
   const next = normalizeSettings(patch);
@@ -124,7 +124,7 @@ function recentRoots(): string[] {
 }
 
 /**
- * 排查的 UI 侧状态。这里放的是「新建排查时选的 agent」——它还没有 session 可落，
+ * 调查的 UI 侧状态。这里放的是「新建调查时选的 agent」——它还没有 session 可落，
  * 但建完单不开跑就退出是常事，不存的话重开会静默换成默认模型，
  * 顶栏和之后真正建的 session 都不再是人选的那套。
  */
@@ -153,9 +153,9 @@ function rememberRoot(root: string | null) {
 }
 
 /**
- * 新建排查：新开一个 case，它下面的第一个 session 要到点「开始排查」才开。
+ * 新建调查：新开一个 case，它下面的第一个 session 要到点「开始排查」才开。
  *
- * **不动别的排查**（D28）：手上那个可能正跑着，或者正卡在待办上等人。
+ * **不动别的调查**（D28）：手上那个可能正跑着，或者正卡在待办上等人。
  */
 function createCase(draft: IntakeDraft): IntakeResult {
   const question = draft.question.trim();
@@ -180,12 +180,12 @@ function createCase(draft: IntakeDraft): IntakeResult {
         projectRoot: root.path,
         incidentDate,
         tzOffset: localTzOffset(now),
-        // 「已知现象」不再单收：写清楚在 question 里就够了。列与旧排查里的值照旧留着
+        // 「已知现象」不再单收：写清楚在 question 里就够了。列与旧调查里的值照旧留着
         clues: null,
       },
       agent: draft.agent,
       // 权限模式初值由设置屏给（ui.md §8.1 的最后一项）。**要连同 agent 一起落
-      // `case_ui_state`**：只交给 runner 的话，这个排查被限流降级一次、或关一次 app，
+      // `case_ui_state`**：只交给 runner 的话，这个调查被限流降级一次、或关一次 app，
       // 「我要全程接管」就被静默取消了——而它正是那一档要防的
       takeover: draft.takeover,
       limits: () => settings().limits,
@@ -201,7 +201,7 @@ function createCase(draft: IntakeDraft): IntakeResult {
 }
 
 /**
- * 让 agent 读完问题后给这次排查起个短标题（`case-namer.ts` 说明了为什么它另开一次 spawn）。
+ * 让 agent 读完问题后给这次调查起个短标题（`case-namer.ts` 说明了为什么它另开一次 spawn）。
  *
  * **只在标题仍是那句兜底时才写**：起标题这一趟要几秒，这几秒里人完全可能已经自己改过了，
  * 而人改过的东西不该被一条迟到的建议盖掉。
@@ -223,7 +223,7 @@ function renameTo(caseId: string, title: string, source: 'agent' | 'operator'): 
   }
 }
 
-/** 按库里的建单信息重建一次排查的运行时。库里没有这个 id 就返回 null（列表会拒绝切过去）。 */
+/** 按库里的建单信息重建一次调查的运行时。库里没有这个 id 就返回 null（列表会拒绝切过去）。 */
 function loadCase(caseId: string): CaseRunner | null {
   const intake = readIntake(db, caseId);
   if (!intake) return null;
@@ -241,8 +241,8 @@ function loadCase(caseId: string): CaseRunner | null {
 }
 
 /**
- * 工作区要在新建排查之前验：它随后就是 SDK 的 `cwd`。
- * 不验的话路径不存在也能新建排查成功，直到点「开始排查」才由 query 抛错、会话直接 crashed，
+ * 工作区要在新建调查之前验：它随后就是 SDK 的 `cwd`。
+ * 不验的话路径不存在也能新建调查成功，直到点「开始排查」才由 query 抛错、会话直接 crashed，
  * 而那时坏路径已经进了最近目录列表。
  */
 function checkProjectRoot(input: string | null): { path: string } | { error: string } {
@@ -261,7 +261,7 @@ function checkProjectRoot(input: string | null): { path: string } | { error: str
   return { path: resolved };
 }
 
-/** 重开最近一个未定稿的 case：一次排查跨多会话，重启只是它下面又开了一个 session。 */
+/** 重开最近一个未定稿的 case：一次调查跨多会话，重启只是它下面又开了一个 session。 */
 function restoreLatestCase() {
   const row = db
     .prepare(`SELECT id FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 1`)
@@ -269,7 +269,7 @@ function restoreLatestCase() {
   if (row) cases.switchTo(row.id);
 }
 
-/** 上次跑用的那套；没跑过就用新建排查时选的。中途换模型是常态，所以最近一次优先。 */
+/** 上次跑用的那套；没跑过就用新建调查时选的。中途换模型是常态，所以最近一次优先。 */
 function lastAgentChoice(caseId: string): AgentChoice {
   const last = db
     .prepare(`SELECT backend, model, effort FROM sessions WHERE case_id=? ORDER BY started_at DESC LIMIT 1`)
@@ -281,17 +281,17 @@ function lastAgentChoice(caseId: string): AgentChoice {
 /**
  * 导出 Markdown（D26 / ui.md §7.1）。
  *
- * **带 caseId 核对**（`currentIf`）：切过去之后 current 是新排查，旧界面那一下的点击
- * 会导出另一次排查的内容，而文件名是按当前排查起的——一份没人会察觉搞错了的交付物。
+ * **带 caseId 核对**（`currentIf`）：切过去之后 current 是新调查，旧界面那一下的点击
+ * 会导出另一次调查的内容，而文件名是按当前调查起的——一份没人会察觉搞错了的交付物。
  *
  * `target` 只给无人值守自检用（`INQUESTRY_EXPORT_MD`）：给了就直接写，不弹保存框。
  */
 async function exportMarkdown(caseId: string, target?: string): Promise<ExportResult> {
   const runner = cases.currentIf(caseId);
-  if (!runner) return { ok: false, reason: 'no-case', error: '这次排查不在手上，可能刚切走了。' };
+  if (!runner) return { ok: false, reason: 'no-case', error: '这次调查不在手上，可能刚切走了。' };
   const input = reportInput(runner.snapshot());
   // 建单信息读不出来就没有报告可导。**说出来**，别写一个只有页脚的空文件
-  if (!input) return { ok: false, reason: 'no-case', error: '这次排查还没有建单信息，导不出报告。' };
+  if (!input) return { ok: false, reason: 'no-case', error: '这次调查还没有建单信息，导不出报告。' };
 
   const md = reportMarkdown(input, { generatedAt: Date.now() });
   let file = target ?? null;
@@ -346,9 +346,9 @@ type ExportLayout = { width: number; pages: { top: number; height: number }[] };
  */
 async function exportImage(caseId: string, target?: string): Promise<ExportResult> {
   const runner = cases.currentIf(caseId);
-  if (!runner) return { ok: false, reason: 'no-case', error: '这次排查不在手上，可能刚切走了。' };
+  if (!runner) return { ok: false, reason: 'no-case', error: '这次调查不在手上，可能刚切走了。' };
   const input = reportInput(runner.snapshot());
-  if (!input) return { ok: false, reason: 'no-case', error: '这次排查还没有建单信息，导不出报告。' };
+  if (!input) return { ok: false, reason: 'no-case', error: '这次调查还没有建单信息，导不出报告。' };
 
   // **先问落点再渲染**：反过来的话人要对着一个没反应的按钮等上几秒才等到保存框
   let file = target ?? null;
@@ -547,7 +547,7 @@ async function writeAll(files: string[], data: Buffer[]) {
  * 而报告正是要交出去的东西。
  *
  * 删掉它们是另一种错：**保存框只问过用户那一个名字**，`<stem>-3.png` 有没有可能是他自己的文件、
- * 是不是别的排查导的，这儿一概不知道。所以这里只把名字报回界面，删不删由人决定
+ * 是不是别的调查导的，这儿一概不知道。所以这里只把名字报回界面，删不删由人决定
  * （同这份代码里"缺席要写出来"的那一条：说出来比替人处置可信）。
  */
 function staleSiblings(target: string, written: string[]): string[] {
@@ -643,15 +643,15 @@ function exportProbe(button: string): string {
   })()`;
 }
 
-/** 文件名取标题，路径分隔符与控制字符一律换掉；带上 caseId 好让同名的两个排查分得开。 */
+/** 文件名取标题，路径分隔符与控制字符一律换掉；带上 caseId 好让同名的两个调查分得开。 */
 function fileStem(title: string, caseId: string): string {
   const safe = title.replace(/[/\\:*?"<>|\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
   return `${safe.slice(0, 40) || 'inquestry'} ${caseId}`;
 }
 
-/** 排查列表上的短标签：问题的第一行，长了截断。 */
+/** 调查列表上的短标签：问题的第一行，长了截断。 */
 function titleOf(question: string): string {
-  const first = question.split('\n').find((l) => l.trim())?.trim() ?? '未命名排查';
+  const first = question.split('\n').find((l) => l.trim())?.trim() ?? '未命名调查';
   return first.length > 40 ? `${first.slice(0, 40)}…` : first;
 }
 
@@ -775,7 +775,7 @@ app.whenReady().then(async () => {
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
   ipcMain.handle('case:create', (_e, draft: IntakeDraft) => createCase(draft));
-  // 改标题不经 `currentIf`：历史排查页上改的那一条多半不是当前排查，
+  // 改标题不经 `currentIf`：历史调查页上改的那一条多半不是当前调查，
   // 而它与"当前跑着的是哪一个"毫无关系
   ipcMain.handle('case:rename', (_e, caseId: string, title: string) => {
     const ok = renameTo(caseId, title, 'operator');
@@ -792,12 +792,12 @@ app.whenReady().then(async () => {
   });
   // 检索不进快照：它由人打字驱动，塞进 60ms 一轮的全量推送里等于每次都跑一遍全库检索
   ipcMain.handle('case:search', (_e, term: string) => cases.search(term));
-  // 下面这些都依赖「当前排查」，一律判空不用 `!`：点「＋ 新排查」的那一刻 currentId 就是
+  // 下面这些都依赖「当前调查」，一律判空不用 `!`：点「＋ 新调查」的那一刻 currentId 就是
   // null 了，而 renderer 要等下一次快照（最多 60ms）才换屏——这中间旧界面照样发得出调用。
   // 用非空断言的话那一下是个 TypeError，invoke 变成未处理的 rejection，
   // 用户那侧只看到输入框被清空、内容没了
-  // 这四个还要核对 renderer 说的是哪个排查（`currentIf`）：光判空不够，
-  // 切过去之后 current 是**新**排查，旧界面那一下会正正好落到它头上
+  // 这四个还要核对 renderer 说的是哪个调查（`currentIf`）：光判空不够，
+  // 切过去之后 current 是**新**调查，旧界面那一下会正正好落到它头上
   ipcMain.handle('case:start', (_e, caseId: string, question?: string) =>
     cases.currentIf(caseId)?.start(question),
   );
@@ -828,7 +828,7 @@ app.whenReady().then(async () => {
   // 收尾后两档（D29）。问询与执行是两个入口：合成一个的话，界面就得靠 60ms 前的快照
   // 决定"这一下是问还是执行"，而隔着那一拍点下去的会是不可逆的定稿
   // 对不上就回 null，不回一个「什么都不缺」的空壳：后者会让界面弹出确认条，
-  // 而那次排查根本不在手上——人对着一份已经切走的排查按下不可逆的那一下
+  // 而那次调查根本不在手上——人对着一份已经切走的调查按下不可逆的那一下
   ipcMain.handle(
     'case:requestClosing',
     (_e, caseId: string) => cases.currentIf(caseId)?.requestClosing() ?? null,
@@ -863,9 +863,9 @@ app.whenReady().then(async () => {
   // 只有长图那个离屏视图会调；token 对不上就什么都不给
   ipcMain.handle('export:payload', (_e, token: string) => exportPayloads.get(token) ?? null);
   /**
-   * 历史排查页那一页。**每行的运行时那一半要现合**（同 `search()` 的理由，ui.md §8.3）：
+   * 历史调查页那一页。**每行的运行时那一半要现合**（同 `search()` 的理由，ui.md §8.3）：
    * 「等你 N」「运行中」只活在运行时里，库里查出来的行少了这一下，
-   * 一个正卡在 `ask_operator` 上等人的排查会被显示成一次静止的旧排查。
+   * 一个正卡在 `ask_operator` 上等人的调查会被显示成一次静止的旧调查。
    */
   ipcMain.handle('case:list', (_e, q: CaseListQuery): CaseListPage => {
     const page = casePage(db, q ?? {});
@@ -893,7 +893,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('case:snapshot', () => snapshot());
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
-    current()?.excerpt(callId, anchor) ?? '(没有选中的排查)',
+    current()?.excerpt(callId, anchor) ?? '(没有选中的调查)',
   );
 
   createWindow();
@@ -999,7 +999,7 @@ app.whenReady().then(async () => {
         // 跟着显示器走，在 1x 机器上会静默少掉一半分辨率，而图看起来"只是小了点"。
         //
         // 高度这一侧不在这儿设阈值：**一份短报告本来就该出一张矮图**（这个库里就有一个
-        // 几乎空的排查，2076px）。"截了半张"由 `capturePage()` 拿量出来的矩形当场核，
+        // 几乎空的调查，2076px）。"截了半张"由 `capturePage()` 拿量出来的矩形当场核，
         // 这里只认它是不是一张读得出尺寸的 PNG
         // 第一张要么是 `<target>`（单页），要么是 `<target>-1`（分了页；**走生产那个命名函数**，
         // 别在这儿照抄一遍规则）。

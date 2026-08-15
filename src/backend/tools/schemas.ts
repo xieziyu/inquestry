@@ -62,7 +62,7 @@ export const closeStepShape = {
     .enum(['sequence', 'state', 'chain', 'distribution', 'open'])
     .optional()
     .describe(
-      '这是哪一类故障——它决定最终报告装哪几块。**只在这一步给出了整个排查的根因时才填**。' +
+      '这是哪一类故障——它决定最终报告装哪几块。**只在这一步给出了整个调查的根因时才填**。' +
         'sequence = 顺序/竞态错了，主体是系统时间线；' +
         'state = 某个东西一直就是错的（配置写错、索引缺失、证书过期），主体是应然/实然对照，没有时间线；' +
         'chain = 一处变更连锁放大，主体是因果链；' +

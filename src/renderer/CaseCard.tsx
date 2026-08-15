@@ -33,7 +33,7 @@ export function CaseCard({
     if (draft !== null) input.current?.select();
   }, [draft !== null]);
 
-  // 换了排查就退出编辑：卡片是跟着快照渲染的，留着的话新排查的标题上会顶着上一个的草稿
+  // 换了调查就退出编辑：卡片是跟着快照渲染的，留着的话新调查的标题上会顶着上一个的草稿
   useEffect(() => setDraft(null), [meta.id]);
 
   const save = async () => {

@@ -23,7 +23,7 @@ export type SessionContext = {
   sessionId: string;
   backend: 'claude' | 'codex';
   blobDir: string;
-  /** 落 sessions 而非 cases（D27）：一次排查跨多会话，中途换模型是常态。 */
+  /** 落 sessions 而非 cases（D27）：一次调查跨多会话，中途换模型是常态。 */
   model?: string | null;
   effort?: string | null;
   /** 哪些工具的输出自带时间戳 —— 决定 occurredAt 强制到什么程度（tools.md §3）。 */
@@ -62,7 +62,7 @@ export type GateOutcome = {
 
 export type InvestigationSession = {
   store: InvestigationStore;
-  /** 排查的建单信息。已存在的 case 以库里那份为准，不被本次调用方覆盖。 */
+  /** 调查的建单信息。已存在的 case 以库里那份为准，不被本次调用方覆盖。 */
   intake: CaseIntake;
   /** 由 PreToolUse hook 调用：把任意工具调用归属到当前 open 的 step 上。 */
   recordToolStart(input: {
@@ -112,9 +112,9 @@ export type LaneOutcome = 'completed' | 'failed' | 'stopped' | 'orphaned';
 type CaseContext = Pick<SessionContext, 'caseId' | 'blobDir'> & { now: () => number };
 
 /**
- * 新建排查：case 只开一次（overview §4.1）。
+ * 新建调查：case 只开一次（overview §4.1）。
  *
- * **与开会话分开**，因为两者的时机不同：新建排查是人点「新建排查」那一刻，
+ * **与开会话分开**，因为两者的时机不同：新建调查是人点「新建调查」那一刻，
  * 开会话是真的要跑第一轮的时候。合在一起会让"打开 app 看一眼"也留下一个空 session。
  *
  * 返回生效的建单信息——已存在的 case 以库里那份为准：基准日期一旦变过，
@@ -169,8 +169,8 @@ export function setCaseStatus(db: Db, ctx: CaseContext, status: CaseStatus): voi
 
 /**
  * 报告形态落库（D25）。与 `setCaseStatus` 分开发两条事件：形态是「报告长什么样」，
- * 状态是「排查还能不能动」。收尾时形态先落、状态最后落——
- * 状态是那道冻结闸，它一落下之后再写别的东西，写的就是一个已经宣告冻结的排查。
+ * 状态是「调查还能不能动」。收尾时形态先落、状态最后落——
+ * 状态是那道冻结闸，它一落下之后再写别的东西，写的就是一个已经宣告冻结的调查。
  */
 export function setVerdictShape(db: Db, ctx: CaseContext, shape: VerdictShape): void {
   if (readVerdictShape(db, ctx.caseId) === shape) return;
@@ -193,7 +193,7 @@ export const isVerdictShape = (v: unknown): v is VerdictShape =>
 /**
  * 定稿确认条的预选形态。
  *
- * **只认根因那一步的声明**：形态说的是"这次排查的根因属于哪一类故障"，只有报告认定的
+ * **只认根因那一步的声明**：形态说的是"这次调查的根因属于哪一类故障"，只有报告认定的
  * 那条根因说得出这句话。别处（比如一条误填了 shape 的 impact step）说了不算，
  * 否则报告会按 A 步的形态装块、却填 B 步的内容。
  *
@@ -203,7 +203,7 @@ export const isVerdictShape = (v: unknown): v is VerdictShape =>
  * - 根因那一步给了应然/实然 → `state`。这对字段正是状态型的主体，它在就说明是这一类
  * - 系统时间线上有两条以上证据 → `sequence`。少于两条排不出"顺序"，那一块会是一行孤零零的记录
  * - 其余 → `chain`。它的主体（每环带置信度的因果链 + 最弱一环）能从 step 树直接投影，
- *   任何排查都装得出来；换成 `open` 会把一条真实结论从报告里抹掉，换成 `sequence` 是一块空的
+ *   任何调查都装得出来；换成 `open` 会把一条真实结论从报告里抹掉，换成 `sequence` 是一块空的
  */
 export function suggestVerdictShape(db: Db, caseId: string): ShapeSuggestion {
   const root = reportSections(db, caseId).rootCause;
@@ -439,7 +439,7 @@ export function createInvestigationSession(
       const warnings: string[] = [];
       // **`parent_step_id` 上有开着的外键**，照原样发出去的话，一个手写错的 id 不是"退回主干"
       // 而是 `FOREIGN KEY constraint failed` —— 整个事务回滚，这一步压根开不出来。
-      // 按 case 认而不是只认存在：别的排查的 step 能过外键，却不在这条轨道上，
+      // 按 case 认而不是只认存在：别的调查的 step 能过外键，却不在这条轨道上，
       // 落库之后照样只能当主干显示，而 agent 以为自己分叉了
       let parentStepId = args.parentStepId;
       if (parentStepId) {
@@ -451,7 +451,7 @@ export function createInvestigationSession(
           .get(parentStepId, ctx.caseId);
         if (!known) {
           // 静默丢掉不算修好：agent 会以为分叉已经记下了（ui.md §3）
-          warnings.push(`parentStepId ${parentStepId} 不是本次排查里的 step，这一步按主干记。`);
+          warnings.push(`parentStepId ${parentStepId} 不是本次调查里的 step，这一步按主干记。`);
           parentStepId = undefined;
         }
       }

@@ -23,7 +23,7 @@ export function RunBar({
   onTakeover,
 }: {
   snap: Snapshot;
-  /** 当前排查等人处理的条数（①档 + ②档合起来）。 */
+  /** 当前调查等人处理的条数（①档 + ②档合起来）。 */
   todos: number;
   /** 按人最后按的那一下画，不是快照上那个——回执与快照都要一会儿才到。 */
   takeover: boolean;
@@ -45,7 +45,7 @@ export function RunBar({
 
       {/* 「停止」长在状态旁边：它中断的正是左边这枚正在跳的点（D7 会连排队消息一起清） */}
       {snap.busy && (
-        <button className="rb-item act" title="中断当前轮，连排队消息一起清；排查照旧开着" onClick={onStop}>
+        <button className="rb-item act" title="中断当前轮，连排队消息一起清；调查照旧开着" onClick={onStop}>
           <Icon name="stop" size={10} />
           停止
         </button>
@@ -142,7 +142,7 @@ export function stateOf(snap: Snapshot): string {
   }).label;
 }
 
-/** 会话这会儿开着没开着只进 title：它不改变人能做什么，但排查为什么慢半拍时它是线索。 */
+/** 会话这会儿开着没开着只进 title：它不改变人能做什么，但调查为什么慢半拍时它是线索。 */
 function sessionDetail(snap: Snapshot): string {
   return (
     {
