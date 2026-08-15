@@ -280,6 +280,15 @@ export function installPreviewApi(): void {
       patch({ case: current.case && { ...current.case, status: 'aborted', verdictShape: 'open' } });
       return true;
     },
+    // 真的从夹具里摘掉，不只回 true：历史页删完一行之后还要看剩下那几行怎么排、
+    // 删到空了那一屏长什么样，回个 true 的话这两件事在预览里都看不到
+    deleteCase: async (caseId) => {
+      const at = CASES.findIndex((c) => c.id === caseId);
+      if (at < 0) return { ok: false, pendingBlobs: 0 };
+      CASES.splice(at, 1);
+      patch({ cases: [...CASES] });
+      return { ok: true, pendingBlobs: 0 };
+    },
     answerOperator: async (_id, reply) => {
       patch({ pending: current.pending.filter((p) => p.id !== reply.id) });
       return true;

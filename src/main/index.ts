@@ -11,6 +11,8 @@ import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
 import {
+  deleteCase,
+  emptyBlobTrash,
   readIntake,
   readTimeBase,
   renameCase,
@@ -29,6 +31,7 @@ import {
   type AppInfo,
   type CaseListPage,
   type CaseListQuery,
+  type DeleteOutcome,
   type ExportPayload,
   type ExportResult,
   type GateDecision,
@@ -805,6 +808,17 @@ app.whenReady().then(async () => {
   // 建完 runner 再扫就会把这一轮自己的活计一起判成放弃
   const swept = sweepZombies(db, { blobDir: blobs, now: () => Date.now() });
   if (swept.calls || swept.sessions || swept.lanes) console.log('[main] 清扫上次遗留', swept);
+  // 上一次删调查时没删掉的证据原文，这一刻接着删（`blob_trash`）。
+  // **排在 sweepZombies 后面**：它会落一份"(已放弃)"占位 blob，而那份的内容恒定、
+  // sha 也就恒定——先扫的话，一个刚被这一轮用上的 sha 会被当成还欠着的那一刀删掉
+  // 自己兜住：这是一件清扫杂务，它抛出去会落到启动那个大 catch 上，
+  // 表现是 app 停在启动失败屏——为一次删不掉的文件把整个应用挡在门外，代价错得离谱
+  try {
+    const rmed = emptyBlobTrash(db, { blobDir: blobs });
+    if (rmed.removed || rmed.pending) console.log('[main] 清上次没删掉的证据原文', rmed);
+  } catch (err) {
+    console.error('[main] 清上次没删掉的证据原文失败，欠账留着下次再来', err);
+  }
   cases = new CaseRegistry<CaseRunner>({ db, create: loadCase });
   restoreLatestCase();
 
@@ -887,6 +901,37 @@ app.whenReady().then(async () => {
     runner.archiveCase();
     schedulePush();
     return true;
+  });
+  /**
+   * 删掉一次调查（ui.md §8.3）。
+   *
+   * 🔴 **先删库，成了再收运行时。** 反过来那一版有个只在失败时才露出来的坑：
+   * `forget()` 会关掉会话、把等着人回答的 pending 就地作废、把 runner 从表里摘掉，
+   * 而这几件事一件都退不回来——库那一下若是抛了（磁盘满、约束、事务失败），
+   * 界面收到"没删掉"、那一行照旧在列表上，可它背后正在跑的那一轮和人手上那几条待办
+   * 已经没了。**一次失败的删除不该停掉任何工作。**
+   *
+   * 反过来的顺序之所以也成立，是因为这整个 handler 是**一段同步代码**：
+   * better-sqlite3 是同步的，中间没有 await，runner 的回调（都挂在 SDK 的异步事件上）
+   * 插不进这两句之间。所以"删完库到收掉运行时"这段窗口里没有人写得进事件。
+   *
+   * 这里不走 `currentIf`：它是在历史列表上对着某一行按的，那一行多半不是当前调查。
+   */
+  ipcMain.handle('case:delete', (_e, caseId: string): DeleteOutcome => {
+    let outcome: DeleteOutcome = { ok: false, pendingBlobs: 0 };
+    try {
+      outcome = deleteCase(db, caseId, { blobDir: blobs });
+    } catch (err) {
+      console.error('[main] 删调查失败', err);
+      return outcome;
+    }
+    // 库里已经没有它了，运行时留着只会往一个不存在的 case 上写事件——
+    // 被删掉的调查会就此长回来一半（有事件、没有 `cases` 行）
+    if (outcome.ok) {
+      cases.forget(caseId);
+      schedulePush();
+    }
+    return outcome;
   });
   ipcMain.handle('case:answerOperator', (_e, caseId: string, reply: OperatorReply) =>
     cases.currentIf(caseId)?.answerOperator(reply) ?? false,

@@ -320,6 +320,20 @@ export type ChatLine = {
 /** 定稿前的两个强制 step（overview §6.2）。 */
 export type ClosingStepKind = 'impact' | 'leftover';
 
+/** 删掉一次调查之后的回执（ui.md §8.4 那段「删除不是第四档收尾」）。 */
+export type DeleteOutcome = {
+  /** 库里那一份删着了没有。库里本来就没有这个 id 时 false。 */
+  ok: boolean;
+  /**
+   * 库删干净了、但**磁盘上那个文件这次没删掉**的证据原文份数（占用、只读卷、权限）。
+   *
+   * 不是"永远删不掉了"：它们记在 `blob_trash` 里，下次启动接着删。单拎出来回给界面
+   * 而不是吞掉，是因为这一下的承诺是"原文一并销毁"——这几份此刻还没销毁，
+   * 说成删干净了就是在骗人。
+   */
+  pendingBlobs: number;
+};
+
 /**
  * 报告按哪种形态组装（D25 / overview §6.1.1）。
  *
@@ -647,6 +661,14 @@ export type InquestryApi = {
   closeCase(caseId: string): Promise<ClosingOutcome>;
   /** 归档：同「停止」，外加标记放弃。证据一条不销毁，半程报告照旧能导。回执是执行了没有。 */
   archiveCase(caseId: string): Promise<boolean>;
+  /**
+   * 删掉一次调查。**与归档不是一档轻重**：归档只是标记放弃，报告照旧导得出来；
+   * 这一下把事件、投影、以及只有它引用的证据原文一并销毁，之后没有任何入口找得回来。
+   *
+   * 唯一一个**不核对「是不是当前调查」**的写（`archiveCase` 那几个都核对）：
+   * 这一下是在历史列表上对着某一行按的，那一行多半根本不是当前调查。
+   */
+  deleteCase(caseId: string): Promise<DeleteOutcome>;
   /**
    * 待办的两个处置同样要带 caseId，理由同上；回执是**处置成功了没有**。
    * 丢掉一次闸门判决的后果比丢一条消息重：人按了拒绝却没落地，三分钟后它会自动放行。

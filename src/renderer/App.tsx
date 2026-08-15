@@ -202,6 +202,19 @@ export function App({
     setScreen('workspace');
   };
 
+  /**
+   * 从列表直奔某次调查的报告屏。
+   *
+   * `reportOf` 记的是 caseId 而报告屏认的是「它等于当前调查」，所以先记后切两句缺一不可：
+   * 切换要等下一次快照（最多 60ms）才在这一屏生效，这中间显示的是**上一个**调查的工作区。
+   * 那一拍与 `open()` 那条是同一个，不额外补一个"正在切"的中间态——补了反而多一屏闪烁。
+   */
+  const openReport = (id: string) => {
+    setReportOf(id);
+    void window.inquestry.switchCase(id);
+    setScreen('workspace');
+  };
+
   const shell = (content: React.ReactNode) => (
     <div className="app">
       <Rail screen={screen} todo={anyTodo} envBad={!!env && !env.claude} onGo={setScreen} />
@@ -235,7 +248,8 @@ export function App({
       />,
     );
   }
-  if (screen === 'history') return shell(<History cases={snap.cases} onOpen={open} />);
+  if (screen === 'history')
+    return shell(<History cases={snap.cases} onOpen={open} onReport={openReport} />);
   if (screen === 'settings') return shell(<Settings />);
 
   // rail 上工作区那一格随时点得到，但手上不一定有调查。

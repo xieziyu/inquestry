@@ -16,7 +16,7 @@
  */
 
 import DatabaseCtor from 'better-sqlite3';
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -32,12 +32,19 @@ import {
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
 import {
+  deleteCase,
+  emptyBlobTrash,
   readIntake,
   renameCase,
   setCaseTimebase,
   type InvestigationSession,
 } from '../src/backend/store/sqlite-store.js';
-import { EMPTY_SNAPSHOT, type CaseBrief, type CaseHit } from '../src/shared/ipc.js';
+import {
+  EMPTY_SNAPSHOT,
+  type CaseBrief,
+  type CaseHit,
+  type DeleteOutcome,
+} from '../src/shared/ipc.js';
 import { cacheBlob, cacheHit } from '../src/backend/agent/capabilities.js';
 import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/shared/settings.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
@@ -1323,6 +1330,303 @@ async function main() {
     stateFillable(undefined, frozenOn('st_a', true)) === true,
     '没有冻住的那一份',
   );
+
+  // ── ㉑ 删掉一次调查：库里、事件里、索引里、磁盘上都要没有它 ─────────────────
+  //
+  // 这一整段验的都是**不报错的错法**：
+  //
+  //   1. 只删投影不删事件 —— 屏幕上当场没了，下一次 `rebuildProjections`（同 schema 内
+  //      的正式迁移手段）把它连同证据原文一起建回来，于是「删了」自己撤销
+  //   2. 忘了两张 FTS —— 虚拟表没有外键，留下的是指不到 `cases` 的脏索引。
+  //      `searchCases` 靠 INNER JOIN 把它挡在结果外，所以从界面上**永远看不出来**，
+  //      索引只是一直长
+  //   3. 跟着 case 一起删 blob —— 它是内容寻址、跨调查共享的：另一次调查引用同一份原文时，
+  //      那次调查的证据当场读不出来了，而它自己一点没被动过
+  //   4. 只按 `tool_calls` 认 blob 的归属 —— 落一次工具输出是两条事件两个事务
+  //      （`recordToolEnd`），卡在中间时 blob 已经落了、`tool_calls.output_sha256` 还是空的。
+  //      两个方向都错：自己那份漏删，别人那份误删
+  //   5. 文件删不掉就此不管 —— 库里已经没有任何一行指得到它，谁也不知道该去删哪个文件。
+  //      欠账记进 `blob_trash`，启动时接着删；而重删之前必须再问一次"现在还有没有人用它"，
+  //      因为 blob 是内容寻址的，欠着的这段时间里它完全可能又活过来
+  //
+  // 换一份干净的库跑：这一段要删东西，与上面那些共用同一个库的话，后面的检查会跟着漂。
+  {
+    const keepDb = db;
+    const keepBlobs = blobs;
+    const wipeFile = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-wipe-')), 'inquestry.db');
+    db = openDatabase(wipeFile);
+    blobs = blobDir(wipeFile);
+
+    const doomed = makeRunner('case_doom', '要删掉的那次');
+    // 两次调查的这一步输出逐字相同 → 同一个 sha → **共享的那份 blob**
+    await work(doomed, '删掉的这条', 'call_d1', '10:00:00');
+    // 第二步换个时间串，输出就不一样了 → 只有它引用的那份 blob
+    await work(doomed, '删掉的那条的第二步', 'call_d2', '10:30:00');
+    // 下面两步造那个"两条事件之间"的窗口，落库之后手工把引用抹掉（见 nulled）
+    await work(doomed, '删掉的那条落了原文但没记上引用', 'call_d3', '10:45:00');
+    await work(doomed, '与留下那条共有、而对面没记上引用', 'call_d4', '11:00:00');
+    (doomed as unknown as Probe).pushChat('user', '这次不查了');
+    doomed.close();
+
+    const keeper = makeRunner('case_keep', '要留下的那次');
+    await work(keeper, '留下的这条', 'call_k1', '10:00:00');
+    await work(keeper, '留下的这条落了原文但没记上引用', 'call_k2', '11:00:00');
+    keeper.close();
+
+    const shaOf = (callId: string) =>
+      (db.prepare(`SELECT output_sha256 s FROM tool_calls WHERE id=?`).get(callId) as { s: string }).s;
+    const shared = shaOf('call_d1');
+    const soleOwn = shaOf('call_d2');
+    const strayOwn = shaOf('call_d3');
+    const strayShared = shaOf('call_d4');
+    const countIn = (sql: string, ...args: unknown[]) =>
+      (db.prepare(sql).get(...(args as [])) as { c: number }).c;
+
+    check(
+      '夹具立得住：共享那份 blob 真的被两次调查引用，独占那份只被一次',
+      shared === shaOf('call_k1') && shared !== soleOwn && strayShared === shaOf('call_k2'),
+      `共享 ${shared.slice(0, 8)} · 独占 ${soleOwn.slice(0, 8)} · 跨案那份 ${strayShared.slice(0, 8)}`,
+    );
+
+    /**
+     * 造出「`blob.stored` 落了、`toolcall.completed` 还没落」那一刻的库状态。
+     *
+     * 直接抹掉引用而不是真去杀进程：**要验的是删除读的是哪一份归属**，而那一刻的库状态
+     * 就是这个样子——`blobs` 行、`payload_fts` 行、磁盘文件都在，`output_sha256` 是空的。
+     * 两条事件各占一个事务（`emitTo`），所以这个窗口是真实存在的、不是想出来的。
+     */
+    db.prepare(`UPDATE tool_calls SET output_sha256=NULL WHERE id IN ('call_d3','call_k2')`).run();
+    check(
+      '夹具立得住：那两条的引用真的空了，而 blob 与 payload_fts 都还在',
+      countIn(`SELECT COUNT(*) c FROM tool_calls WHERE output_sha256 IS NULL`) === 2 &&
+        countIn(`SELECT COUNT(*) c FROM blobs WHERE sha256='${strayOwn}'`) === 1 &&
+        countIn(`SELECT COUNT(*) c FROM payload_fts WHERE sha256='${strayShared}' AND case_id='case_keep'`) === 1,
+      '抹的是引用不是 blob —— 造的正是"原文落了、引用还没落"那一刻',
+    );
+
+    const gone = deleteCase(db, 'case_doom', { blobDir: blobs }).ok;
+    const after = {
+      cases: countIn(`SELECT COUNT(*) c FROM cases WHERE id='case_doom'`),
+      events: countIn(`SELECT COUNT(*) c FROM events WHERE case_id='case_doom'`),
+      steps: countIn(
+        `SELECT COUNT(*) c FROM steps WHERE session_id IN (SELECT id FROM sessions WHERE case_id='case_doom')`,
+      ),
+      sessions: countIn(`SELECT COUNT(*) c FROM sessions WHERE case_id='case_doom'`),
+      chat: countIn(`SELECT COUNT(*) c FROM chat_lines WHERE case_id='case_doom'`),
+      narrative: countIn(`SELECT COUNT(*) c FROM narrative_fts WHERE case_id='case_doom'`),
+      payload: countIn(`SELECT COUNT(*) c FROM payload_fts WHERE case_id='case_doom'`),
+    };
+    check(
+      '删掉之后投影层一行不剩（sessions / steps / 调用 / 证据 / 对话全靠外键级联）',
+      gone && Object.values(after).every((n) => n === 0),
+      `回执=${gone} · ${Object.entries(after).map(([k, v]) => `${k}=${v}`).join(' ')}`,
+    );
+
+    // 留下的那次一条都不能少：级联与 `DELETE ... WHERE case_id` 都很容易写成整表
+    const keptBefore = {
+      events: countIn(`SELECT COUNT(*) c FROM events WHERE case_id='case_keep'`),
+      steps: countIn(
+        `SELECT COUNT(*) c FROM steps WHERE session_id IN (SELECT id FROM sessions WHERE case_id='case_keep')`,
+      ),
+      narrative: countIn(`SELECT COUNT(*) c FROM narrative_fts WHERE case_id='case_keep'`),
+    };
+    check(
+      '另一次调查一条不动（事件、步骤、检索索引都还在）',
+      keptBefore.events > 0 && keptBefore.steps === 2 && keptBefore.narrative > 0,
+      `事件 ${keptBefore.events} · 步骤 ${keptBefore.steps} · 索引 ${keptBefore.narrative}`,
+    );
+    check(
+      '🔴 共享的那份 blob 不跟着删：它是内容寻址的，另一次调查还指着它',
+      countIn(`SELECT COUNT(*) c FROM blobs WHERE sha256='${shared}'`) === 1 &&
+        existsSync(path.join(blobs, shared)),
+      '跟着 case 一起删的话，留下的那次调查的证据当场读不出来，而它自己一点没被动过',
+    );
+    check(
+      '只被它引用的那份 blob 连文件一起清掉',
+      countIn(`SELECT COUNT(*) c FROM blobs WHERE sha256='${soleOwn}'`) === 0 &&
+        !existsSync(path.join(blobs, soleOwn)),
+      '留着的话，"删掉了"与"证据原文还躺在磁盘上"同时成立',
+    );
+    check(
+      '🔴 它自己那份"落了原文、还没记上引用"的也清掉（漏删方向）',
+      countIn(`SELECT COUNT(*) c FROM blobs WHERE sha256='${strayOwn}'`) === 0 &&
+        !existsSync(path.join(blobs, strayOwn)),
+      '只按 tool_calls 收候选的话，这一份谁都指不到它，界面却说删干净了 —— 它会永远留在库和磁盘上',
+    );
+    check(
+      '🔴 别人那份"落了原文、还没记上引用"的不许删（误删方向）',
+      countIn(`SELECT COUNT(*) c FROM blobs WHERE sha256='${strayShared}'`) === 1 &&
+        existsSync(path.join(blobs, strayShared)),
+      '只按 tool_calls 判"还有没有人引用"的话，这一份看起来没人要 —— 删掉的是另一次调查的证据原文',
+    );
+
+    // 🔴 整段里最要紧的一条：删的是**事件**，不是一条 `case.deleted` 事件。
+    // 记事件的写法在这里会绿——投影确实没了——但重放会把它先建再删……前提是投影器认得那条事件；
+    // 不认的话（现在就不认）重放直接抛"没见过的事件"，整条迁移路当场断
+    rebuildProjections(db, { blobDir: blobs });
+    check(
+      '🔴 重放之后它没长回来（删的是事件本身，不是记一条"删过了"）',
+      countIn(`SELECT COUNT(*) c FROM cases WHERE id='case_doom'`) === 0 &&
+        countIn(`SELECT COUNT(*) c FROM cases WHERE id='case_keep'`) === 1,
+      '只删投影的话这里会 FAIL：下一次迁移把它连同证据原文一起建回来，而删除那一下没有任何报错',
+    );
+    check(
+      '重放不会把删掉那次的检索索引也建回来',
+      countIn(`SELECT COUNT(*) c FROM narrative_fts WHERE case_id='case_doom'`) === 0,
+      '脏索引查不出来（searchCases 是 INNER JOIN），所以只能在这儿盯',
+    );
+    check(
+      '删一个不存在的 id 回 false，不抛也不动别人',
+      deleteCase(db, 'case_nope', { blobDir: blobs }).ok === false &&
+        countIn(`SELECT COUNT(*) c FROM cases`) === 1,
+      '界面按回执说话：静默回 true 的话，那一行会从列表上消失而库里还在',
+    );
+    check(
+      '正常删完 blob_trash 是空的：欠账表只装真删不掉的那些',
+      countIn(`SELECT COUNT(*) c FROM blob_trash`) === 0,
+      '删成了不划掉的话，这张表会越攒越长，而每次启动都要为已经不存在的文件重试一遍',
+    );
+
+    /**
+     * 文件删不掉那一档：**记进欠账表、回执数出来、下次启动接着删**。
+     *
+     * 造法：把那份 blob 的文件换成一个同名目录——`rmSync(..., { force: true })` 碰上目录
+     * 直接抛 EISDIR（`force` 只吞"不存在"）。真实成因是权限、占用、只读卷这些，
+     * 但落到这段代码上是同一件事：rm 抛了，而库那一半已经落定、退不回去了。
+     */
+    const doomed2 = makeRunner('case_doom2', '删的时候文件删不掉的那次');
+    await work(doomed2, '文件会删不掉的那条', 'call_x9', '12:34:56');
+    doomed2.close();
+    const stuck = shaOf('call_x9');
+    rmSync(path.join(blobs, stuck));
+    mkdirSync(path.join(blobs, stuck));
+    const outcome = deleteCase(db, 'case_doom2', { blobDir: blobs });
+    check(
+      '🔴 库删干净了但文件没删掉：回执要数出来，不能报成"删干净了"',
+      outcome.ok && outcome.pendingBlobs === 1,
+      `ok=${outcome.ok} pendingBlobs=${outcome.pendingBlobs} —— 吞掉的话界面会说原文一并销毁了，` +
+        '而它还躺在磁盘上',
+    );
+    check(
+      '文件删不掉不影响库那一半：调查照旧删干净',
+      countIn(`SELECT COUNT(*) c FROM cases WHERE id='case_doom2'`) === 0 &&
+        countIn(`SELECT COUNT(*) c FROM events WHERE case_id='case_doom2'`) === 0,
+      '两半要分开报：库没删掉是"再试一次"，文件没删掉是"这次没删成、下次接着删"，处置完全不同',
+    );
+    check(
+      '🔴 欠的那一刀记下来了（不记的话，库里没有任何一行指得到那个文件）',
+      countIn(`SELECT COUNT(*) c FROM blob_trash WHERE sha256='${stuck}'`) === 1,
+      '不记就等于把它变成一个没人知道路径的孤儿文件——"下次再删"根本无从删起',
+    );
+
+    // 拦路的目录挪开 = 下一次启动时那个成因（占用 / 只读）已经过去了
+    rmSync(path.join(blobs, stuck), { recursive: true });
+    writeFileSync(path.join(blobs, stuck), '假装它还在磁盘上');
+    const retried = emptyBlobTrash(db, { blobDir: blobs });
+    check(
+      '🔴 下次启动接着删：欠账表里那份真的从磁盘上没了，账也划掉了',
+      retried.removed === 1 &&
+        retried.pending === 0 &&
+        !existsSync(path.join(blobs, stuck)) &&
+        countIn(`SELECT COUNT(*) c FROM blob_trash`) === 0,
+      `removed=${retried.removed} pending=${retried.pending} —— 只记账不重试的话，` +
+        '这张表就只是个越攒越长的清单，磁盘上那几份一辈子都在',
+    );
+
+    /**
+     * 🔴 重删之前必须再问一次"现在还有没有人引用它"。
+     *
+     * blob 是**内容寻址**的：欠着的这段时间里，一次新调查完全可能落下逐字相同的输出，
+     * 于是这个 sha 又活了（文件还在所以 `storeBlob` 不重写，`blobs` 行由 INSERT OR IGNORE 补回来）。
+     * 不问就删的话，删掉的是一份**正在用的**证据原文，而那次调查一点没被动过——
+     * 表现是报告里那条证据点开是空的，且没有任何报错。
+     */
+    const reborn = makeRunner('case_reborn', '欠着账的那份原文又被用上了');
+    await work(reborn, '与欠账那份逐字相同的输出', 'call_r1', '12:34:56');
+    reborn.close();
+    check(
+      '夹具立得住：新调查落下的正是欠账表里那个 sha',
+      shaOf('call_r1') === stuck && existsSync(path.join(blobs, stuck)),
+      `${stuck.slice(0, 8)} —— 内容一样，sha 就一样，这是内容寻址的定义`,
+    );
+    // 手工把欠账补回去：模拟"上一次删的时候没删成，这一次启动前它又被用上了"
+    db.prepare(`INSERT OR REPLACE INTO blob_trash (sha256,at) VALUES (?,0)`).run(stuck);
+    const spared = emptyBlobTrash(db, { blobDir: blobs });
+    check(
+      '🔴 又被用上的那份不许删，账要划掉',
+      spared.removed === 0 &&
+        existsSync(path.join(blobs, stuck)) &&
+        countIn(`SELECT COUNT(*) c FROM blob_trash`) === 0,
+      '照着账单闷头删的话，删的是另一次调查正在用的证据原文；账不划掉的话它每次启动都来一遍',
+    );
+
+    /**
+     * 回执里那个数**只算这一次删除欠下的**，不是整张表。
+     *
+     * 混起来的话，一份历史上一直删不掉的原文会让之后每一次删除都回一个非零——
+     * 而界面那句话写的是"这次调查的原文没删掉"，于是旧欠账被安到一次完全干净的删除头上。
+     */
+    db.prepare(`INSERT OR REPLACE INTO blob_trash (sha256,at) VALUES ('deadbeef_旧欠账',0)`).run();
+    mkdirSync(path.join(blobs, 'deadbeef_旧欠账'));
+    const clean = makeRunner('case_clean', '这一次删得干干净净');
+    await work(clean, '一份自己的原文', 'call_c1', '13:00:00');
+    clean.close();
+    const cleanOut = deleteCase(db, 'case_clean', { blobDir: blobs });
+    check(
+      '🔴 回执只数这一次欠下的：库里压着别人的旧欠账，也不该算到这次头上',
+      cleanOut.ok &&
+        cleanOut.pendingBlobs === 0 &&
+        countIn(`SELECT COUNT(*) c FROM blob_trash`) === 1,
+      `pendingBlobs=${cleanOut.pendingBlobs}，而表里还压着 1 笔删不掉的旧账 —— ` +
+        '直接回整张表的 pending 的话这里是 1，界面会说"这次调查有 1 份原文没删掉"',
+    );
+
+    /**
+     * 🔴 事务提交之后**一句都不许抛**。
+     *
+     * 抛出去的后果不是少报几个数，而是**回执说反了**：main 收到"删失败"就不收运行时，
+     * 于是那个 runner 还活着、还会往一个已经不存在的 case 上写事件，界面上那一行也还在，
+     * 而库里那一半早就删干净了。
+     *
+     * 造法：给 `blob_trash` 挂一个 BEFORE DELETE 触发器。`emptyBlobTrash` 走到那笔
+     * "又被用上了、该划掉"的账时，那句 `settle.run` **不在按文件兜的那个 try 里**，
+     * 于是整个函数抛出来——正是这条要防的形状。
+     */
+    db.exec(
+      `CREATE TRIGGER trash_boom BEFORE DELETE ON blob_trash BEGIN SELECT RAISE(ABORT,'boom'); END`,
+    );
+    // 让表里压着一笔"已经又被人用上"的账：走到它就会去划账，而划账这一下会被触发器打回
+    db.prepare(`INSERT OR REPLACE INTO blob_trash (sha256,at) VALUES (?,0)`).run(stuck);
+    // 这一次调查的原文与留下那次逐字相同，所以它自己一笔新账都不欠
+    const doomed3 = makeRunner('case_doom3', '清理会抛的那次');
+    await work(doomed3, '与留下那次共享原文', 'call_b1', '10:00:00');
+    doomed3.close();
+    let threw = false;
+    let boomOut: DeleteOutcome = { ok: false, pendingBlobs: -1 };
+    try {
+      boomOut = deleteCase(db, 'case_doom3', { blobDir: blobs });
+    } catch {
+      threw = true;
+    }
+    db.exec(`DROP TRIGGER trash_boom`);
+    check(
+      '🔴 提交之后清理抛了也不许把回执说成"没删掉"',
+      !threw && boomOut.ok && boomOut.pendingBlobs === 0,
+      threw
+        ? '抛出去了 —— main 会据此不收运行时，那个 runner 接着往一个已经不存在的 case 上写事件'
+        : `ok=${boomOut.ok} pendingBlobs=${boomOut.pendingBlobs}`,
+    );
+    check(
+      '清理抛了，库那一半照旧是删干净的（回执与事实要对得上）',
+      countIn(`SELECT COUNT(*) c FROM cases WHERE id='case_doom3'`) === 0 &&
+        countIn(`SELECT COUNT(*) c FROM events WHERE case_id='case_doom3'`) === 0,
+      '这一条与上一条是一对：回执说 ok，库里就必须真的没有它了',
+    );
+
+    db.close();
+    db = keepDb;
+    blobs = keepBlobs;
+  }
 
   // ── 应用级设置的夹逼（shared/settings.ts）──
   // 这几个值原先写死在源码里，搬进设置屏之后**每一个填过头都不会报错，只会安静地不工作**：

@@ -212,4 +212,25 @@ CREATE TABLE IF NOT EXISTS case_ui_state (
   case_id TEXT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
   value   TEXT NOT NULL     -- JSON：当前视图、展开的 step、泳道折叠
 );
+
+-- ─────────────────────────── 待删的证据原文 ───────────────────────────
+--
+-- 删掉一次调查时，只有它引用的 blob 要连**磁盘上那个文件**一起清掉（ui.md §8.4）。
+-- 库那一半在事务里落定，文件只能在事务外删（回滚回不来已经删掉的文件），
+-- 于是中间必然有一个窗口：库里说没了，文件还在。rm 失败（占用、只读卷、权限）时
+-- 那个窗口就永久化了——而此时**库里已经没有任何一行指得到它**，谁也不知道该去删哪个文件。
+--
+-- 这张表就是那份"还欠磁盘一刀"的清单：删除时记下 sha，删成了才划掉，下次启动接着删。
+--
+-- 🔴 **不能靠"扫一遍 blob 目录、没有 blobs 行的就是垃圾"代替它。** 迁移失败会走
+-- 「旧库挪成 .bak + 新建空库」（database.ts 的 archive），而 blob 目录不跟着换：
+-- 那之后新库几乎没有 blobs 行，一次全目录扫描会把 .bak 那份库的全部证据原文删光，
+-- 而 .bak 存在的全部意义正是让人还能救回来。只删自己记下来的那几个，就没有这个边。
+--
+-- ⚠️ **不是投影，别加进 \`PROJECTION_TABLES\`**：它记的是文件系统欠账，重放重建不出来，
+-- 被那份清单带着 truncate 掉的话，欠的那几刀就此没人记得。
+CREATE TABLE IF NOT EXISTS blob_trash (
+  sha256 TEXT PRIMARY KEY,
+  at     INTEGER NOT NULL
+);
 `;

@@ -39,7 +39,9 @@ export type IconName =
   | 'arrow'
   | 'copy'
   | 'undo'
-  | 'expand';
+  | 'expand'
+  | 'search'
+  | 'trash';
 
 const PATHS: Record<IconName, React.JSX.Element> = {
   plus: <path d="M12 5v14M5 12h14" />,
@@ -90,6 +92,21 @@ const PATHS: Record<IconName, React.JSX.Element> = {
   ),
   /** 看全 = 四个角撑开。 */
   expand: <path d="M9.5 4.5H4.5V9.5M14.5 4.5h5V9.5M19.5 14.5v5h-5M9.5 19.5h-5v-5" />,
+  /** 检索 = 放大镜。唯一一个不长在按钮上的：它贴在输入框里当标记（见 `.qbox`）。 */
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M15.8 15.8L20 20" />
+    </>
+  ),
+  /** 删除 = 垃圾桶。**桶身留两道竖线**：只画外框的话，小尺寸下它与 `archive` 的箱子分不开。 */
+  trash: (
+    <>
+      <path d="M4 6.5h16M9.5 6.5V4.5h5v2" />
+      <path d="M6.5 6.5l1 13h9l1-13" />
+      <path d="M10.5 10v6M13.5 10v6" />
+    </>
+  ),
   back: <path d="M19 12H5m6-6l-6 6 6 6" />,
   arrow: <path d="M5 12h14m-6-6l6 6-6 6" />,
   chevron: <path d="M6 9.5l6 6 6-6" />,

@@ -27,6 +27,7 @@ const api: InquestryApi = {
   requestClosing: (caseId: string) => ipcRenderer.invoke('case:requestClosing', caseId),
   closeCase: (caseId: string) => ipcRenderer.invoke('case:close', caseId),
   archiveCase: (caseId: string) => ipcRenderer.invoke('case:archive', caseId),
+  deleteCase: (caseId: string) => ipcRenderer.invoke('case:delete', caseId),
   answerOperator: (caseId: string, reply: OperatorReply) =>
     ipcRenderer.invoke('case:answerOperator', caseId, reply),
   decideGate: (caseId: string, d: GateDecision) => ipcRenderer.invoke('case:decideGate', caseId, d),

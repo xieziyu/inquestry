@@ -4,6 +4,9 @@
  * 每次写入都是「append 事件 + 同事务 apply 投影」，与重放路径共用 applyEvent。
  */
 
+import { rmSync } from 'node:fs';
+import path from 'node:path';
+
 import type { Db } from '../db/database.js';
 import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
@@ -15,6 +18,7 @@ import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../tools/sche
 import {
   VERDICT_SHAPES,
   type ClosingStepKind,
+  type DeleteOutcome,
   type ShapeSuggestion,
   type VerdictShape,
 } from '../../shared/ipc.js';
@@ -290,6 +294,146 @@ export function readCaseStatus(db: Db, caseId: string): CaseStatus | null {
     | { status: CaseStatus }
     | undefined;
   return row?.status ?? null;
+}
+
+/**
+ * 删掉一次调查，**连它的事件一起**。返回删没删着（库里没有这个 id 时 false）。
+ *
+ * 🔴 **这是全库唯一一处删事件的写，也是唯一一处不走事件的写。**别处改状态一律 emit
+ * （见 `setCaseStatus` 那段：直接 UPDATE 的话一重放就被 `case.opened` 抹回去）。
+ * 删除反过来——记一条 `case.deleted` 只会让重放时先建再删，而**事件本身就是要销毁的东西**：
+ * 留着它们，`rebuildProjections` 会把这次调查连同证据原文一并重建回来，
+ * 于是「删了」在下一次迁移之后自己撤销，且不报错。
+ *
+ * 六张投影表里只需显式删三处，其余靠外键级联（schema 里 sessions / chat_lines /
+ * case_ui_state 都对 cases 带 ON DELETE CASCADE，steps 以下再往下级联）：
+ *
+ *   - `events`   —— 真相层，没有外键，删不掉就等于没删（见上）
+ *   - 两张 FTS  —— 虚拟表也没有外键，留下的是**指不到 cases 的脏索引**：
+ *                  `searchCases` 靠 INNER JOIN 把它们挡在结果外，但索引本身一直在长
+ *   - `blobs`   —— 内容寻址、**跨调查共享**，所以按"删完之后还有没有人引用"逐个清，
+ *                  不能跟着 case 一起删。文件与库行一起清，留一个是另一个的孤儿
+ *
+ * 整件事必须在一个事务里：中断在半路的话，库里会留下一次没有 `cases` 行、
+ * 却仍能被重放建回来的调查。
+ *
+ * 🔴 **「这个 blob 属于哪次调查」认 `payload_fts`，不认 `tool_calls`。**
+ * 落一次工具输出是**两条事件两个事务**（`recordToolEnd`：先 `blob.stored`，再
+ * `toolcall.completed`），进程卡在两者之间时，`blobs` 行、`payload_fts` 行、磁盘文件都在了，
+ * 而 `tool_calls.output_sha256` 还是空的。只认 `tool_calls` 的话这一对错在两个方向上：
+ *
+ *   - 漏删：这次调查落下的那份原文谁都指不到它，界面说删干净了，它永远留在库和磁盘上
+ *   - **误删**：另一次调查卡在同一个窗口里，它那份原文看起来"没人引用"，于是被这一下清掉
+ *
+ * `payload_fts` 每条 `blob.stored` 都写一行、且带 `case_id`，正是这份归属。两处都查是因为
+ * 落 FTS 那一下要能读回正文（`readBlobText`），读不回来就没有那一行，那时只剩 `tool_calls`。
+ */
+export function deleteCase(db: Db, caseId: string, opts: { blobDir: string }): DeleteOutcome {
+  const seen = db.prepare(`SELECT 1 FROM cases WHERE id=?`).get(caseId);
+  if (!seen) return { ok: false, pendingBlobs: 0 };
+  // 先记下这次调查落过哪些 blob；删完之后才判得出哪些成了孤儿
+  const touched = new Set(
+    (
+      db
+        .prepare(
+          `SELECT sha256 AS sha FROM payload_fts WHERE case_id = ?
+           UNION
+           SELECT tc.output_sha256 AS sha FROM tool_calls tc
+             JOIN sessions s ON s.id = tc.session_id
+            WHERE s.case_id = ? AND tc.output_sha256 IS NOT NULL`,
+        )
+        .all(caseId, caseId) as { sha: string }[]
+    ).map((r) => r.sha),
+  );
+
+  const owed = db.transaction((): string[] => {
+    db.prepare(`DELETE FROM events WHERE case_id=?`).run(caseId);
+    db.prepare(`DELETE FROM narrative_fts WHERE case_id=?`).run(caseId);
+    db.prepare(`DELETE FROM payload_fts WHERE case_id=?`).run(caseId);
+    // 级联从这一行开始：sessions → steps → tool_calls → evidence_refs，
+    // 外加 chat_lines 与 case_ui_state
+    db.prepare(`DELETE FROM cases WHERE id=?`).run(caseId);
+    // 两处都要问过才算没人要：这次调查的两处记录上面已经删干净了，剩下的都是别人的
+    const usedByCall = db.prepare(`SELECT 1 FROM tool_calls WHERE output_sha256=? LIMIT 1`);
+    const usedByCase = db.prepare(`SELECT 1 FROM payload_fts WHERE sha256=? LIMIT 1`);
+    const dropBlob = db.prepare(`DELETE FROM blobs WHERE sha256=?`);
+    // 🔴 **欠磁盘那一刀记在同一个事务里。** 记在事务外的话，两句之间崩掉留下的
+    // 正是这张表要防的东西：库里没有任何一行指得到那个文件，也没人记得该去删它
+    const owe = db.prepare(`INSERT OR REPLACE INTO blob_trash (sha256,at) VALUES (?,?)`);
+    const now = Date.now();
+    const mine: string[] = [];
+    for (const sha of touched) {
+      if (usedByCall.get(sha) || usedByCase.get(sha)) continue;
+      dropBlob.run(sha);
+      owe.run(sha, now);
+      mine.push(sha);
+    }
+    return mine;
+  })();
+
+  /**
+   * 🔴 **走到这儿事务已经提交，这次删除已经不可逆——所以这之后一句都不许抛。**
+   *
+   * 抛出去的话调用方（main 的 `case:delete`）收到的是"删失败了"：它不会收运行时，
+   * 于是那个 runner 还活着、还会往一个已经不存在的 case 上写事件，而界面上那一行照旧在。
+   * 库里那一半明明已经删干净了。**这条错法在 `pendingBlobs` 那种小事上翻不了车，
+   * 翻车的是回执本身说反了。**
+   *
+   * 清理整个失败也不要紧：欠账已经在 `blob_trash` 里，下次启动接着删。
+   */
+  let pendingBlobs = owed.length;
+  try {
+    emptyBlobTrash(db, opts);
+    // **只数这一次删除欠下的那几个**，不是整张表：表里可能还压着别的调查历史上没删成的，
+    // 把它们算进来的话，界面会把旧欠账说成"这次调查的原文没删掉"
+    const stillOwed = db.prepare(`SELECT 1 FROM blob_trash WHERE sha256=? LIMIT 1`);
+    pendingBlobs = owed.filter((sha) => stillOwed.get(sha)).length;
+  } catch (err) {
+    // 数不出来就按"一个都没清掉"报：宁可多说几份没删成，也不能说成删干净了
+    console.error('[store] 删调查后清证据原文整个失败了，欠账留在 blob_trash 里', err);
+  }
+  return { ok: true, pendingBlobs };
+}
+
+/**
+ * 把「还欠磁盘一刀」的那几份证据原文真的删掉（`blob_trash`，建表处写了它为什么存在）。
+ *
+ * 每次删调查之后跑一遍，**启动时也跑一遍**——上一次没删成的，这一次接着删。
+ * 返回删掉几个、还欠几个；还欠着的留在表里，下次再来。
+ *
+ * 🔴 **删之前必须再问一次"现在还有没有人引用它"。** blob 是内容寻址的：欠着的这段时间里，
+ * 一次新调查完全可能落下**逐字相同**的输出——`storeBlob` 见文件已在就不重写，
+ * `blobs` 行由 `INSERT OR IGNORE` 补回来，于是这个 sha 又活了。不问就删的话，
+ * 删掉的是一份**正在用的**证据原文，而那次调查一点没被动过。
+ */
+export function emptyBlobTrash(
+  db: Db,
+  opts: { blobDir: string },
+): { removed: number; pending: number } {
+  const owed = db.prepare(`SELECT sha256 FROM blob_trash`).all() as { sha256: string }[];
+  if (!owed.length) return { removed: 0, pending: 0 };
+  const usedByCall = db.prepare(`SELECT 1 FROM tool_calls WHERE output_sha256=? LIMIT 1`);
+  const usedByCase = db.prepare(`SELECT 1 FROM payload_fts WHERE sha256=? LIMIT 1`);
+  const settle = db.prepare(`DELETE FROM blob_trash WHERE sha256=?`);
+  let removed = 0;
+  let pending = 0;
+  for (const { sha256 } of owed) {
+    // 又被人用上了：这一刀不欠了，划掉但别动文件
+    if (usedByCall.get(sha256) || usedByCase.get(sha256)) {
+      settle.run(sha256);
+      continue;
+    }
+    try {
+      rmSync(path.join(opts.blobDir, sha256), { force: true });
+      settle.run(sha256);
+      removed++;
+    } catch (err) {
+      // 留在表里，下次再来。**这里不能划掉**——划掉就等于把它变成一个没人记得的孤儿文件
+      pending++;
+      console.error('[store] 清证据原文失败，留着下次再删', sha256, err);
+    }
+  }
+  return { removed, pending };
 }
 
 /**
