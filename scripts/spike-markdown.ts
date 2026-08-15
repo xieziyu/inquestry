@@ -142,16 +142,6 @@ check(
   '导出自己排一次顺序的话，主体块会慢慢漂到通用四块后面，而屏幕上还是对的——两份产物就此分家',
 );
 
-check(
-  '每一节都印出"哪来的"',
-  (() => {
-    const out = md();
-    const want = reportPlan(base()).sections.filter((s) => s.id !== 'verdict' && s.source !== '——');
-    return want.every((s) => out.includes(`*来源：${s.source}*`));
-  })(),
-  '「哪些是投影、哪些是生成」是 D17 唯一能被读者自己核的形式，导出的那份丢了它就只是一篇文章',
-);
-
 // ── 时间线用表格，mermaid 只是附加 ──────────────────────────────────────
 
 check(
@@ -211,14 +201,11 @@ check(
 const EVIL =
   '<img src=x onerror=alert(1)> ![x](https://attacker.example/pixel) [看这里](https://evil.example) `code` ~~假推翻~~ **假粗体** [^e1]';
 
-/**
- * 影响面那一节的**正文**——整段就是内容，用来验行首记号与转义。
- * 去掉 `*来源：…*` 那行：它是我们自己的斜体，留着会被当成"没转义的 `*`"。
- */
+/** 影响面那一节的**正文**——整段就是内容，用来验行首记号与转义。 */
 const impactOf = (out: string) =>
   sectionOf(out, '影响面')
     .split('\n')
-    .filter((l) => l.trim() && !l.startsWith('*来源：'))
+    .filter((l) => l.trim())
     .join('\n');
 
 check(
@@ -461,7 +448,7 @@ check(
     const out = md({ report: { ...report, remediation: EVIL } });
     const body = sectionOf(out, '修复建议')
       .split('\n')
-      .filter((l) => l.trim() && !l.startsWith('*来源：'))
+      .filter((l) => l.trim())
       .join('\n')
       .replace(/\[\^e\d+\]$/, '');
     return body.match(/(?<!\\)[`*[\]<>~]/g) === null;

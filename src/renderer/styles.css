@@ -1216,11 +1216,9 @@ button.primary:has(> .ic) { gap: 6px; }
 
 .paper section { margin-top: 52px; }
 .paper h2 {
-  display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px;
+  margin: 0 0 14px;
   padding-bottom: 8px; border-bottom: 1px solid var(--line); font-size: 15.5px; font-weight: 600;
 }
-/* 每节右侧标注哪来的：把「报告是投影」从一句承诺变成读者能自己核的东西 */
-.paper h2 em { margin-left: auto; font-style: normal; font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
 /* 根因提级：它是整份报告的答案，不该和「影响面」长一个样 */
 .paper .rootblock { margin-top: 18px; padding: 2px 0 2px 22px; border-left: 3px solid var(--fill); }
 /* ⚠️ 不给它加窄的 `max-width`：真实根因是一整句判断（常有六七十字），

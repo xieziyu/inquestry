@@ -117,10 +117,7 @@ function meta(input: ReportInput, ctx: Ctx): string {
 }
 
 function sectionMd(section: ReportSection, ctx: Ctx): string {
-  const head = [`## ${section.title}`];
-  // 「哪些是投影、哪些是生成」对读者可见（D17）。`——` 是"这一节没有来源"的占位，别印出来
-  if (section.source && section.source !== '——') head.push(`*来源：${inline(section.source)}*`);
-  return [...head, body(section, ctx)].join('\n\n');
+  return [`## ${section.title}`, body(section, ctx)].join('\n\n');
 }
 
 function body(section: ReportSection, ctx: Ctx): string {

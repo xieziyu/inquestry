@@ -86,11 +86,7 @@ export function ReportPaper({
 
       {plan.sections.filter((s) => show(s.id)).map((s) => (
         <section key={s.id} id={anchors ? `sec-${s.id}` : undefined} data-block={s.id}>
-          <h2>
-            {s.title}
-            {/* 「哪些是投影、哪些是生成」对读者可见——把 D17 变成能自己验证的承诺 */}
-            <em>{s.source}</em>
-          </h2>
+          <h2>{s.title}</h2>
           <Body section={s} label={label} />
         </section>
       ))}

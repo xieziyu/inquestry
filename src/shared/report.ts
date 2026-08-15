@@ -87,8 +87,6 @@ export type ReportSection = {
   /** 锚点 id，同时是导出时的稳定键。**同一 id 在一份报告里只出现一次**，见 `dedupe`。 */
   id: string;
   title: string;
-  /** 右侧那行「这一节哪来的」。把 D17「报告是投影」变成读者能自己验证的承诺（ui.md §6）。 */
-  source: string;
   body: ReportBody;
 };
 
@@ -198,7 +196,7 @@ export function reportPlan(input: ReportInput): ReportPlan {
   const root = reportedRootCause(input);
   if (root) {
     sections.push(
-      sec('verdict', '投影 · 置信度最高的那条已证实结论', {
+      sec('verdict', {
         kind: 'verdict',
         text: root.text,
         confidence: root.confidence,
@@ -211,11 +209,11 @@ export function reportPlan(input: ReportInput): ReportPlan {
   // 四块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留问题提成了主体，
   // 于是它在这儿会撞上——**同一节不装两遍**，位置以先出现的那次为准
   sections.push(
-    sec('impact', '投影 · 影响面 step 的结论', { kind: 'prose', text: report.impact }),
-    sec('path', '投影 · step 树，含走错的分支', { kind: 'path', rows: input.steps }),
-    sec('leftover', '投影 · 未查清的 step', { kind: 'notes', rows: report.leftovers }),
+    sec('impact', { kind: 'prose', text: report.impact }),
+    sec('path', { kind: 'path', rows: input.steps }),
+    sec('leftover', { kind: 'notes', rows: report.leftovers }),
     // 四栏里唯一没有投影来源的一块：`close_step` 的 `remediation`，取最新一条仍然成立的声明
-    sec('fix', 'agent 生成 · 挂在给出判断的那一步上', { kind: 'prose', text: report.remediation }),
+    sec('fix', { kind: 'prose', text: report.remediation }),
   );
 
   return {
@@ -310,7 +308,7 @@ function block(id: BodyId, input: ReportInput): ReportSection | null {
       // （`backend/store/sqlite-store.ts`）。两边分叉的话，推断出来的时序型会配上一个
       // 装不出主体的报告——而两处都不会报错
       return input.incident.length >= 2
-        ? sec('timeline', '投影 · ORDER BY occurred_at_ms', { kind: 'timeline', rows: input.incident })
+        ? sec('timeline', { kind: 'timeline', rows: input.incident })
         : null;
     case 'contrast':
       // 🔴 **成对才算数，与 `suggestVerdictShape()` 的 `stateFillable` 是同一个判断**
@@ -318,7 +316,7 @@ function block(id: BodyId, input: ReportInput): ReportSection | null {
       // 定稿确认块按 `stateFillable` 说着"这一块装不出来"，而纸上正印着一行
       // 「实际 ——」——两处各自看都自洽，对不上时没有任何报错
       return report.expected && report.actual
-        ? sec('contrast', 'agent 填写 · 挂在根因那一步', {
+        ? sec('contrast', {
             kind: 'contrast',
             expected: report.expected,
             actual: report.actual,
@@ -327,13 +325,13 @@ function block(id: BodyId, input: ReportInput): ReportSection | null {
     case 'chain': {
       const body = chainBody(input);
       // 一环的"链"不是链，它说的话根因栏已经说完了
-      return body.links.length >= 2 ? sec('chain', '投影 · 已证实的 step 按先后', body) : null;
+      return body.links.length >= 2 ? sec('chain', body) : null;
     }
     case 'split': {
       const groups = splitGroups(input.steps);
       // 一组切不出对照——"只在某一小撮上"要成立，至少得有另一撮
       return groups.length >= 2
-        ? sec('split', '投影 · 证据按 actor 归组', {
+        ? sec('split', {
             kind: 'split',
             groups,
             // 干净的那组 / 出问题的那组同样成对才有意义，理由同 `contrast`
@@ -344,7 +342,7 @@ function block(id: BodyId, input: ReportInput): ReportSection | null {
     }
     case 'matrix':
       return report.refuted.length
-        ? sec('matrix', '投影 · 被推翻的 step', { kind: 'matrix', rows: report.refuted })
+        ? sec('matrix', { kind: 'matrix', rows: report.refuted })
         : null;
   }
 }
@@ -359,11 +357,11 @@ function paired(report: ReportInput['report']): { expected: string | null; actua
 }
 
 function leftoverSection(input: ReportInput): ReportSection {
-  return sec('leftover', '投影 · 未查清的 step', { kind: 'notes', rows: input.report.leftovers });
+  return sec('leftover', { kind: 'notes', rows: input.report.leftovers });
 }
 
 function absent(id: BodyId): ReportSection {
-  return sec(id, '——', { kind: 'absent', why: ABSENT_WHY[id] });
+  return sec(id, { kind: 'absent', why: ABSENT_WHY[id] });
 }
 
 /**
@@ -434,8 +432,8 @@ function stepLabels(steps: StepNode[]): Record<string, string> {
   return out;
 }
 
-function sec(id: string, source: string, body: ReportBody): ReportSection {
-  return { id, title: TITLES[id]!, source, body };
+function sec(id: string, body: ReportBody): ReportSection {
+  return { id, title: TITLES[id]!, body };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -287,12 +287,6 @@ check(
 );
 
 check(
-  '每一节都标了来源',
-  VERDICT_SHAPES.every((s) => reportPlan(base({ shape: s })).sections.every((x) => x.source.length > 0)),
-  '「哪些是投影、哪些是生成」要对读者可见——这是 D17 唯一能被读者自己核的形式',
-);
-
-check(
   '同一节不会在一份报告里出现两次',
   VERDICT_SHAPES.every((s) => {
     const l = ids({ shape: s });
