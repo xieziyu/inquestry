@@ -34,9 +34,10 @@ export function Home({
     void window.inquestry.intakeOptions().then(setOpts);
   }, []);
 
-  const recent = cases.slice(0, RECENT_LIMIT);
-  const current = recent.find((c) => c.current);
-  const rows = current ? [current, ...recent.filter((c) => c !== current)] : recent;
+  // ⚠️ **顺序照库里那份，当前调查不提前**：这条轨道是一根时间轴（`.tr::before` 那条竖线
+  // 与首尾两个半截收口），把当前那条抽到第一行就是让轴上的先后说假话——
+  // 而点进去再回来并不产生任何领域事件，`updated_at` 没动过。当前是哪一条由 `.cur` 说。
+  const rows = cases.slice(0, RECENT_LIMIT);
 
   return (
     <div className="page home">
