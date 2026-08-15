@@ -1,4 +1,5 @@
 import type { Snapshot } from '../shared/ipc.js';
+import { runState } from './caseline.js';
 import { Icon } from './Icon.js';
 
 /**
@@ -30,15 +31,16 @@ export function RunBar({
   onStop: () => void;
   onTakeover: (on: boolean) => void;
 }) {
-  const st = snap.busy ? 'busy' : snap.sessionStatus;
+  const state = stateOf(snap);
+  const st = snap.busy ? 'busy' : snap.sessionStatus === 'crashed' ? 'crashed' : snap.sessionStatus;
   const agent = snap.case?.agent;
   const ctx = snap.context;
 
   return (
     <div className="runbar">
-      <span className={`rb-state s-${st}`}>
+      <span className={`rb-state s-${st}`} title={sessionDetail(snap)}>
         {snap.busy && <span className="pulse" />}
-        {stateLabel(snap)}
+        {state}
       </span>
 
       {/* 「停止」长在状态旁边：它中断的正是左边这枚正在跳的点（D7 会连排队消息一起清） */}
@@ -120,14 +122,35 @@ export function RunBar({
   );
 }
 
-/** 冻结之后说的是排查的终态，不是这一轮——那时「待开始」是句错话，它再也不会开始了。 */
-function stateLabel(snap: Snapshot): string {
-  if (snap.case && snap.case.status !== 'open') {
-    return snap.case.status === 'closed' ? '已定稿' : '已归档';
-  }
-  if (snap.busy) return '进行中';
+/**
+ * 这一格的字。**四个基本档走 `runState`，与两个列表同一个出处**——各写各的下场就是
+ * 首页写「已停止」、点进去写「待开始」（`caseline.tsx` 里那段说明）。
+ *
+ * 「会话中断」是这儿独有的一档：崩了与停了对人的下一步动作不一样（前者该看错误横幅），
+ * 而列表那侧给不出这个区别，多说一句不构成矛盾。
+ *
+ * 「会话还开着没开着」不出现在这儿：那是实现细节，两种情况下人能做的事一模一样
+ * （照样打字、照样发送）。它留在 title 里。
+ */
+export function stateOf(snap: Snapshot): string {
+  if (snap.case?.status === 'open' && snap.sessionStatus === 'crashed' && !snap.busy) return '会话中断';
+  return runState({
+    status: snap.case?.status ?? 'open',
+    running: snap.busy,
+    // 库里那份 `started` 到不了这一屏，用等价的两条：跑出过步骤，或这个运行时开过会话
+    started: snap.steps.length > 0 || snap.sessionStatus !== 'idle',
+  }).label;
+}
+
+/** 会话这会儿开着没开着只进 title：它不改变人能做什么，但排查为什么慢半拍时它是线索。 */
+function sessionDetail(snap: Snapshot): string {
   return (
-    { idle: '待开始', live: '空闲（会话开着）', ended: '本轮已结束', crashed: '会话中断' } as const
+    {
+      idle: '还没开会话；发一句话就起一轮',
+      live: '会话开着，随时接着发',
+      ended: '上一轮的会话已经收了；再发一句会新起一轮',
+      crashed: '上一轮会话中断了，原因看上面的横幅',
+    } as const
   )[snap.sessionStatus];
 }
 

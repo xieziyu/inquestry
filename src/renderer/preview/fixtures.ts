@@ -35,11 +35,12 @@ const min = 60_000;
 const steps = rawSteps.map((s, i) => ({ ...s, startedAt: now - (13 - i) * min }));
 
 const CASES: CaseBrief[] = [
-  { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 2 * min, current: true, todos: 2, running: true, loaded: true },
-  { id: 'c2', title: '推送在 12:40 之后整体延迟', status: 'open', updatedAt: now - 40 * min, current: false, todos: 1, running: false, loaded: true },
-  { id: 'c3', title: '网关偶发 502，只有华东节点', status: 'open', updatedAt: now - 5 * 3600_000, current: false, todos: 0, running: false, loaded: false },
-  { id: 'c4', title: '搜索结果里混进了已下架的节目', status: 'closed', updatedAt: now - 3 * 86400_000, current: false, todos: 0, running: false, loaded: false },
-  { id: 'c5', title: '导出任务卡在 99%', status: 'aborted', updatedAt: now - 9 * 86400_000, current: false, todos: 0, running: false, loaded: false },
+  { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 2 * min, current: true, todos: 2, running: true, started: true, loaded: true },
+  { id: 'c2', title: '推送在 12:40 之后整体延迟', status: 'open', updatedAt: now - 40 * min, current: false, todos: 1, running: false, started: true, loaded: true },
+  // 点开看过一眼、一轮都没跑过：列表上该是「待开始」，与它点进去底部那句一致
+  { id: 'c3', title: '网关偶发 502，只有华东节点', status: 'open', updatedAt: now - 5 * 3600_000, current: false, todos: 0, running: false, started: false, loaded: true },
+  { id: 'c4', title: '搜索结果里混进了已下架的节目', status: 'closed', updatedAt: now - 3 * 86400_000, current: false, todos: 0, running: false, started: true, loaded: false },
+  { id: 'c5', title: '导出任务卡在 99%', status: 'aborted', updatedAt: now - 9 * 86400_000, current: false, todos: 0, running: false, started: true, loaded: false },
 ];
 
 const CHAT: ChatLine[] = [

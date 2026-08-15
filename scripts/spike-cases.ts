@@ -25,13 +25,14 @@ import { blobDir, openDatabase, planUpgrade, SCHEMA_VERSION, type Db } from '../
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
 import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
 import { readIntake, renameCase, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
-import type { CaseHit } from '../src/shared/ipc.js';
+import { EMPTY_SNAPSHOT, type CaseBrief, type CaseHit } from '../src/shared/ipc.js';
 import { cacheBlob, cacheHit } from '../src/backend/agent/capabilities.js';
 import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/shared/settings.js';
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
-import { rootParent } from '../src/renderer/caseline.js';
+import { caseState, rootParent } from '../src/renderer/caseline.js';
+import { stateOf } from '../src/renderer/RunBar.js';
 import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 
 /** 会话准备与运行时读数是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
@@ -503,6 +504,56 @@ async function main() {
 
   const briefs = registry.briefs();
   const zBrief = briefs.find((c) => c.id === 'case_z')!;
+
+  // ── 列表那句状态与工作区底部那句必须说同一件事 ──────────────────────────
+  //
+  // 🔴 **这是实际踩到过的一条**：列表原先按 `loaded`（main 还持有它的运行时）分档，
+  // 于是一次点开看过、一轮都没跑的排查在首页写「已停止」，点进去底部写「待开始」。
+  // 两处都不报错，人只能猜哪个是真的。所以两处共用 `runState`，而这条检查验的是
+  // **同一个事实喂给两处会得到同一个词**——只验其中一处的映射表证明不了这件事。
+  const sameWord = (
+    name: string,
+    brief: Pick<CaseBrief, 'status' | 'running' | 'started'>,
+    snapPart: Pick<Snapshot, 'sessionStatus' | 'busy'> & { steps: number },
+  ) => {
+    const list = caseState({ ...brief, id: 'x', title: 'x', updatedAt: 0, current: false, todos: 0, loaded: false }).label;
+    const bar = stateOf({
+      ...EMPTY_SNAPSHOT,
+      case: { ...EMPTY_SNAPSHOT.case!, status: brief.status } as never,
+      busy: snapPart.busy,
+      sessionStatus: snapPart.sessionStatus,
+      steps: Array.from({ length: snapPart.steps }, () => ({}) as never),
+    });
+    check(`列表与状态栏用同一个词：${name}`, list === bar, `列表「${list}」/ 状态栏「${bar}」`);
+  };
+  sameWord('一轮都没跑过', { status: 'open', running: false, started: false }, { sessionStatus: 'idle', busy: false, steps: 0 });
+  // 从历史里重新点开：运行时是新建的（idle），但这次排查确实跑过——就是那条踩到的
+  sameWord('跑过、从历史重新点开', { status: 'open', running: false, started: true }, { sessionStatus: 'idle', busy: false, steps: 3 });
+  sameWord('跑过、这一轮已收', { status: 'open', running: false, started: true }, { sessionStatus: 'ended', busy: false, steps: 3 });
+  sameWord('正在跑', { status: 'open', running: true, started: true }, { sessionStatus: 'live', busy: true, steps: 3 });
+  sameWord('已定稿', { status: 'closed', running: false, started: true }, { sessionStatus: 'ended', busy: false, steps: 3 });
+  sameWord('已归档', { status: 'aborted', running: false, started: true }, { sessionStatus: 'ended', busy: false, steps: 3 });
+
+  // ⚠️ 上面那六条只验"两处说的是同一个词"，而两处如今共用 `runState`——**改坏那个函数，
+  // 它们照样一致**，检查全绿。所以另有这一条把词钉在事实上：少了它，那六条是空的。
+  const word = (status: CaseBrief['status'], running: boolean, started: boolean) =>
+    caseState({ id: 'x', title: 'x', updatedAt: 0, current: false, todos: 0, loaded: false, status, running, started }).label;
+  check(
+    '四个词各自钉在哪个事实上',
+    word('open', false, false) === '待开始' &&
+      word('open', false, true) === '已停止' &&
+      word('open', true, true) === '运行中' &&
+      word('closed', false, true) === '已定稿' &&
+      word('aborted', false, true) === '已归档',
+    `没跑过=${word('open', false, false)} 跑过停了=${word('open', false, true)} 在跑=${word('open', true, true)} 定稿=${word('closed', false, true)} 归档=${word('aborted', false, true)}`,
+  );
+
+  check(
+    '「跑过没有」按库里有没有会话算，不按 main 手上有没有运行时',
+    // case_z 刚 adopt、一轮没跑：运行时在手上（loaded），但没开过会话
+    zBrief.loaded && !zBrief.started && briefs.find((c) => c.id === 'case_x')!.started,
+    `case_z loaded=${zBrief.loaded} started=${zBrief.started} / case_x started=${briefs.find((c) => c.id === 'case_x')!.started}`,
+  );
   check(
     '切换到别的排查不中断它：运行时还在，待办也还挂着',
     zBrief.loaded && zBrief.todos === 1 && !zBrief.current,

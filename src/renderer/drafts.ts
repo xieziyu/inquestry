@@ -66,7 +66,9 @@ export function pruneDrafts(drafts: CardDrafts, caseId: string, aliveIds: Iterab
  * 所以一次排查**不在里面** ⟺ 它三样都不是。留着旧值的话，一条刚被处理掉的待办
  * 会在检索结果上一直挂着「等你 3」。
  *
- * `loaded` 同理归零：它只影响"已停止 / 未打开"那句话，而没被钉住的排查本就不该显示成在跑。
+ * `loaded` 同理归零：它只说"main 这会儿还持有它的运行时"，没被钉住的就是没有。
+ * ⚠️ **`started` 不在归零之列**：它是库里的事实（跑过没有），与钉不钉住无关——
+ * 归零的话，一次真跑过的排查在检索结果里会显示成「待开始」。
  */
 export function freshenHits<T extends CaseBrief>(hits: T[], cases: CaseBrief[]): T[] {
   const live = new Map(cases.map((c) => [c.id, c]));
@@ -78,9 +80,10 @@ export function freshenHits<T extends CaseBrief>(hits: T[], cases: CaseBrief[]):
       running: now?.running ?? false,
       current: now?.current ?? false,
       loaded: now?.loaded ?? false,
-      // 状态是库里的事实，不随快照抖动；标题同理。命中那三项（hits/snippet/where）
-      // 说的是"这次检索为什么找到它"，更不该被覆盖
+      // 状态与"跑过没有"是库里的事实，不随快照抖动；标题同理。命中那三项
+      // （hits/snippet/where）说的是"这次检索为什么找到它"，更不该被覆盖
       status: now?.status ?? h.status,
+      started: h.started,
     };
   });
 }

@@ -14,12 +14,39 @@ import { SHAPE_COPY } from '../shared/report.js';
  * 运行时那一档排在库状态之前：`running` / `todos` 是"此刻正在发生的事"，
  * 而 `status` 只说得出"上次收尾成什么样"。一个正卡在待办上的 open 排查
  * 按库状态读出来是"已停止"，那正是 D28 要防的那种静静挂死。
+ *
+ * 🔴 **没在跑那一档按 `started` 分，不按 `loaded`。** 后者是"main 还持有它的运行时"，
+ * 一个内存事实：点开看过一眼、一轮都没跑过的排查会被它读成「已停止」，而那次排查点进去
+ * 底部写的是「待开始」——同一次排查在两处说了两句相反的话，且两处都不报错。
+ * 反过来，一个真跑过又被限流降级掉的排查会读成「未打开」。
+ *
+ * **措辞与工作区底部状态栏（`RunBar` 的 `stateLabel`）是一套**：那一条说的是"这一轮"，
+ * 这一条说的是"这次排查"，但两者对同一个事实必须用同一个词。改一处要连着改。
  */
-export function caseState(c: CaseBrief): { label: string; tone: 'run' | 'idle' | 'done' } {
-  if (c.status === 'closed') return { label: '已定稿', tone: 'done' };
-  if (c.status === 'aborted') return { label: '已归档', tone: 'done' };
-  if (c.running) return { label: '运行中', tone: 'run' };
-  return { label: c.loaded ? '已停止' : '未打开', tone: 'idle' };
+export function caseState(c: CaseBrief) {
+  return runState({ status: c.status, running: c.running, started: c.started });
+}
+
+/**
+ * 四个词的**唯一出处**：已定稿 / 已归档 / 运行中 / 已停止 / 待开始。
+ *
+ * 列表与工作区底部状态栏都读它。两处问的问题确实不同（"这次排查现在什么情况" vs
+ * "这一轮在干嘛"），但**同一个事实必须用同一个词**——各写各的下场就是首页写「已停止」、
+ * 点进去写「待开始」，人只能猜哪个是真的。
+ *
+ * 状态栏那侧另有一档「会话中断」，那是这一条给不出的额外信息，不与这四个词冲突。
+ */
+export function runState(p: {
+  status: CaseBrief['status'];
+  /** 有一轮正在跑。 */
+  running: boolean;
+  /** 这次排查跑过没有。 */
+  started: boolean;
+}): { label: string; tone: 'run' | 'idle' | 'done' } {
+  if (p.status === 'closed') return { label: '已定稿', tone: 'done' };
+  if (p.status === 'aborted') return { label: '已归档', tone: 'done' };
+  if (p.running) return { label: '运行中', tone: 'run' };
+  return { label: p.started ? '已停止' : '待开始', tone: 'idle' };
 }
 
 /** 已定稿的排查多一句"按哪种形态装的"——那是它最有信息量的一栏。 */

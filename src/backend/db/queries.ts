@@ -68,10 +68,26 @@ export type CaseRow = {
   title: string;
   status: 'open' | 'closed' | 'aborted';
   updated_at: number;
+  /**
+   * 这次排查**真的跑过没有**（有没有开过会话）。SQLite 给 0/1。
+   *
+   * 列表上那句状态一度是按「main 还持有它的运行时」（`CaseBrief.loaded`）说的，已推翻：
+   * 那是内存里的事实，不是排查的状态——一个点开看过一眼、一轮都没跑过的排查会被读成
+   * 「已停止」，而它点进去写的是「待开始」；反过来一个真跑过又被限流降级掉的排查
+   * 会读成「未打开」。两种都不报错，只是那一栏在说一件没发生过的事。
+   */
+  started: number;
 };
 
-// 表别名固定为 c：两个调用点都要能把它拼进带 JOIN / 子查询的语句里而不歧义
+// 表别名固定为 c：三个调用点都要能把它拼进带 JOIN / 子查询的语句里而不歧义
 const CASE_ORDER = `ORDER BY (c.status='open') DESC, c.updated_at DESC`;
+/**
+ * 一行排查的公共列。**三处查询共用这一串**（最近列表 / 钉住的补查 / 检索命中）：
+ * 各写各的话，加一列只加进其中两处，第三处那一列会安静地是 `undefined`——
+ * 而 `started` 这种布尔列 undefined 之后读出来正好是"没跑过"，与真值反着。
+ */
+const CASE_COLS = `c.id, c.title, c.status, c.updated_at,
+  EXISTS(SELECT 1 FROM sessions se WHERE se.case_id = c.id) AS started`;
 const byCaseOrder = (a: CaseRow, b: CaseRow) =>
   Number(b.status === 'open') - Number(a.status === 'open') || b.updated_at - a.updated_at;
 
@@ -85,7 +101,7 @@ const byCaseOrder = (a: CaseRow, b: CaseRow) =>
  */
 export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {}): CaseRow[] {
   const rows = db
-    .prepare(`SELECT c.id, c.title, c.status, c.updated_at FROM cases c ${CASE_ORDER} LIMIT ?`)
+    .prepare(`SELECT ${CASE_COLS} FROM cases c ${CASE_ORDER} LIMIT ?`)
     .all(opts.limit ?? 20) as CaseRow[];
 
   const have = new Set(rows.map((r) => r.id));
@@ -94,7 +110,7 @@ export function caseList(db: Db, opts: { limit?: number; pinned?: string[] } = {
 
   const extra = db
     .prepare(
-      `SELECT c.id, c.title, c.status, c.updated_at FROM cases c
+      `SELECT ${CASE_COLS} FROM cases c
        WHERE c.id IN (${missing.map(() => '?').join(',')})`,
     )
     .all(...missing) as CaseRow[];
@@ -133,7 +149,7 @@ export function casePage(
 
   const rows = db
     .prepare(
-      `SELECT c.id, c.title, c.status, c.updated_at, c.project_root, c.incident_date, c.verdict_shape,
+      `SELECT ${CASE_COLS}, c.project_root, c.incident_date, c.verdict_shape,
               (SELECT COUNT(*) FROM steps s JOIN sessions se ON se.id = s.session_id
                 WHERE se.case_id = c.id AND s.lane IS NULL) AS steps,
               (SELECT s.verdict_text FROM steps s JOIN sessions se ON se.id = s.session_id
@@ -375,7 +391,7 @@ export function searchCases(db: Db, term: string, opts: { limit?: number } = {})
   // 拿它渲染出的 chip 点下去会切到一个不存在的排查（`switchTo` 回 false，界面一动不动）
   const rows = db
     .prepare(
-      `SELECT c.id, c.title, c.status, c.updated_at FROM cases c WHERE c.id IN (${ids.map(() => '?').join(',')}) ${CASE_ORDER}`,
+      `SELECT ${CASE_COLS} FROM cases c WHERE c.id IN (${ids.map(() => '?').join(',')}) ${CASE_ORDER}`,
     )
     .all(...ids) as CaseRow[];
 

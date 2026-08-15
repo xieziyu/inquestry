@@ -90,7 +90,16 @@ export type CaseBrief = {
   todos: number;
   /** 有一轮正在跑。 */
   running: boolean;
-  /** main 里还持有它的运行时；false 表示只剩库里的历史，点开会新起一个 session。 */
+  /**
+   * 这次排查真的跑过没有（开过会话）。**列表上那句状态按它说**，不按 `loaded`——
+   * 后者是内存里的事实，会把"点开看过一眼、一轮没跑"读成「已停止」，
+   * 而那次排查点进去写的是「待开始」。
+   */
+  started: boolean;
+  /**
+   * main 里还持有它的运行时；false 表示只剩库里的历史，点开会新起一个 session。
+   * **只用来分「在手上 / 更早」那两组**，不参与状态措辞。
+   */
   loaded: boolean;
 };
 

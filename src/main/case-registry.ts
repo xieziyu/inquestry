@@ -152,6 +152,7 @@ export class CaseRegistry<R extends LiveCase> {
       current: c.id === this.currentId,
       todos: r?.todoCount ?? 0,
       running: r?.isBusy ?? false,
+      started: !!c.started,
       loaded: !!r,
     };
   }
