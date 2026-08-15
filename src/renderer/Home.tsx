@@ -67,7 +67,7 @@ export function Home({
             </div>
 
             {rows.length === 0 ? (
-              <p className="blank">还没有调查。选个工作区、写下问题就能开始。</p>
+              <p className="blank">暂无记录</p>
             ) : (
               <div className="track">
                 {rows.map((c) => (

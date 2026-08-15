@@ -458,10 +458,10 @@ export function App({
             disabled={frozen}
             placeholder={
               frozen
-                ? '这次调查已经收尾了，接着查请另建一次调查。'
+                ? '本次调查已结束'
                 : live
-                  ? '补充信息、纠偏方向，或让它换个假设…'
-                  : '写下要查的东西，发出去就开一轮会话…'
+                  ? '补充点信息...'
+                  : '请描述问题...'
             }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
