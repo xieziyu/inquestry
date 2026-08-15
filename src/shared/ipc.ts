@@ -646,13 +646,17 @@ export type InquestryApi = {
    * 落到别的调查头上会得到一个文件名与内容对不上、且没人会察觉的产物。
    *
    * 章节由 `shared/report.ts` 组装、`shared/markdown.ts` 渲染，与报告屏同一份。
+   *
+   * 🔴 **`shape` 必须传**：它是人此刻在报告屏纸头上选的那一个（[ui] §6）。不传的话 main
+   * 会照 agent 的建议值另装一遍，于是屏上看的是因果链型、导出的却是时序型——章节集合都不一样，
+   * 而两边都不报错。**数据仍由 main 拿它自己那份快照出**，这里只把人挑的那个判断带过去。
    */
-  exportMarkdown(caseId: string): Promise<ExportResult>;
+  exportMarkdown(caseId: string, shape?: VerdictShape | null): Promise<ExportResult>;
   /**
    * 导出长图（D26 的后一半 / ui.md §7.2）。同吃 `reportPlan()`，只是换个渲染目标。
-   * 超长时按顶层小节切成几张，`pages` 会说共几张。
+   * 超长时按顶层小节切成几张，`pages` 会说共几张。`shape` 同上一条，不传就装错。
    */
-  exportImage(caseId: string): Promise<ExportResult>;
+  exportImage(caseId: string, shape?: VerdictShape | null): Promise<ExportResult>;
   /**
    * 长图那个离屏视图取自己要渲染的东西。**只有它会调**：token 由 main 现给现收，
    * 对不上就是 null——正常界面拿不到 token，也就取不走别人的快照。

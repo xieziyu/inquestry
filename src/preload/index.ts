@@ -31,8 +31,10 @@ const api: InquestryApi = {
   answerOperator: (caseId: string, reply: OperatorReply) =>
     ipcRenderer.invoke('case:answerOperator', caseId, reply),
   decideGate: (caseId: string, d: GateDecision) => ipcRenderer.invoke('case:decideGate', caseId, d),
-  exportMarkdown: (caseId: string) => ipcRenderer.invoke('case:exportMarkdown', caseId),
-  exportImage: (caseId: string) => ipcRenderer.invoke('case:exportImage', caseId),
+  exportMarkdown: (caseId: string, shape?: VerdictShape | null) =>
+    ipcRenderer.invoke('case:exportMarkdown', caseId, shape ?? null),
+  exportImage: (caseId: string, shape?: VerdictShape | null) =>
+    ipcRenderer.invoke('case:exportImage', caseId, shape ?? null),
   exportPayload: (token: string) => ipcRenderer.invoke('export:payload', token),
   searchCases: (term: string) => ipcRenderer.invoke('case:search', term),
   snapshot: () => ipcRenderer.invoke('case:snapshot'),

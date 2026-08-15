@@ -16,15 +16,29 @@ import { SHAPE_COPY, type ChainLink, type ReportPlan, type ReportSection } from 
 
 /**
  * @param only 只画这几块（长图的某一页）。不给就是整份。
+ * @param shapeControl 屏幕上那份的形态选择器，长在纸头 stamp 那一行的位置（[ui] §6）。
+ *
+ * **它是个参数而不是这里的一个 `if`**：长图视图压根不传，控件因此**不可能**漏进导出——
+ * 靠"记得在导出时删掉"的写法，漏了不会报错，只会在图片里印出一排按钮。
+ * 同理它不是"多一个块"：`only` 那条分页逻辑按 `data-block` 认块，多一个块就会多切一页。
  */
 export function ReportPaper({
   meta,
   plan,
   only,
+  shapeControl,
+  anchors = true,
 }: {
   meta: CaseMeta;
   plan: ReportPlan;
   only?: readonly string[];
+  shapeControl?: React.ReactNode;
+  /**
+   * 小节要不要带 `id`。报告屏上同一份纸会**在同一个文档里画好几遍**（正文一遍、
+   * 交付台的缩略一遍、导出预览里再一遍），带 id 的话同一个 `sec-*` 出现多次：
+   * 锚点跳转会跳到先出现的那一个，看着像"点了没反应"。缩略那几份传 `false`。
+   */
+  anchors?: boolean;
 }) {
   const show = (id: string) => !only || only.includes(id);
   /** 认不出的引用原样印 id：印错一个编号比印一个陌生 id 更糟。 */
@@ -34,21 +48,29 @@ export function ReportPaper({
     <>
       {show(HEAD_BLOCK) && (
         <header data-block={HEAD_BLOCK}>
-          <h1>{meta.title}</h1>
-          <p className="question">{meta.question}</p>
-          <p className="stamp">
-            <span>
-              按{SHAPE_COPY[plan.shape].label}装 · 主体是{SHAPE_COPY[plan.shape].body}
-            </span>
-            <span className="sep">·</span>
-            <span>
-              基准日期 <code>{meta.incidentDate}</code> {meta.tzOffset}
-            </span>
-          </p>
-          {/* 还没收尾时这份是**预览**：形态还会变，章节跟着变。说出来比让人以为它已经定了好 */}
-          {!plan.frozen && (
-            <p className="preview">
-              这次调查还没收尾，形态是按现有数据推的，报告会跟着调查一起变。定稿那一下才冻。
+          {/* 左边是这次调查在问什么，右边是它的身份证。1240 的宽度本来就摊得开，
+              挤成一行读起来像状态栏 */}
+          <div className="ask">
+            <h1>{meta.title}</h1>
+            <p className="question">{meta.question}</p>
+          </div>
+          <dl className="idcard">
+            <dt>Case</dt>
+            <dd>{meta.id}</dd>
+            <dt>基准日期</dt>
+            <dd>{meta.incidentDate}</dd>
+            <dt>时区</dt>
+            <dd>{meta.tzOffset}</dd>
+            <dt>证据</dt>
+            <dd>{plan.evidenceCount}</dd>
+          </dl>
+          {/* 屏幕上这一行可点，图片里它是一行字，说的是同一件事 */}
+          {shapeControl ?? (
+            <p className="stamp">
+              <span>
+                按{SHAPE_COPY[plan.shape].label}装 · 主体是{SHAPE_COPY[plan.shape].body}
+              </span>
+              {!plan.frozen && <span>这次调查还没收尾，报告会跟着它一起变</span>}
             </p>
           )}
           {/* 半程报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
@@ -59,7 +81,7 @@ export function ReportPaper({
       )}
 
       {plan.sections.filter((s) => show(s.id)).map((s) => (
-        <section key={s.id} id={`sec-${s.id}`} data-block={s.id}>
+        <section key={s.id} id={anchors ? `sec-${s.id}` : undefined} data-block={s.id}>
           <h2>
             {s.title}
             {/* 「哪些是投影、哪些是生成」对读者可见——把 D17 变成能自己验证的承诺 */}
@@ -100,11 +122,20 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
   const b = section.body;
   switch (b.kind) {
     case 'verdict':
+      // 根因提级：它是整份报告的答案，不该和「影响面」长一个样。左边那条主色竖线是
+      // 全屏少数几处用填色的地方之一——竖线不是块，不会和语义色打架
       return (
-        <>
+        <div className="rootblock">
           <p className="big">{b.text}</p>
-          {b.confidence !== null && <p className="conf">置信度 {b.confidence.toFixed(2)}</p>}
-        </>
+          {b.confidence !== null && (
+            <p className="conf">
+              置信度 {b.confidence.toFixed(2)}
+              <span className="bar">
+                <i style={{ width: `${Math.round(b.confidence * 100)}%` }} />
+              </span>
+            </p>
+          )}
+        </div>
       );
 
     case 'contrast':

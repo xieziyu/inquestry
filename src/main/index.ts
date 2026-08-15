@@ -315,10 +315,17 @@ function lastAgentChoice(caseId: string): AgentChoice {
  *
  * `target` 只给无人值守自检用（`INQUESTRY_EXPORT_MD`）：给了就直接写，不弹保存框。
  */
-async function exportMarkdown(caseId: string, target?: string): Promise<ExportResult> {
+async function exportMarkdown(
+  caseId: string,
+  shape: VerdictShape | null,
+  target?: string,
+): Promise<ExportResult> {
   const runner = cases.currentIf(caseId);
   if (!runner) return { ok: false, reason: 'no-case', error: '这次调查不在手上，可能刚切走了。' };
-  const input = reportInput(runner.snapshot());
+  // 🔴 **形态由界面带过来，数据仍由这儿的快照出**：形态是人挑的一个判断（[ui] §6），
+  // 在这边照建议值另装一遍的话，屏上看的与导出的会是两份不同章节的报告，且两边都不报错。
+  // `reportInput` 自己压着优先级——已冻住的那个盖过它，所以定稿之后传什么都不作数
+  const input = reportInput(runner.snapshot(), shape);
   // 建单信息读不出来就没有报告可导。**说出来**，别写一个只有页脚的空文件
   if (!input) return { ok: false, reason: 'no-case', error: '这次调查还没有建单信息，导不出报告。' };
 
@@ -373,10 +380,15 @@ type ExportLayout = { width: number; pages: { top: number; height: number }[] };
  * 而且未获焦点时会回过期帧（ui.md §11 实测过）。这里走 CDP 的
  * `Page.captureScreenshot`，尺寸由 `deviceScaleFactor` 定死，超出视口的部分也拍得到。
  */
-async function exportImage(caseId: string, target?: string): Promise<ExportResult> {
+async function exportImage(
+  caseId: string,
+  shape: VerdictShape | null,
+  target?: string,
+): Promise<ExportResult> {
   const runner = cases.currentIf(caseId);
   if (!runner) return { ok: false, reason: 'no-case', error: '这次调查不在手上，可能刚切走了。' };
-  const input = reportInput(runner.snapshot());
+  // 形态同 Markdown 那条：两种导出共用一份章节组装，形态也就得共用同一个来源
+  const input = reportInput(runner.snapshot(), shape);
   if (!input) return { ok: false, reason: 'no-case', error: '这次调查还没有建单信息，导不出报告。' };
 
   // **先问落点再渲染**：反过来的话人要对着一个没反应的按钮等上几秒才等到保存框
@@ -612,6 +624,11 @@ function pngSize(buf: Buffer): { w: number; h: number } {
  *
  * 顺序照人的动作走：首页那份最近列表里点一行 → 切过去并翻到工作区。
  * 手上已经有工作区（`.toreport` 在）时什么都不做。
+ *
+ * 🔴 **这一段挂的是界面上的类名，界面一改它就悄悄失效**：改完首页那份最近列表之后，
+ * 它在这儿找了很久早已不存在的 `.crow`，表现是每一次无人值守跑都报「no-case」——
+ * 而那句话读起来像库里没有调查，于是人会去补数据，补完照样是它。
+ * 类名带上屏名（`.home`）是为了让这种失效至少不会被别处一个同名类顶掉。
  */
 const ENTER_WORKSPACE = `(async () => {
   const wait = async (sel) => {
@@ -623,7 +640,7 @@ const ENTER_WORKSPACE = `(async () => {
     return null;
   };
   if (document.querySelector('.reportscreen') || document.querySelector('.toreport')) return 'ok';
-  const row = await wait('.crow');
+  const row = await wait('.home .track .tr');
   if (!row) return 'no-case';
   row.click();
   return (await wait('.toreport')) ? 'ok' : 'no-workspace';
@@ -892,12 +909,12 @@ app.whenReady().then(async () => {
     cases.currentIf(caseId)?.decideGate(d) ?? false,
   );
   // 开发期自检用 `INQUESTRY_EXPORT_MD` 指定落点，好让界面那一下不卡在保存框上
-  ipcMain.handle('case:exportMarkdown', (_e, caseId: string) =>
-    exportMarkdown(caseId, process.env.INQUESTRY_EXPORT_MD),
+  ipcMain.handle('case:exportMarkdown', (_e, caseId: string, shape: VerdictShape | null) =>
+    exportMarkdown(caseId, shape, process.env.INQUESTRY_EXPORT_MD),
   );
   // 开发期自检用 `INQUESTRY_EXPORT_IMG` 指定落点，同 Markdown 那条
-  ipcMain.handle('case:exportImage', (_e, caseId: string) =>
-    exportImage(caseId, process.env.INQUESTRY_EXPORT_IMG),
+  ipcMain.handle('case:exportImage', (_e, caseId: string, shape: VerdictShape | null) =>
+    exportImage(caseId, shape, process.env.INQUESTRY_EXPORT_IMG),
   );
   // 只有长图那个离屏视图会调；token 对不上就什么都不给
   ipcMain.handle('export:payload', (_e, token: string) => exportPayloads.get(token) ?? null);

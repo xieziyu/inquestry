@@ -36,7 +36,10 @@ export type IconName =
   | 'deny'
   | 'play'
   | 'folder'
-  | 'arrow';
+  | 'arrow'
+  | 'copy'
+  | 'undo'
+  | 'expand';
 
 const PATHS: Record<IconName, React.JSX.Element> = {
   plus: <path d="M12 5v14M5 12h14" />,
@@ -71,6 +74,22 @@ const PATHS: Record<IconName, React.JSX.Element> = {
       <path d="M5 10v9.5h14V10M10 14h4" />
     </>
   ),
+  /** 复制 = 两张叠起来的纸。 */
+  copy: (
+    <>
+      <path d="M9 9.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2z" />
+      <path d="M15.5 7.5v-1a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1" />
+    </>
+  ),
+  /** 还原 = 一条回头的弧。与 `back` 分开：那个是"去别处"，这个是"把值退回去"。 */
+  undo: (
+    <>
+      <path d="M4.5 9.5h9a5.5 5.5 0 1 1 0 11H8" />
+      <path d="M8 5l-3.5 4.5L8 14" />
+    </>
+  ),
+  /** 看全 = 四个角撑开。 */
+  expand: <path d="M9.5 4.5H4.5V9.5M14.5 4.5h5V9.5M19.5 14.5v5h-5M9.5 19.5h-5v-5" />,
   back: <path d="M19 12H5m6-6l-6 6 6 6" />,
   arrow: <path d="M5 12h14m-6-6l6 6-6 6" />,
   chevron: <path d="M6 9.5l6 6 6-6" />,

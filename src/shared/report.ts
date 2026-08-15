@@ -120,14 +120,21 @@ const TITLES: Record<string, string> = {
   fix: '修复建议',
 };
 
-/** 报告屏与导出都从快照进来，形态怎么挑只此一处。 */
-export function reportInput(snap: Snapshot): ReportInput | null {
+/**
+ * 报告屏与导出都从快照进来，形态怎么挑只此一处。
+ *
+ * @param pick 人在报告屏上正预演的那一个（[ui] §6）。**优先级低于已冻住的那个**：
+ * 冻结之后事后没有入口再改，这里让它盖住的话，屏上会显示一份与库里不同的报告。
+ * 参数留在这个函数里而不是让调用方自己改 `input.shape`——挑形态只此一处，
+ * 屏上再挑一次的话，屏幕与两种导出迟早各按各的装。
+ */
+export function reportInput(snap: Snapshot, pick?: VerdictShape | null): ReportInput | null {
   if (!snap.case) return null;
   return {
     case: snap.case,
-    // 收尾那一下才落形态；在那之前照推断值预览——预览与冻结之后装的是同几块，
-    // 人于是在按下不可逆那一下之前就见过这份报告长什么样
-    shape: snap.case.verdictShape ?? snap.shapeSuggestion.shape,
+    // 收尾那一下才落形态；在那之前照推断值预览，人动过手就照人挑的——预览与冻结之后
+    // 装的是同几块，于是在按下不可逆那一下之前就见过这份报告长什么样
+    shape: snap.case.verdictShape ?? pick ?? snap.shapeSuggestion.shape,
     frozen: snap.case.verdictShape !== null,
     steps: snap.steps,
     incident: snap.incident,
