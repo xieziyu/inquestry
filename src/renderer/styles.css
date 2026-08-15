@@ -536,7 +536,7 @@ button.primary:has(> .ic) { gap: 6px; }
 .tailcard::after { content: none; }
 .tailcard.tail-closed { border-left-color: var(--ok) !important; }
 /* 🔴 **已归档不给 `--bad`，留上面那档中性色。** 那个色说的是「被推翻」，半程放弃不是推翻
-   （同一条见 `caseline.tsx` 的 `caseTerminal`：首页 `.tr.shut .nd` 与报告纸头的归档说明也都走中性）。 */
+   （同一条见 `caseline.tsx` 的 `caseTerminal`：两个列表的 `.nd.shut` 与报告纸头的归档说明也都走中性）。 */
 .tailcard .ord { color: var(--dim); letter-spacing: .04em; }
 
 /* 根因那一句是这张卡上唯一"要读"的内容，字号与 step 卡的结论对齐 */
@@ -963,36 +963,51 @@ button.primary:has(> .ic) { gap: 6px; }
 }
 .tr:first-child::before { top: 50%; }
 .tr:last-child::before { bottom: 50%; }
-/* ⚠️ **必须跨满整行**（`1 / -1`）：只占第一行的话它落在标题那条基线上，
-   而主干那两个收口按的是行高的一半，首尾两个节点会与线错开二十来像素。 */
-/* 五档节点只用色板里的两个语义色 + 中性灰（ui.md §5「语义色只有三个，不加第四个」）。
+/* ── 状态节点 ──
+   🔴 **首页轨道与历史列表共用这一颗。** 档位类挂在节点自己身上（`nd wait` 而不是行上的
+   `.tr.wait .nd`），所以这一段不带任何上下文，两处照抄同一份。分档由 `caseline.tsx`
+   的 `caseNode` 一家给——同一次调查在两个列表里长成两个样子的话，人会以为那是两次调查。
+   摆位仍旧各页各写（下面 `.tr .nd` 与 `.hitrow .nd` 那两条）。
+
+   五档只用色板里的两个语义色 + 中性灰（ui.md §5「语义色只有三个，不加第四个」）。
    **填实 / 空心分的是「这一条此刻还动不动」**，与报告时间轴那条同一个母题（§6）。
    ⚠️ 别再借 `--mk-tangle`：那是标记专用色（见文件头），比 `--dim-2` 亮，
    借来给最常见的那一档之后，最该安静的节点成了整条轨道上最扎眼的一个。 */
-.tr .nd {
-  position: relative; z-index: 1; grid-column: 1; grid-row: 1 / -1;
-  justify-self: center; align-self: center;
+.nd {
   width: 9px; height: 9px; border-radius: 50%;
-  background: var(--bg); border: 1px solid var(--dim-2);
+  background: transparent; border: 1px solid var(--dim-2);
 }
 /* 🔴 **它必须压过下面那颗「运行中」**：暖色是「有事找你」的全局唯一信号（§4），
    而余光扫过去认的是色块不是圆环——空心橙圈反过来比实心蓝弱，人会先看见在跑的那一条 */
-.tr.wait .nd {
+.nd.wait {
   background: var(--warn); border-color: var(--warn);
   box-shadow: 0 0 0 4px rgba(224, 169, 74, .16);
 }
-.tr.live .nd {
+.nd.live {
   width: 11px; height: 11px; background: var(--accent); border-color: var(--accent);
   box-shadow: 0 0 0 4px rgba(90, 158, 221, .14);
-  /* 动效只有两处，这是其中一处：进行中的状态呼吸（ui.md §5） */
+  /* 自己会动的只有两样，这是其中一样：进行中的状态呼吸（ui.md §5）。
+     那条数的是「哪几样东西会动」，不是「在几个地方动」——两个列表共用的是同一样 */
   animation: breathe 2.4s ease-in-out infinite;
 }
 /* 已定稿：结论「成立」那个色，空心是因为它已经收口了。已归档没有结论，留中性。
    两档都别用 `--line`——它对底只有 1.5:1，等于在时间轴上留了个洞 */
-.tr.seal .nd { border-width: 1.5px; border-color: var(--accent); }
-.tr.shut .nd { width: 7px; height: 7px; background: var(--dim-2); border-color: var(--dim-2); }
+.nd.seal { border-width: 1.5px; border-color: var(--accent); }
+.nd.shut { width: 7px; height: 7px; background: var(--dim-2); border-color: var(--dim-2); }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
-@media (prefers-reduced-motion: reduce) { .tr.live .nd { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .nd.live { animation: none; } }
+
+/* ⚠️ **必须跨满整行**（`1 / -1`）：只占第一行的话它落在标题那条基线上，
+   而主干那两个收口按的是行高的一半，首尾两个节点会与线错开二十来像素。 */
+.tr .nd {
+  position: relative; z-index: 1; grid-column: 1; grid-row: 1 / -1;
+  justify-self: center; align-self: center;
+}
+/* ⚠️ 底色填成页面底色**只有轨道这边要**：主干那条线从节点底下穿过去，留透明的话
+   线会横穿空心节点的中间。历史列表没有那条线，所以那边照 `.nd` 的透明来。
+   🔴 **实心那三档要显式排掉。** `.tr .nd` 与 `.nd.live` 特指度一样，只靠先后决胜的话
+   这一条会把在跑 / 等你 / 已归档三颗一起刷成底色——三颗实心点就此全变空心，且不报错。 */
+.tr .nd:not(.wait):not(.live):not(.shut) { background: var(--bg); }
 
 .tr .title { grid-column: 2; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 划线只说「这条不成立了」，所以只给已归档。已定稿的标题照常读——它是日后要翻回来用的记录，
@@ -1007,8 +1022,9 @@ button.primary:has(> .ic) { gap: 6px; }
 .home .st.idle { color: var(--dim); }
 .home .st.run { color: var(--accent); }
 
-/* 历史调查那两段列表的外框（首页那条轨道不用框，线本身就是结构） */
-.cases { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+/* 历史调查那两段列表：一行一张卡、之间留缝（首页那条轨道相反，它靠一条通长的线做结构，
+   所以那边行与行之间一格都不能留——见 `.home .track`） */
+.cases { display: flex; flex-direction: column; gap: 7px; }
 .badge { font-size: 10.5px; padding: 1px 6px; border-radius: 9px; flex: 0 0 auto; }
 /* 暖色是「需要人动手」的全局专属，列表上只有这一个徽标用它 */
 .badge.todo { background: var(--warn); color: var(--on-warn); font-weight: 600; }
@@ -1044,76 +1060,105 @@ button.primary:has(> .ic) { gap: 6px; }
 .filters .seg button.on { background: var(--panel-2); color: var(--text); }
 .filters .seg button:disabled { opacity: .35; cursor: default; }
 
-/* 一行调查是一张两列两行的网格：
-     左列 = 标题 / 出处·摘要（整块是一颗按钮，键盘够得到）
-     右列 = 状态·时间（上）/ 两枚动作（下）
-   右列定宽，所以**行与行的状态与时间是对齐的**——挂在标题后面的话，
+/* 一行调查从左到右分四段读：
+     ① 状态节点  ② 标题 / 出处·摘要（①② 合起来是一颗按钮，键盘够得到）
+     ③ 状态·时间（竖着叠、右对齐）  ④ 两枚动作，自己占一格
+   ③ 右对齐，所以**行与行的状态与时间是对齐的**——挂在标题后面的话，
    每一行的落点跟着标题长短跳，一列读下来全是错位的。 */
 .hitrow {
   position: relative;
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start;
-  column-gap: 14px; padding: 9px 14px 8px;
-  border-bottom: 1px solid var(--line); background: var(--panel);
-  transition: background .16s ease;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
+  column-gap: 18px; padding: 12px 12px 12px 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  transition: background .16s ease, border-color .16s ease;
 }
-.hitrow:last-child { border-bottom: 0; }
 .hitrow:hover { background: var(--panel-2); }
-.hitrow.cur { box-shadow: inset 2px 0 0 var(--accent); background: var(--tint); }
+/* 🔴 **五档不能只靠右边那个状态词区分**：那是一个 12px 的字，一屏五六行扫下来分不出
+   谁还欠着事。区分落在三层上——节点（形状与颜色，`.nd` 那一段）· 状态词的颜色 ·
+   这里的边线。**底色与圆角一律不动**：终态一变底色就不像卡片了，而它们仍旧是卡片。 */
+.hitrow.seal, .hitrow.shut { border-color: var(--line-soft); }
+.hitrow.wait { border-color: rgba(224, 169, 74, .30); }
+.hitrow.cur { box-shadow: inset 2.5px 0 0 var(--accent); background: var(--tint); }
 .hitrow.cur:hover { background: var(--panel-2); }
+/* 🔴 左缘那道竖条说的是「当前」，但**颜色让暖色赢**：暖色是「有事找你」的全局唯一信号（§4），
+   一条边是当前边等你的调查，那道高亮再说「当前」就把唯一该抢眼的那件事压下去了。
+   与节点分档同一条（`.nd.wait` 压过 `.nd.live`）。 */
+.hitrow.cur.wait { box-shadow: inset 2.5px 0 0 var(--warn); }
 /* 确认挂着时整行压暗一档：这时该读的是那句话，不是它上面这一行 */
 .hitrow.wiping .pick, .hitrow.wiping .side { opacity: .55; }
 
+/* 节点与那两行字合成一颗按钮：节点不接点击，但它属于"这一行是什么"，跟着一起亮 */
 .hitrow .pick {
-  grid-column: 1; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 4px;
+  grid-column: 1; display: grid; grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 11px; row-gap: 4px; align-items: center;
   min-width: 0; background: none; border: 0; padding: 0; margin: 0;
   color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .hitrow .pick:disabled { cursor: default; }
+.hitrow .nd { grid-column: 1; grid-row: 1 / -1; justify-self: center; align-self: center; }
 /* 点整行都算切过去，不只点得到标题那一块——右边那半（状态与时间）本来也是这一行的一部分。
    用铺满的伪元素而不是把整行做成 button：动作按钮嵌不进 button（不能套），
    所以它们与 `.pick` 并排、由这一层压在下面，再各自靠 z-index 浮上来。
    确认挂着时 `.pick` 是 disabled，它的 pointer-events 连着这层一起没了——正是要的 */
 .hitrow .pick::after { content: ''; position: absolute; inset: 0; }
 .hitrow > .acts, .hitrow .confirm { position: relative; z-index: 1; }
-.hitrow .l1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.hitrow .l1 .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hitrow .l1 { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hitrow .l1 .t { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .hitrow .l1 .t.shut { text-decoration: line-through; text-decoration-color: var(--line); color: var(--dim); }
 /* 命中出处与摘要占一整行——「为什么它被搜出来」正是要看的 */
-.hitrow .l2 { font-size: 12px; color: var(--dim); display: flex; gap: 8px; min-width: 0; }
+.hitrow .l2 {
+  grid-column: 2; font-size: 12px; color: var(--dim);
+  display: flex; align-items: baseline; gap: 7px; min-width: 0;
+}
 .hitrow .l2 .where { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--dim-2); }
+.hitrow .l2 .dot { flex: 0 0 auto; color: var(--dim-2); opacity: .55; font-size: 11px; }
 .hitrow .l2 .snip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 状态写字不写图标（ui.md §5），但四档不能是同一个灰——扫一眼要分得出谁还活着 */
+/* 状态写字不写图标（ui.md §5），但几档不能是同一个灰——扫一眼要分得出谁还活着。
+   ⚠️ 竖着叠、两行各自右对齐：横排时相对时间的字数从「刚刚」到「2026-08-06」差着一倍，
+   要给它定死一个 `min-width` 才不会把前面那个状态词推得每行一个位置。竖排之后两者不再
+   互相推，那条定宽也就跟着去掉了——想改回横排的话记得把它加回来。 */
 .hitrow .side {
-  grid-column: 2; grid-row: 1; display: flex; align-items: baseline; justify-content: flex-end;
-  gap: 8px; flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--dim);
+  grid-column: 2; display: flex; flex-direction: column; align-items: flex-end;
+  gap: 2px; flex: none; line-height: 1.35;
 }
+.hitrow .side .stat { font-size: 12px; color: var(--dim); }
 .hitrow .side.run .stat { color: var(--accent); }
 .hitrow .side.done .stat { color: var(--dim-2); }
-/* 定宽右对齐：相对时间的字数从「刚刚」到「2026-08-06」差着一倍，不定宽的话
-   前面那个状态词会被它推得每行一个位置，一列读下来全是错位的 */
-.hitrow .side .when { min-width: 5.2em; text-align: right; color: var(--dim-2); }
+/* 两个终态拆开：已定稿是这套状态里唯一有结论的一档，状态词跟着它那颗蓝色空心节点走
+   （`caseTerminal` 那条注释是同一件事）；已归档没有结论，留中性灰 */
+.hitrow.seal .side.done .stat { color: var(--accent); opacity: .85; }
+.hitrow .side .when { font-family: var(--mono); font-size: 11px; color: var(--dim-2); }
 
 /* 🔴 **常驻而不是 hover 才出现。** 整条藏起来的代价是没人知道它们在——
    这一页原先只有一枚「导出」，而它从头到尾没在任何一次截图里出现过。
-   压到 .45 是为了让它们在余光里退到标题后面，但仍看得出有东西可点。 */
+   压到 .4 是为了让它们在余光里退到标题后面，但仍看得出有东西可点。 */
 /* ⚠️ 一律写成直接子代（`>`）：确认块里也有一个 `.acts`，
-   后代选择器会把「网格第二列、压到 .45」这套摆位一起套到它头上 */
+   后代选择器会把「自己占一格、压到 .4」这套摆位一起套到它头上 */
 .hitrow > .acts {
-  grid-column: 2; grid-row: 2; display: flex; gap: 6px; flex: none; justify-self: end;
-  opacity: .45; transition: opacity .16s ease;
+  grid-column: 3; display: flex; gap: 4px; flex: none;
+  position: relative; z-index: 1; opacity: .4; transition: opacity .16s ease;
+}
+/* 一道发丝线把「能做什么」与「它是什么」隔开。没有它的时候这一列从上到下是
+   「状态 / 时间 / 报告 / 删除」，前两样是信息、后两样是控件，而它们读起来是一列 */
+.hitrow > .acts::before {
+  content: ''; position: absolute; left: -9px; top: 50%; transform: translateY(-50%);
+  height: 24px; width: 1px; background: var(--line-soft);
 }
 .hitrow:hover > .acts, .hitrow > .acts:focus-within { opacity: 1; }
 .hitrow > .acts button {
+  display: inline-flex; align-items: center; gap: 5px;
   background: none; border: 1px solid transparent; color: var(--dim);
-  padding: 2px 8px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 11.5px;
+  padding: 5px 10px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 11.5px;
   transition: background .16s ease, color .16s ease, border-color .16s ease;
 }
-.hitrow > .acts button:hover { background: var(--panel); border-color: var(--line); color: var(--text); }
+/* 指到这一行时两枚一起浮成按钮的样子，指到某一枚才提亮那一枚 */
+.hitrow:hover > .acts button { background: var(--panel); border-color: var(--line-soft); }
+.hitrow > .acts button:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 /* 只在指到它的时候才红：默认就红的话，一屏调查每一行都挂着一个警告色 */
-.hitrow > .acts button.wipe:hover { color: var(--bad); border-color: var(--bad); background: none; }
+.hitrow > .acts button.wipe:hover { color: var(--bad); border-color: rgba(201, 86, 76, .45); background: none; }
 /* 确认块占满整行的宽（`.confirm` 本体的样式与报告屏那两档共用，见「收尾」那一段） */
-.hitrow .confirm { grid-column: 1 / -1; grid-row: 3; margin-top: 10px; }
+.hitrow .confirm { grid-column: 1 / -1; margin-top: 12px; position: relative; z-index: 1; }
 .hitrow .confirm > p b { color: #fff2d8; font-weight: 600; margin: 0 2px; }
 
 .loadmore {

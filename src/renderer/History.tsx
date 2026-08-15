@@ -7,7 +7,7 @@ import type {
   CaseListRow,
   DeleteOutcome,
 } from '../shared/ipc.js';
-import { ago, caseShape, caseState, caseTerminal, rootLabel, TodoBadge } from './caseline.js';
+import { ago, caseNode, caseShape, caseState, caseTerminal, rootLabel, TodoBadge } from './caseline.js';
 import { freshenHits } from './drafts.js';
 
 /** ≥3 字走得到索引，快到可以边打边查。 */
@@ -359,8 +359,11 @@ function Row({
 }) {
   const st = caseState(c);
   const shape = caseShape(c);
+  // 一个 `caseNode` 同时决定节点长什么样与这一行的边线/竖条走哪个色：
+  // 各算各的话，一条挂着待办的调查完全可能节点是暖的而边线还是中性的
+  const node = caseNode(c);
   return (
-    <div className={`hitrow ${c.current ? 'cur' : ''} ${wiping ? 'wiping' : ''}`}>
+    <div className={`hitrow ${node} ${c.current ? 'cur' : ''} ${wiping ? 'wiping' : ''}`}>
       {/*
         整行是一颗按钮而不是带 onClick 的 div：**键盘要够得到**。这一页是切换调查的唯一入口，
         div 那种写法在 Tab 序列里压根不存在，于是不用鼠标就换不了调查。
@@ -372,6 +375,8 @@ function Row({
         title={c.current ? '这就是当前打开的调查' : '切过去；正在跑的那些一个都不会中断'}
         onClick={() => onOpen(c.id)}
       >
+        {/* 与首页轨道同一颗（`caseNode`）：五档各有形状与颜色，扫一眼就分得出谁还活着 */}
+        <span className={`nd ${node}`} />
         <span className="l1">
           <span className={`t ${caseTerminal(c.status) ?? ''}`}>{c.title}</span>
           {c.current && <span className="badge cur">当前</span>}
@@ -384,6 +389,7 @@ function Row({
                 {HIT_WHERE[hit.where]}
                 {hit.hits > 1 ? ` ×${hit.hits}` : ''}
               </span>
+              <span className="dot">·</span>
               <span className="snip">{hit.snippet}</span>
             </>
           ) : (
@@ -391,6 +397,7 @@ function Row({
               <span className="where" title={c.projectRoot ?? '这条调查没有工作区'}>
                 {shape ?? rootLabel(c.projectRoot)}
               </span>
+              <span className="dot">·</span>
               <span className="snip">
                 {c.headline ?? (c.steps ? `${c.steps} 步，还没有结论` : '还没开始查')}
               </span>
@@ -399,7 +406,7 @@ function Row({
         </span>
       </button>
 
-      {/* 状态与时间钉在右上：两行的右列各占一格，行与行之间因此对得齐（标题长短不影响） */}
+      {/* 状态与时间各占一格竖着叠、一起右对齐，行与行之间因此对得齐（标题长短不影响） */}
       <span className={`side ${st.tone}`}>
         <span className="stat">{st.label}</span>
         <span className="when">{ago(c.updatedAt)}</span>
@@ -408,6 +415,8 @@ function Row({
       {/*
         两枚动作常驻但压暗，鼠标进这一行才提亮。整条藏起来（原先的 `opacity: 0`）的代价是
         没人知道它们在——「导出」当初就是这么被当成这一页仅有的动作的。
+        **它们自己占最右一格**，不叠在状态时间下面：叠着的时候这一列从上到下是
+        「状态 / 时间 / 报告 / 删除」四样，前两样是信息、后两样是控件，读起来是一列。
       */}
       <span className="acts">
         <button

@@ -65,6 +65,20 @@ export function caseTerminal(status: CaseBrief['status']): 'seal' | 'shut' | nul
   return null;
 }
 
+/**
+ * 这一行左边那颗状态节点该是哪一档：`seal` / `shut` / `wait` / `live` / `''`（普通空心）。
+ *
+ * ⚠️ **分档次序不是 `caseState` 那一套**：等人处理排在运行中之前。暖色是「需要人动手」的
+ * 全局专属（ui.md §4），一条边跑边等人的调查该先说它在等你。
+ *
+ * 🔴 **首页轨道与历史列表共用这一颗**（两处都渲染 `<span className={`nd ${caseNode(c)}`} />`，
+ * 档位类挂在节点自己身上而不是行上，样式因此不带上下文、两页共用一份）。
+ * 同一次调查在两个列表里长成两个样子的话，人会以为那是两次调查——与本文件头上那条同源。
+ */
+export function caseNode(c: CaseBrief): 'seal' | 'shut' | 'wait' | 'live' | '' {
+  return caseTerminal(c.status) ?? (c.todos > 0 ? 'wait' : c.running ? 'live' : '');
+}
+
 /** 已定稿的调查多一句"按哪种形态装的"——那是它最有信息量的一栏。 */
 export function caseShape(c: CaseListRow): string | null {
   return c.verdictShape ? SHAPE_COPY[c.verdictShape].label : null;

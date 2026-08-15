@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CaseBrief, IntakeOptions } from '../shared/ipc.js';
-import { ago, caseState, caseTerminal, TodoBadge } from './caseline.js';
+import { ago, caseNode, caseState, caseTerminal, TodoBadge } from './caseline.js';
 import { Icon } from './Icon.js';
 import { Intake } from './Intake.js';
 import { LogoMark } from './LogoMark.js';
@@ -86,20 +86,16 @@ export function Home({
 /**
  * 轨道上的一条调查。
  *
- * ⚠️ 节点分档的次序**不是 `caseState` 那一套**：等人处理排在运行中之前。
- * 暖色是「需要人动手」的全局专属（ui.md §4），一条边跑边等人的调查该先说它在等你。
- *
- * 两个终态**分成两档**（`caseTerminal`）：已定稿是这套状态里唯一有结论的，节点给「成立」那个色、
- * 标题照常读；已归档才压暗划掉，节点留中性——`--bad` 说的是「被推翻」，半程放弃不是推翻，
- * 借它用等于给那个色添一层新含义。
+ * 节点分档见 `caseNode`（历史列表用的是同一颗）。两个终态**分成两档**（`caseTerminal`）：
+ * 已定稿是这套状态里唯一有结论的，节点给「成立」那个色、标题照常读；已归档才压暗划掉，
+ * 节点留中性——`--bad` 说的是「被推翻」，半程放弃不是推翻，借它用等于给那个色添一层新含义。
  */
 function TrackRow({ c, onOpen }: { c: CaseBrief; onOpen: (id: string) => void }) {
   const st = caseState(c);
   const term = caseTerminal(c.status);
-  const node = term ?? (c.todos > 0 ? 'wait' : st.tone === 'run' ? 'live' : '');
   return (
-    <button className={`tr ${node}${c.current ? ' cur' : ''}`} onClick={() => onOpen(c.id)}>
-      <span className="nd" />
+    <button className={`tr${c.current ? ' cur' : ''}`} onClick={() => onOpen(c.id)}>
+      <span className={`nd ${caseNode(c)}`} />
       <span className={`title ${term ?? ''}`}>{c.title}</span>
       <span className="when">{ago(c.updatedAt)}</span>
       <span className="m">

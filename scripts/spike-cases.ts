@@ -50,7 +50,7 @@ import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/sha
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
-import { caseState, rootParent } from '../src/renderer/caseline.js';
+import { caseNode, caseState, rootParent } from '../src/renderer/caseline.js';
 import { stateOf } from '../src/renderer/RunBar.js';
 import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 
@@ -605,6 +605,28 @@ async function main() {
       word('closed', false, true) === '已定稿' &&
       word('aborted', false, true) === '已归档',
     `没跑过=${word('open', false, false)} 跑过停了=${word('open', false, true)} 在跑=${word('open', true, true)} 定稿=${word('closed', false, true)} 归档=${word('aborted', false, true)}`,
+  );
+
+  // ── 状态节点的分档次序 ────────────────────────────────────────────────
+  //
+  // 首页轨道与历史列表如今共用 `caseNode`，所以"两页长得一样"由那一个函数保证，不必再验。
+  // 要验的是**它自己那两条压制关系**，它们各有理由且都不会报错：
+  //   · 等你 压过 运行中——暖色是「有事找你」的全局唯一信号（ui.md §4）。反过来的话，
+  //     一条边跑边等人的调查在两个列表里都显示成"在跑"，那条支线就此静静挂死（D28）。
+  //   · 终态 压过 等你——历史页那一行的边线与节点同吃这一个返回值，各算各的话，
+  //     一条已定稿却还挂着待办的调查会是"暖色的边配一颗蓝色空心节点"。
+  const nodeOf = (status: CaseBrief['status'], running: boolean, todos: number) =>
+    caseNode({ id: 'x', title: 'x', updatedAt: 0, current: false, loaded: false, started: true, status, running, todos });
+  check(
+    '节点分档：等你压过运行中，终态压过等你',
+    nodeOf('open', true, 1) === 'wait' &&
+      nodeOf('open', true, 0) === 'live' &&
+      nodeOf('open', false, 1) === 'wait' &&
+      nodeOf('open', false, 0) === '' &&
+      nodeOf('closed', false, 1) === 'seal' &&
+      nodeOf('aborted', true, 2) === 'shut',
+    `边跑边等你=${nodeOf('open', true, 1)} 只在跑=${nodeOf('open', true, 0)} 只等你=${nodeOf('open', false, 1)} ` +
+      `都没有=「${nodeOf('open', false, 0)}」 定稿还挂着待办=${nodeOf('closed', false, 1)} 归档=${nodeOf('aborted', true, 2)}`,
   );
 
   check(
