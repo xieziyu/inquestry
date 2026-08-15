@@ -21,6 +21,8 @@
 import {
   CASE_BOX_ID,
   STAGE,
+  TAIL_BOX_ID,
+  TAIL_VERDICT_LINES,
   TITLE_LINES,
   TRUNK,
   VERDICT_LINES,
@@ -85,9 +87,9 @@ const CHAT: ChatLine[] = [
   { id: 'c2', role: 'user', at: 3500, text: `${QUESTION}——另外刚发现同一个 cart_key 昨天也重过一次。` },
 ];
 
-const build = (steps: StepNode[], chat: ChatLine[]) => {
+const build = (steps: StepNode[], chat: ChatLine[], tail = false) => {
   const track = trackLayout(steps);
-  const layout = stageLayout(weaveChat(track.rows, chat), track.lanes, CASE_CARD);
+  const layout = stageLayout(weaveChat(track.rows, chat), track.lanes, CASE_CARD, tail);
   return { track, layout };
 };
 
@@ -360,6 +362,123 @@ const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
     '一步都没跑时舞台上只有信息卡，边界仍然算得出来',
     empty.boxes.length === 1 && empty.bounds.w > 0 && empty.bounds.h > 0 && empty.lastId === CASE_BOX_ID,
     `boxes=${empty.boxes.length} bounds=${empty.bounds.w}x${empty.bounds.h} —— 算不出边界的话"适应"会把画布缩到 NaN`,
+  );
+}
+
+// ── ⑪ 收束卡：主干的尾（ui.md §3.3）────────────────────────────────────────
+/**
+ * 🔴 这一组守的是**那条例外**：尾卡的坐标每帧重算，而 D23 说坐标只算一次。
+ * 例外成立的全部依据是"位移只发生在它自己身上"——所以下面两句必须同时为真：
+ * 尾卡在全图最低（它下面没有东西可推），加一步之后其余每张卡逐字不动。
+ *
+ * 只验第一句是不够的：一张最低的卡照样可以把旁白那一栏顶上去（旁白与它同列邻位）。
+ * 只验第二句更不够——那正是把尾卡钉死在某个 y 上也能过的检查。
+ */
+{
+  const bottom = (b: { y: number; h: number }) => b.y + b.h;
+  const { layout: TAILED } = build(STEPS, CHAT, true);
+  const tailBox = TAILED.byId.get(TAIL_BOX_ID);
+
+  check(
+    '尾卡的下沿是全图最低的一条，旁白也压在它上面',
+    !!tailBox && TAILED.boxes.every((b) => b.id === TAIL_BOX_ID || bottom(b) <= bottom(tailBox)),
+    tailBox
+      ? `尾卡下沿 ${bottom(tailBox)}，其余最低 ${Math.max(
+          ...TAILED.boxes.filter((b) => b.id !== TAIL_BOX_ID).map(bottom),
+        )} —— 低不过旁白的话，"终点不许是一句话"就等于没做`
+      : '尾卡压根没排出来',
+  );
+
+  /**
+   * **收尾时人和 agent 还在你一句我一句**：这是尾卡最容易失效的一处——旁白有自己一条游标，
+   * 只按主干算 y 的话，这几句会重新落到尾卡下面去，而画布最低点又变回一句话。
+   *
+   * ⚠️ 这里**必须堆够几句**：只补两句的话，旁白那一栏还没长过尾卡自己的高度，
+   * 于是"只按主干算"照样能过——那是一条恒真的检查，退回旧写法都发现不了。
+   */
+  const late: ChatLine[] = [
+    ...CHAT,
+    { id: 'c8', role: 'assistant', at: 9000, text: '影响面和遗留问题都收了，定稿闸是通的。形态我按分布型声明了——这次故障的主体就是那一刀切出来的分组。' },
+    { id: 'c9', role: 'user', at: 9500, text: '先别定稿，等运维把 edge-sh-03 摘了确认成功率回来再说。' },
+    { id: 'c10', role: 'assistant', at: 10_000, text: '好。摘完之后我再看一次同机房另外两台的成功率，确认那条链路是不是唯一的差异项。' },
+    { id: 'c11', role: 'user', at: 10_500, text: '摘了，成功率回到 99.4%。' },
+    { id: 'c12', role: 'assistant', at: 11_000, text: '那就对上了。我把这一条补进影响面那一步的证据里，剩下的等你定稿。' },
+  ];
+  const { layout: LATE } = build(STEPS, late, true);
+  const lateTail = LATE.byId.get(TAIL_BOX_ID)!;
+  check(
+    '收尾之后还在一来一回地说，最低的仍旧是尾卡而不是那几句',
+    LATE.boxes.every((b) => b.id === TAIL_BOX_ID || bottom(b) <= bottom(lateTail)),
+    `尾卡下沿 ${bottom(lateTail)}，旁白最低 ${Math.max(
+      ...LATE.boxes.filter((b) => b.kind === 'say').map(bottom),
+    )} —— 只按主干游标算 y 的话，这一条就是失败的`,
+  );
+
+  check(
+    '挂上尾卡不动任何一张已经落笔的卡',
+    FULL.boxes.every((b) => {
+      const now = TAILED.byId.get(b.id);
+      return !!now && now.x === b.x && now.y === b.y && now.h === b.h;
+    }),
+    '尾卡是追加在最下面的一张，它出生不该让别人让位',
+  );
+
+  /**
+   * 例外的正身：主干再长一步，**尾卡跟着下去，其余一张都不许动**。
+   * 反过来（尾卡不动）意味着新的一步会盖到它身上，那才是真的重叠。
+   */
+  {
+    const more = [...STEPS, step({ id: 's5' })];
+    const { layout: GROWN } = build(more, CHAT, true);
+    const moved = TAILED.boxes
+      .filter((b) => b.id !== TAIL_BOX_ID)
+      .filter((b) => {
+        const now = GROWN.byId.get(b.id);
+        return !now || now.x !== b.x || now.y !== b.y || now.h !== b.h;
+      });
+    const grownTail = GROWN.byId.get(TAIL_BOX_ID)!;
+    check(
+      '主干再长一步：尾卡跟着下去，别的卡一张都不动',
+      moved.length === 0 && grownTail.y > tailBox!.y,
+      moved.length
+        ? `这几张跟着挪了：${moved.map((m) => m.id).join(',')} —— 那就不是"位移只发生在它自己身上"了`
+        : `尾卡从 y=${tailBox!.y} 落到 y=${grownTail.y}，其余 ${TAILED.boxes.length - 1} 张逐字未动`,
+    );
+  }
+
+  check(
+    '尾卡的结论槽是定额，高度与它自己报的行数严格对得上',
+    tailBox!.kind === 'tail' &&
+      tailBox!.vdLines === TAIL_VERDICT_LINES &&
+      heightOf(tailBox!) === tailBox!.h,
+    `vdLines=${tailBox!.kind === 'tail' ? tailBox!.vdLines : -1} h=${tailBox!.h}/${heightOf(tailBox!)} —— ` +
+      '根因会换人、归档时整条不印，按内容算高度的话它每变一次就把旁白那一栏往上挤',
+  );
+
+  check(
+    '主干最后一步接到尾卡上',
+    TAILED.edges.some((e) => e.toId === TAIL_BOX_ID && e.kind === 'flow' && e.fromId === 's4'),
+    `实得 ${JSON.stringify(TAILED.edges.filter((e) => e.toId === TAIL_BOX_ID))} —— ` +
+      '不接的话它看着是块飘在最下面的东西，而它恰恰是这条线的收束',
+  );
+
+  check(
+    '「跟随最新」认的仍旧是最后一步，不是尾卡',
+    TAILED.lastId === 's4',
+    `实得 ${TAILED.lastId} —— 认尾卡的话，每加一步都把人拽到画布最下面那张不动的卡上`,
+  );
+
+  check(
+    '尾卡算进边界里（"适应"不会把它切掉）',
+    TAILED.bounds.y2 >= bottom(tailBox!),
+    `bounds.y2=${TAILED.bounds.y2}，尾卡下沿 ${bottom(tailBox!)}`,
+  );
+
+  const { layout: noTail } = build(STEPS, CHAT, false);
+  check(
+    '还没到该有终点的时候，舞台上压根没有这张卡',
+    !noTail.byId.has(TAIL_BOX_ID),
+    '出没出生由 tailSummary() 判（认的是开过 impact/leftover 没有），几何这侧只收一个开关',
   );
 }
 

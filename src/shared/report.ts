@@ -9,7 +9,15 @@
  * 在这儿再挑一次的后果见 data-model.md：报告的结构与内容会指着两条不同的根因，且毫无报错。
  */
 
-import type { CaseMeta, IncidentEntry, ReportStepRef, Snapshot, StepNode, VerdictShape } from './ipc.js';
+import type {
+  CaseMeta,
+  ClosingStepKind,
+  IncidentEntry,
+  ReportStepRef,
+  Snapshot,
+  StepNode,
+  VerdictShape,
+} from './ipc.js';
 
 /**
  * 五种形态的文案。**确认条与报告屏共用**：人在确认条上按的是「主体是什么」，
@@ -127,21 +135,32 @@ export function reportInput(snap: Snapshot): ReportInput | null {
   };
 }
 
+/**
+ * 这份报告到底**装不装**根因栏。
+ *
+ * **未决型没有根因栏，哪怕库里正躺着一条已证实的结论**（ui.md §8.4）。归档强制未决型，
+ * 而被归档的调查多半已经查出了点什么——按"有就装"写的话，半程报告会顶着一条根因，
+ * 而它明写的是"没查出来"。
+ *
+ * 单拎成一个函数是因为**工作区的尾卡也要按这一条判**（`tailSummary`）。各写一遍的话，
+ * 舞台上那张卡会给一条报告里根本不印的根因，两个屏于是指着两个不同的结论——
+ * 而这正是 `reportPlan` 顶上那段"不在这儿再挑一次"要防的事，只是换了个屏。
+ */
+export function reportedRootCause(input: ReportInput): ReportInput['report']['rootCause'] {
+  return input.shape === 'open' ? null : input.report.rootCause;
+}
+
 export function reportPlan(input: ReportInput): ReportPlan {
-  const { shape, report } = input;
+  const { report } = input;
   const sections: ReportSection[] = [];
 
-  /**
-   * **未决型没有根因栏，哪怕库里正躺着一条已证实的结论**（ui.md §8.4）。
-   * 归档强制未决型，而被归档的调查多半已经查出了点什么——按"有就装"写的话，
-   * 半程报告会顶着一条根因，而它明写的是"没查出来"。
-   */
-  if (shape !== 'open' && report.rootCause) {
+  const root = reportedRootCause(input);
+  if (root) {
     sections.push(
       sec('verdict', '投影 · 置信度最高的那条已证实结论', {
         kind: 'verdict',
-        text: report.rootCause.text,
-        confidence: report.rootCause.confidence,
+        text: root.text,
+        confidence: root.confidence,
       }),
     );
   }
@@ -158,7 +177,7 @@ export function reportPlan(input: ReportInput): ReportPlan {
   );
 
   return {
-    shape,
+    shape: input.shape,
     frozen: input.frozen,
     labels: stepLabels(input.steps),
     evidenceCount: input.steps.reduce((n, s) => n + s.evidence.length, 0),
@@ -275,6 +294,87 @@ function stepLabels(steps: StepNode[]): Record<string, string> {
 
 function sec(id: string, source: string, body: ReportBody): ReportSection {
   return { id, title: TITLES[id]!, source, body };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * 工作区舞台末端那张**收束卡**要显示的东西（ui.md §3.3）。
+ *
+ * 它是**投影，不是 agent 新写的一段**——与 D17 同一条：真让 agent 再总结一遍，
+ * 就是在报告之外又开了一处会跑偏的叙述。所以这里一个字都不生成，全部从快照里读。
+ *
+ * 🔴 **卡面要克制。** 结论与证据是报告屏的主角（D21），这张卡回答的只是
+ * 「这次调查停在哪儿」。展开成一份迷你报告的话，工作区与报告就成了同一个屏的两份，
+ * 而两份迟早对不上——那正是 `reportPlan` 只此一份的理由。
+ */
+export type TailSummary = {
+  status: CaseMeta['status'];
+  shape: VerdictShape;
+  /** `frozen` = 收尾那一下冻住的；另两档是还会变的预选值（ui.md §8.4.2 的三种出处）。 */
+  shapeSource: 'frozen' | 'agent' | 'inferred';
+  /** 报告真会印的那条根因（`reportedRootCause`）；null 时读 `why`。 */
+  rootCause: { text: string; confidence: number | null } | null;
+  /** 没有根因时**写出为什么没有**——缺席写出来比留一块白可信（overview.md §6.1.1 同源）。 */
+  why: string;
+  /** 定稿闸还差哪几步。分母恒为二，是 §6.2 定死的那两个固定动作，不是"调查进度"。 */
+  gaps: ClosingStepKind[];
+  leftovers: number;
+  hasRemediation: boolean;
+};
+
+/**
+ * 尾卡出生了没有，以及它这会儿说什么。**null = 还没到该有终点的时候**。
+ *
+ * 出生条件是「agent 第一次去走定稿前那两个固定动作」，或者调查已经冻结。
+ *
+ * 🔴 **判据必须单调**，否则尾卡会在结论被推翻时整张消失又出现。所以认的是
+ * **`kind` 上曾经开出过 impact / leftover 的 step**（step 一旦落库就不会消失，
+ * 推翻只改 `status`），而不是 `closingGaps` 或 `rootCause`——那两者都会往回走：
+ * `missingClosingSteps` 判的是当前生效的那一步，影响面被推翻时缺口会重新出现。
+ *
+ * 反过来说，**调查还在跑的时候画布最低点是旁白，这不是毛病**：agent 刚说出口的那句话
+ * 本来就是此刻发生的事。终点落在一句话上只有在"没有下一步了"的时候才是错的。
+ */
+export function tailSummary(snap: Snapshot): TailSummary | null {
+  const input = reportInput(snap);
+  if (!input) return null;
+  const closing = snap.steps.some((s) => s.kind === 'impact' || s.kind === 'leftover');
+  if (!closing && input.case.status === 'open') return null;
+
+  return {
+    status: input.case.status,
+    shape: input.shape,
+    shapeSource: input.frozen ? 'frozen' : snap.shapeSuggestion.source,
+    rootCause: reportedRootCause(input),
+    why: whyNoRootCause(input),
+    gaps: snap.closingGaps,
+    leftovers: snap.report.leftovers.length,
+    hasRemediation: !!snap.report.remediation,
+  };
+}
+
+/**
+ * 尾卡上没有根因时那句话。**它要说的是"这份报告实际会装成什么样"**，
+ * 所以三档各说各的，不能合成一句。
+ *
+ * 🔴 **"没有根因" 与 "按未决型装" 是两件事，别当成一件。** 定稿闸只挡影响面与遗留问题两步，
+ * 一条已证实的根因都没有照样结得了案，而确认条上五种形态任人选（[ui] §8.4.2 明说
+ * 状态型缺应然/实然时只压暗、不禁用）。于是有这么一份真实的报告：冻在 `state`、
+ * 主体是应然/实然对照、根因栏因为没有根因而整个不印——把它说成"按未决型装"，
+ * 工作区与报告屏当场自相矛盾，而两边各自看都自洽。
+ *
+ * 「这会儿」同理只准出现在没冻住的那一档：冻住之后事后没有入口再改，
+ * 那句话读起来像还会变。
+ */
+function whyNoRootCause(input: ReportInput): string {
+  // 归档强制未决型（ui.md §8.4），所以它必须排在形态那两档之前——它说的是"人为终止"这件事本身
+  if (input.case.status === 'aborted') {
+    return '这次调查是人为终止的，半程报告不装根因栏——没查出来就是没查出来。';
+  }
+  if (input.shape === 'open') {
+    return `还没有一条已证实的结论能当根因，报告${input.frozen ? '' : '这会儿'}按未决型装。`;
+  }
+  return `没有一条已证实的结论能当根因，根因那一栏整个不印；报告其余部分照旧按${SHAPE_COPY[input.shape].label}装。`;
 }
 
 /** 先出现的那次为准：主体块的位置是形态定的，通用四块只是兜底补齐。 */

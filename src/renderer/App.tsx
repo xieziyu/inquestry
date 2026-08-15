@@ -7,7 +7,7 @@ import {
   type Snapshot,
   type TakeoverResult,
 } from '../shared/ipc.js';
-import { SHAPE_COPY } from '../shared/report.js';
+import { SHAPE_COPY, tailSummary } from '../shared/report.js';
 import { draftKey, pruneDrafts, type CardDrafts } from './drafts.js';
 import { RunBar } from './RunBar.js';
 import { Stage } from './Stage.js';
@@ -101,6 +101,11 @@ export function App({
   );
   /** 别处等着人的调查。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
   const elsewhere = useMemo(() => snap.cases.filter((c) => !c.current && c.todos > 0), [snap.cases]);
+  /**
+   * 舞台末端那张收束卡（ui.md §3.3）。出没出生、上面写什么全在 `tailSummary()` 里，
+   * 这一层只把它递下去——判断散到组件里的话，"归档不印根因"这类规则就有了第二处出处。
+   */
+  const tail = useMemo(() => tailSummary(snap), [snap]);
   const [focus, setFocus] = useState<string | null>(null);
   /** 焦点那条消失后要接上它的**位置**，所以光记 id 不够——id 这时已经不在列表里了。 */
   const focusAt = useRef(0);
@@ -415,11 +420,13 @@ export function App({
         steps={snap.steps}
         chat={snap.chat}
         liveLanes={snap.liveLanes}
+        tail={tail}
         pending={snap.pending}
         gates={snap.gates}
         onExcerpt={showExcerpt}
         onStopLane={(lane) => void window.inquestry.stopLane(openCase, lane)}
         onRename={(title) => window.inquestry.renameCase(openCase, title)}
+        onReport={() => setReportOf(openCase)}
         todos={
           <>
             {snap.pending.map((p) => (

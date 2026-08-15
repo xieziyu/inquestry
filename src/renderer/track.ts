@@ -233,6 +233,19 @@ export function weaveChat(rows: TrackRow[], chat: ChatLine[]): StageRow[] {
  *
  * `direction`（只在 `step.opened` 写）与 `cases.question`（只在 `case.opened` 写）不会变，
  * 所以它们照旧按内容估。由 `spike:stage` 那两条"补上结论 / 改完标题坐标不动"兜着。
+ *
+ * ═══ 尾卡是这条规则**唯一的例外**，理由写在这儿 ═══
+ *
+ * 主干有头有尾：信息卡是头（问题），收束卡是尾（结论）。尾卡按定义永远在最下面，
+ * 所以主干一长它就得跟着下移——**它的坐标每帧重算，不是出生时算一次**。
+ *
+ * 这不违反 D23 的意图。D23 禁的是"已经落笔的节点因为后来的信息而位移"，判据是
+ * **位移会不会推走别人**：尾卡在所有盒子的下方，它下移一张卡都不会碰到，
+ * 位移只发生在它自己身上。`spike:stage` 那一组把这条写成了两句会失败的断言
+ * （尾卡下沿是全图最低 · 加一步之后其余每张卡坐标逐字不变）。
+ *
+ * 别把这条例外读成"尾卡随便算"：它自己的**高度仍旧是定额**，理由与上面那两条一模一样——
+ * 根因会换人、形态会在确认条上被改、闸门记号会从"差两步"变成"通了"，全是可变字段。
  */
 
 export const STAGE = {
@@ -263,6 +276,11 @@ const CHARS_PER_LINE = { dir: 22, say: 21, question: 22 } as const;
 export const VERDICT_LINES = 2;
 /** 标题那一格的定额：**恒占一行**，改名不改高度。全文在详情浮层里。 */
 export const TITLE_LINES = 1;
+/**
+ * 尾卡上那句根因（或"为什么没有根因"）的定额：**恒占两行**。
+ * 它是全卡最会变的一段——根因换人、被推翻、归档时整条不印，全都不该改变高度。
+ */
+export const TAIL_VERDICT_LINES = 2;
 
 /** 全角按 1、半角按 0.55 算——中英混排的假设句按纯中文估会短掉近一半。 */
 function textWidth(s: string) {
@@ -308,7 +326,9 @@ export type StageBox =
       dirLines: number;
       vdLines: number;
     }
-  | { kind: 'say'; id: string; x: number; y: number; w: number; h: number; line: ChatLine; textLines: number };
+  | { kind: 'say'; id: string; x: number; y: number; w: number; h: number; line: ChatLine; textLines: number }
+  /** 收束卡：主干的尾。内容由 `shared/report.ts` 的 `tailSummary()` 投影，这里只管几何。 */
+  | { kind: 'tail'; id: string; x: number; y: number; w: number; h: number; vdLines: number };
 
 /**
  * 连线只有三种形，各自只说一件事：
@@ -333,6 +353,7 @@ export type StageLayout = {
 };
 
 export const CASE_BOX_ID = '__case__';
+export const TAIL_BOX_ID = '__tail__';
 
 /**
  * 三个高度公式。每一项都对着 CSS 里那一条：内外边距 + 边框 + 每行的行高。
@@ -352,6 +373,16 @@ function stepHeight(dirLines: number, vdLines: number) {
 function sayHeight(lines: number) {
   return 18 + lines * 19;
 }
+/**
+ * 上边框与内边距 · 标题行 · 结论槽的上边距 + 每行 · 记号行 · 按钮行 · 下内边距与边框。
+ *
+ * ⚠️ 结论槽这一段渲染那侧要**同时给 `-webkit-line-clamp` 和 `min-height`**：只给 clamp 的话，
+ * 根因只有一行时它就真的只占一行，下面的记号行与按钮整体上浮，卡底空出一整行——
+ * 而 step 卡不需要 min-height 是因为结论是它最后一段，空在下面正好读作"结论还没出来"。
+ */
+function tailHeight(vdLines: number) {
+  return 12 + 18 + 7 + vdLines * 19 + 35 + 41 + 14;
+}
 
 /**
  * 按盒子自己报的行数把高度再算一遍。**给检查用**：高度与裁行数是一处改另一处必须跟着改的
@@ -360,6 +391,7 @@ function sayHeight(lines: number) {
 export function heightOf(box: StageBox) {
   if (box.kind === 'case') return caseHeight(box.titleLines, box.questionLines);
   if (box.kind === 'step') return stepHeight(box.dirLines, box.vdLines);
+  if (box.kind === 'tail') return tailHeight(box.vdLines);
   return sayHeight(box.textLines);
 }
 
@@ -368,11 +400,15 @@ export function heightOf(box: StageBox) {
  *
  * `items` 是 `weaveChat` 织好的到达序列，`lanes` 是 `trackLayout` 分配好的列——
  * 这里只做几何，不再判断任何"这一步属于谁"的事。
+ *
+ * `tail` 只是个开关：**尾卡出没出生由 `shared/report.ts` 的 `tailSummary()` 判**，
+ * 卡面上写什么也在那儿。几何这侧不认识 case 状态，也就不会有第二处规则。
  */
 export function stageLayout(
   items: StageRow[],
   lanes: TrackLane[],
   caseCard: { title: string; question: string } | null,
+  tail = false,
 ): StageLayout {
   const boxes: StageBox[] = [];
   const byId = new Map<string, StageBox>();
@@ -464,6 +500,21 @@ export function stageLayout(
     lastOfLane.set(row.laneId, row.step.id);
   }
 
+  /**
+   * 收束卡：主干的尾（见文件中段那段「唯一的例外」）。
+   *
+   * y 取**所有游标的最大值，旁白那条也算在内**——只按主干算的话，agent 收尾时多说两句，
+   * 旁白就又落到尾卡下面去了，而"终点不许是一句话"正是这张卡存在的全部理由。
+   */
+  if (tail) {
+    const h = tailHeight(TAIL_VERDICT_LINES);
+    const y = Math.max(STAGE.padY, sayCursor, ...cursor.values());
+    push({ kind: 'tail', id: TAIL_BOX_ID, x: colX(0), y, w: STAGE.cardW, h, vdLines: TAIL_VERDICT_LINES });
+    // 主干接到尾卡上：不接的话它看着是块飘在最下面的东西，而它恰恰是这条线的收束
+    const prev = lastOfLane.get(TRUNK);
+    if (prev) edges.push({ id: `f-${prev}-${TAIL_BOX_ID}`, kind: 'flow', fromId: prev, toId: TAIL_BOX_ID });
+  }
+
   const bounds = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity, w: 0, h: 0 };
   for (const b of boxes) {
     bounds.x1 = Math.min(bounds.x1, b.x);
@@ -481,6 +532,8 @@ export function stageLayout(
   bounds.w = bounds.x2 - bounds.x1;
   bounds.h = bounds.y2 - bounds.y1;
 
+  // 「跟随最新」认的是**最后一步**，不是尾卡：跟随要停在刚发生的事上，
+  // 而尾卡每帧都在那儿，认它的话每加一步都被拽到画布最下面那张不动的卡上
   const lastStep = [...boxes].reverse().find((b) => b.kind === 'step');
   return { boxes, byId, laneHeads, edges, marks, bounds, lastId: (lastStep ?? boxes[0])?.id ?? null };
 }

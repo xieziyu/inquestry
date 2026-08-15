@@ -36,7 +36,8 @@ export function StepSheet({
   step: (dir: 1 | -1) => void;
   canStep: (dir: 1 | -1) => boolean;
 }) {
-  if (box.kind === 'say') return null;
+  // 旁白不是节点；尾卡的"全文"是报告屏那一整页，所以它也不开浮层（点它直接过去）
+  if (box.kind === 'say' || box.kind === 'tail') return null;
 
   return (
     <aside className="stepsheet">

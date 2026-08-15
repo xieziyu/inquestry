@@ -17,7 +17,7 @@
  */
 
 import { EMPTY_SNAPSHOT, VERDICT_SHAPES, type Snapshot } from '../src/shared/ipc.js';
-import { reportInput, reportPlan, type ReportInput } from '../src/shared/report.js';
+import { reportInput, reportPlan, tailSummary, type ReportInput } from '../src/shared/report.js';
 // 夹具与 spike:markdown 共用一份（`fixtures/report-case.ts`）：章节的取舍与它的渲染是
 // 同一条链路的前后两段，各自造一份的话，一边补了字段另一边没补，那边的检查就变成空的
 import { base, FIX_TEXT, incident, report, steps } from './fixtures/report-case.js';
@@ -274,6 +274,137 @@ check(
   })(),
   '形态是收尾那一下人按下去的判断，事后没有入口再改——这里让推断值盖回去就等于把它改了',
 );
+
+// ── 工作区尾卡：与报告同一条规则（ui.md §3.3）────────────────────────────
+/**
+ * 尾卡的内容全部是投影，而它最容易错的一条恰恰是这一节验的那条：**归档不印根因**。
+ * 在舞台上另写一遍判断的话，同一次调查会在工作区顶着一条根因、在报告里写着"没查出来"，
+ * 而两个屏各自看都自洽。所以它与 `reportPlan` 共用 `reportedRootCause()`，这里验的是那一点。
+ */
+{
+  const snap = (over: Partial<Snapshot>): Snapshot => ({
+    ...EMPTY_SNAPSHOT,
+    case: { ...base().case, status: 'open', verdictShape: null },
+    steps,
+    incident,
+    report,
+    shapeSuggestion: { shape: 'chain', source: 'agent', rootStepId: 'st4', stateFillable: true },
+    closingGaps: [],
+    ...over,
+  });
+
+  check(
+    '一步都没开就没有尾卡',
+    tailSummary(snap({ steps: [] })) === null,
+    '刚建完的调查在舞台末端挂一张大半是空的卡，等于让它一直跟着主干往下挪，而它这时什么都说不出',
+  );
+
+  check(
+    '只有普通 step 时仍然没有尾卡（还没开始收尾）',
+    tailSummary(snap({ steps: steps.filter((s) => s.kind === 'normal') })) === null,
+    '调查在跑的时候画布最低点是旁白，这不是毛病——agent 刚说的那句话本来就是此刻发生的事',
+  );
+
+  check(
+    'agent 开出影响面 / 遗留问题那一刻，尾卡出生',
+    !!tailSummary(snap({})),
+    '认的是 kind 上开过 impact/leftover 没有——step 一旦落库就不会消失，判据因此单调',
+  );
+
+  /**
+   * 🔴 **出生条件必须单调**：认 `closingGaps` 或 `rootCause` 的话，
+   * 影响面被推翻、根因被推翻时尾卡会整张消失又出现。
+   */
+  check(
+    '影响面被推翻、闸门缺口重新出现时，尾卡不消失',
+    !!tailSummary(snap({ closingGaps: ['impact'] })) &&
+      !!tailSummary(snap({ report: { ...report, rootCause: null } })),
+    '按 closingGaps / rootCause 判的话，这两下各会让主干末端的卡凭空闪一次',
+  );
+
+  check(
+    '归档的尾卡不印根因，且写出为什么没有',
+    (() => {
+      const t = tailSummary(snap({ case: { ...base().case, status: 'aborted', verdictShape: 'open' } }))!;
+      return t.rootCause === null && t.why.includes('人为终止') && t.status === 'aborted';
+    })(),
+    '库里正躺着一条已证实的结论——在舞台上另判一次的话，工作区会顶着一条报告里根本不印的根因',
+  );
+
+  check(
+    '定稿的尾卡认冻住的那个形态，出处标成 frozen',
+    (() => {
+      const t = tailSummary(snap({ case: { ...base().case, status: 'closed', verdictShape: 'state' } }))!;
+      return t.shape === 'state' && t.shapeSource === 'frozen';
+    })(),
+    '还会变的预选值与已经冻住的那个是两回事（ui.md §8.4.2）；标错等于替人认了一个判断',
+  );
+
+  /**
+   * 🔴 **"没有根因"与"按未决型装"是两件事。** 定稿闸只挡影响面与遗留问题两步，
+   * 一条已证实的根因都没有照样结得了案，而确认条上五种形态任人选（ui.md §8.4.2：
+   * 状态型缺应然/实然时只压暗、不禁用）。合成一句的话，冻在 state 的那份报告
+   * 主体是应然/实然对照，尾卡却说按未决型装——两个屏各自看都自洽。
+   */
+  check(
+    '定稿成状态型却没有根因：尾卡说的是它实际装成什么样，不是"按未决型装"',
+    (() => {
+      const t = tailSummary(
+        snap({
+          case: { ...base().case, status: 'closed', verdictShape: 'state' },
+          report: { ...report, rootCause: null },
+        }),
+      )!;
+      const plan = reportPlan(base({ shape: 'state', report: { ...report, rootCause: null } }));
+      const printsRoot = plan.sections.some((s) => s.id === 'verdict');
+      return (
+        t.rootCause === null &&
+        !printsRoot &&
+        t.why.includes('状态型') &&
+        !t.why.includes('未决型') &&
+        !t.why.includes('这会儿')
+      );
+    })(),
+    '报告这时的主体是应然 / 实然对照，只是没有根因栏；「这会儿」同理不能出现在冻住的那一档，它读起来像还会变',
+  );
+
+  check(
+    '真按未决型冻住时才说未决型，且不带「这会儿」',
+    (() => {
+      const t = tailSummary(
+        snap({
+          case: { ...base().case, status: 'closed', verdictShape: 'open' },
+          report: { ...report, rootCause: null },
+        }),
+      )!;
+      return t.why.includes('未决型') && !t.why.includes('这会儿');
+    })(),
+    '定稿成未决型是人按下去的判断，事后没有入口再改',
+  );
+
+  check(
+    '还没收尾时才带「这会儿」',
+    tailSummary(
+      snap({
+        shapeSuggestion: { shape: 'open', source: 'inferred', rootStepId: null, stateFillable: false },
+        report: { ...report, rootCause: null },
+      }),
+    )!.why.includes('这会儿'),
+    '预览这一档形态还会变，说死了等于替人认了一个判断',
+  );
+
+  check(
+    '没收尾时形态取预选值，出处照实说是 agent 还是推的',
+    (() => {
+      const a = tailSummary(snap({}))!;
+      const b = tailSummary(
+        snap({ shapeSuggestion: { shape: 'open', source: 'inferred', rootStepId: null, stateFillable: false } }),
+      )!;
+      return a.shapeSource === 'agent' && b.shapeSource === 'inferred' && b.rootCause === null;
+    })(),
+    '推断成未决型时根因栏跟着不印——两处判断是同一条，所以这里顺带守住了它',
+  );
+}
 
 console.log('\n===== Spike Report 结果 =====');
 for (const [name, ok, detail] of checks) {

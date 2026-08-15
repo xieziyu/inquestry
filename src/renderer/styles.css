@@ -560,6 +560,47 @@ button.primary:has(> .ic) { gap: 6px; }
    而它并不是一件待办——多数时候 agent 几秒后就把它确认掉了 */
 .casecard .meta .unconfirmed { color: var(--warn); font-style: normal; margin-left: 6px; }
 
+/* ── 收束卡：主干的尾 ──
+   信息卡是头（问题），这张是尾（结论）。在它出现之前，画布最低的东西永远是一句旁白，
+   而调查的终点不该是一段可以说错的话（ui.md §3.3）。
+
+   🔴 高度由 `track.ts` 的 `tailHeight()` 算好写在 style 上，**这里的任何一条都不许改变它**：
+   改了 padding / 行高 / 字号就要回去改那个公式，对不上时不报错，只是安静地把按钮裁掉半截。
+   它比 step 卡的下内边距小一档（没有那行 hover 出现的「详情 →」——这张卡不开浮层）。 */
+.tailcard { border-left-color: var(--dim-2) !important; padding-bottom: 12px; }
+.tailcard::after { content: none; }
+.tailcard.tail-closed { border-left-color: var(--ok) !important; }
+.tailcard.tail-aborted { border-left-color: var(--bad) !important; }
+.tailcard .ord { color: var(--dim); letter-spacing: .04em; }
+
+/* 根因那一句是这张卡上唯一"要读"的内容，字号与 step 卡的结论对齐 */
+.tailcard .t-vd {
+  margin: 7px 0 0; font-size: 12.5px; color: var(--text); line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* 「为什么没有根因」压暗一档：它是一句说明，不是结论本身 */
+.tailcard .t-vd.none { color: var(--dim); }
+
+.tailcard .t-gaps {
+  display: flex; gap: 14px; flex-wrap: nowrap; margin-top: 8px;
+  padding-top: 8px; border-top: 1px solid var(--line-soft);
+  font-size: 11px; color: var(--dim); white-space: nowrap;
+}
+/* 缺的那一档用暖色——它确实是「还要人动手」的那一类（ui.md §4 的全局专属） */
+.tailcard .t-gaps .miss { color: var(--warn); }
+
+.tailcard .t-report {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+  background: transparent; color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.tailcard .t-report:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 远档同信息卡：正文这时本来就读不出来，只留标头那一行（ui.md §3 的两档 LOD） */
+.world[data-lod="far"] .tailcard .t-vd,
+.world[data-lod="far"] .tailcard .t-gaps,
+.world[data-lod="far"] .tailcard .t-report { display: none; }
+
 /* ── 待办层：钉在视口右上，不随画布跑 ──
    🔴 ①档「永远置顶」在滚动条的世界里是 top，**在画布的世界里没有 top**——
    一张能被人拖出屏幕的卡不叫置顶。所以它整个提出画布，钉在视口上。

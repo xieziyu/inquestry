@@ -11,8 +11,10 @@ import {
   type StageEdge,
   type StageLayout,
 } from './track.js';
+import type { TailSummary } from '../shared/report.js';
 import { CaseCard } from './CaseCard.js';
 import { StepSheet } from './StepSheet.js';
+import { TailCard } from './TailCard.js';
 import { Icon } from './Icon.js';
 
 /**
@@ -63,17 +65,24 @@ export function Stage({
   steps,
   chat,
   liveLanes,
+  tail,
   pending,
   gates,
   todos,
   onExcerpt,
   onStopLane,
   onRename,
+  onReport,
 }: {
   meta: CaseMeta;
   steps: StepNode[];
   chat: ChatLine[];
   liveLanes: string[];
+  /**
+   * 主干末端那张收束卡；null = 这次调查还没走到该有终点的时候。
+   * 出没出生、上面写什么都由 `shared/report.ts` 的 `tailSummary()` 判，这一屏不再判第二次。
+   */
+  tail: TailSummary | null;
   /**
    * 挂着的①档与②档，**只用来在图上标出"是哪一步在等你"**。
    * 卡片本身在 `todos` 里、钉在视口上；不标的话人得自己在图上找是哪一步停住了。
@@ -85,12 +94,14 @@ export function Stage({
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
   onStopLane: (lane: string) => void;
   onRename: (title: string) => Promise<boolean>;
+  /** 尾卡那枚「看报告」。这张卡没有详情浮层——它的全文就是报告屏。 */
+  onReport: () => void;
 }) {
   const track = useMemo(() => trackLayout(steps), [steps]);
   const items = useMemo(() => weaveChat(track.rows, chat), [track.rows, chat]);
   const layout = useMemo(
-    () => stageLayout(items, track.lanes, { title: meta.title, question: meta.question }),
-    [items, track.lanes, meta.title, meta.question],
+    () => stageLayout(items, track.lanes, { title: meta.title, question: meta.question }, !!tail),
+    [items, track.lanes, meta.title, meta.question, !!tail],
   );
   const edges = useMemo(
     () => [...layout.edges, ...refuteEdges(layout, track.edges)],
@@ -345,6 +356,9 @@ export function Stage({
             <CaseCard key={b.id} box={b} meta={meta} onRename={onRename} onOpen={() => pick(b.id)} />
           ) : b.kind === 'say' ? (
             <SayNode key={b.id} box={b} />
+          ) : b.kind === 'tail' ? (
+            // `tail` 一定在（盒子就是按它排的），收窄一下让 TS 也看得出来
+            tail && <TailCard key={b.id} box={b} tail={tail} onReport={onReport} />
           ) : (
             <StepNodeCard
               key={b.id}
