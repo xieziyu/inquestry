@@ -271,16 +271,18 @@ button:hover > .ic { opacity: 1; }
 .wires marker.bad path { fill: var(--bad); }
 
 /* 列头：这一列是谁在查。列成了语义轴之后这句话必须写出来——
-   光靠连线的话，读的人得先追一遍线才知道自己在读谁的推理 */
+   光靠连线的话，读的人得先追一遍线才知道自己在读谁的推理。
+   但它只是**一行标注**：描边加底色会让它在点阵上看成一张悬着的小卡（或一个能点的控件），
+   而它既不能点也不是内容。所以一律裸字，轻重只靠颜色分——
+   主干最淡、支线中、分叉给主色（它是 agent 自己开的一条线，与支线不是一回事）。 */
 .lanehead {
-  position: absolute; display: flex; align-items: center; gap: 7px;
+  position: absolute; display: flex; align-items: baseline; gap: 6px;
   font-size: 11px; color: var(--dim-2); white-space: nowrap;
 }
-.lanehead .tag { padding: 1px 8px; border-radius: 4px; border: 1px solid var(--line); background: var(--panel); }
 .lanehead.agent .tag { color: var(--dim); }
-/* agent 显式声明的分叉用主色描边：它是 agent 自己开的一条线，与支线不是一回事 */
-.lanehead.fork .tag { color: var(--accent); border-color: var(--fill); }
-.lanehead .note { opacity: .8; }
+.lanehead.fork .tag { color: var(--accent); }
+/* 分隔点长在补充那一段身上：远景把补充整段收掉时，这个点得跟着一起走 */
+.lanehead .note::before { content: '·'; margin-right: 6px; }
 
 /* 跨会话的断点：ordinal 每个会话都从 1 重来，不标一下轨道上会出现两个 #1 */
 .smark {
@@ -418,8 +420,8 @@ button.primary:has(> .ic) { gap: 6px; }
 /* 远档这几个字号是**按缩放倒着放大**的：k 到 0.4 时 30px 才落回 12px 上下。
    照原尺寸留着的话，缩完只有四五个像素，等于把列头与旁白从图上抹掉 */
 .world[data-lod="far"] .s-say .who { font-size: 26px; }
-.world[data-lod="far"] .lanehead { font-size: 30px; }
-.world[data-lod="far"] .lanehead .tag { padding: 2px 12px; border-radius: 8px; }
+/* 裸字比框弱：远档没有描边替它撑着，颜色得往上抬一档才不至于被点阵吃掉 */
+.world[data-lod="far"] .lanehead { font-size: 30px; color: var(--dim); }
 .world[data-lod="far"] .lanehead .note, .world[data-lod="far"] .smark { display: none; }
 
 /* 原文浮层里的原文（`.sheet` 在文件末尾）。工具调用的预览在详情浮层那一节 */
