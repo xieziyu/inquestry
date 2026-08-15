@@ -49,6 +49,22 @@ export function runState(p: {
   return { label: p.started ? '已停止' : '待开始', tone: 'idle' };
 }
 
+/**
+ * 终态分两档：`seal` = 已定稿，`shut` = 已归档；没到终态给 null。
+ *
+ * 🔴 **两档不许合成一个"结束了"再统一压暗划掉。** 已定稿是这套状态里唯一有结论的一档，
+ * 它正是日后要被翻出来复用的那份记录——划掉等于说它作废了。压暗划掉那套只给已归档
+ * （半程放弃）。首页轨道上那两颗节点（`.tr.seal` / `.tr.shut`）分的是同一条线。
+ *
+ * 划线在这个项目里只有一个含义：**结论被推翻**（ui.md §7 把它列成导出时要转义的语义之一）。
+ * 给别的东西加划线之前先对一下这句。
+ */
+export function caseTerminal(status: CaseBrief['status']): 'seal' | 'shut' | null {
+  if (status === 'closed') return 'seal';
+  if (status === 'aborted') return 'shut';
+  return null;
+}
+
 /** 已定稿的调查多一句"按哪种形态装的"——那是它最有信息量的一栏。 */
 export function caseShape(c: CaseListRow): string | null {
   return c.verdictShape ? SHAPE_COPY[c.verdictShape].label : null;

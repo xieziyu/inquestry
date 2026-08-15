@@ -7,7 +7,7 @@ import type {
   CaseListRow,
   DeleteOutcome,
 } from '../shared/ipc.js';
-import { ago, caseShape, caseState, rootLabel, TodoBadge } from './caseline.js';
+import { ago, caseShape, caseState, caseTerminal, rootLabel, TodoBadge } from './caseline.js';
 import { freshenHits } from './drafts.js';
 
 /** ≥3 字走得到索引，快到可以边打边查。 */
@@ -373,7 +373,7 @@ function Row({
         onClick={() => onOpen(c.id)}
       >
         <span className="l1">
-          <span className={`t ${st.tone === 'done' ? 'done' : ''}`}>{c.title}</span>
+          <span className={`t ${caseTerminal(c.status) ?? ''}`}>{c.title}</span>
           {c.current && <span className="badge cur">当前</span>}
           <TodoBadge n={c.todos} />
         </span>
