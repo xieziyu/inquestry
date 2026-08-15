@@ -9,9 +9,7 @@
  * 于是同一个应用里出现了两种顶栏，差别一大就读成两个界面。这一屏在顶栏上只有一枚
  * 「工作区」，位置与工作区那两枚一样。
  *
- * **三样东西各归各位：**
- * - **形态**在纸头（`ShapeBar`）——它决定这份纸装哪几块，点一下当场换装。
- *   定稿冻的就是屏上此刻这一份，人于是不必在没见过的选项上按不可逆那一下
+ * **两样东西各归各位：**
  * - **章节导航**在左侧竖栏（`Toc`）——每一节带一行读数，所以它跟着形态一起变
  * - **两种导出与收尾两档**在页尾的交付台（`Handoff`）——读完之后才回答"这份能不能交出去"
  *
@@ -25,7 +23,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  VERDICT_SHAPES,
   type CaseMeta,
   type ClosingStepKind,
   type ShapeSuggestion,
@@ -56,13 +53,6 @@ export function Report({
 }) {
   const page = useRef<HTMLDivElement>(null);
   /**
-   * 人在纸头上预演的那个形态。`null` = 没动过手，跟着建议值走。
-   *
-   * **不能拿"当前值 ≠ 建议值"反推人动没动手**（同确认条那条老纪律）：挑过别的又切回建议值
-   * 会重新显示成「agent 声明的」，而建议值自己变了的话，人一下没碰过也会被标成「你选的」。
-   */
-  const [pick, setPick] = useState<VerdictShape | null>(null);
-  /**
    * 导出的回执。**成功与失败都要说出来**：写盘失败与人自己按取消在界面上长得一样
    * （都是"按了导出、什么都没发生"），而前者意味着报告压根没落地。
    */
@@ -89,10 +79,13 @@ export function Report({
     caseId: string;
     kind: 'closed' | 'aborted';
     /**
-     * 报告按哪种形态装（D25）。**它必须恒等于屏上这份纸装的那一个**——这条不变式由
-     * 上面那个 effect 守着，一不相等就把整块作废。不每帧从快照取是因为快照 60ms 一轮，
-     * 人正在这块上读字；但也不能就此不管它变没变，那两条正好是同一枚硬币的两面。
-     * 归档那一档没有它：半程报告强制是未决型，不给选（ui.md §8.4）。
+     * 确认块上要读出来的那个形态（D25）。**它是文案，不是落库的值**——真正冻进库的由
+     * main 在落库那一刻现算，这里传过去只会把 agent 刚推翻的那个冻上（`closeCase()`）。
+     *
+     * 但它**必须恒等于屏上这份纸装的那一个**：说的是这一下的后果，与纸对不上就是在骗人。
+     * 这条不变式由上面那个 effect 守着，一不相等就把整块作废。不每帧从快照取是因为
+     * 快照 60ms 一轮，人正在这块上读字；但也不能就此不管它变没变，那两条是同一枚硬币的两面。
+     * 归档那一档没有它：半程报告强制是未决型（ui.md §8.4）。
      */
     shape?: VerdictShape;
     /**
@@ -104,10 +97,8 @@ export function Report({
   } | null>(null);
 
   const frozen = !!snap.case && snap.case.status !== 'open';
-  /** 冻结之后事后没有入口再改（ui.md §6），预演值一并作废——留着会让屏上那份与库里不同。 */
-  const effectivePick = frozen ? null : pick;
 
-  const input = reportInput(snap, effectivePick);
+  const input = reportInput(snap);
   const plan = input && reportPlan(input);
 
   /**
@@ -122,12 +113,9 @@ export function Report({
   /**
    * 🔴 **确认块上写的形态必须与屏上这份纸是同一个，不一样就当场作废。**
    *
-   * 这是全应用唯一不可逆的那一下，它唯一的失效方式是"用了过期的上下文"。而形态在确认块
-   * 挂着的这段时间里有两条路会变：人在纸头又挑了一个，或者 agent 改了声明、下一份快照
-   * 把建议值换掉了。两条都会让纸重绘而确认块岿然不动——于是冻下去的是一份屏幕上
-   * 从没显示过的章节组合。
-   *
-   * **一条规则管两条路**，不在每个写入点各补一次：漏掉哪一条都不报错，只是安静地冻错。
+   * 这是全应用唯一不可逆的那一下，它唯一的失效方式是"用了过期的上下文"。**人不再挑形态
+   * 之后这条依然要留着**：agent 随时可能改声明，下一份快照就把建议值换掉，纸跟着重绘
+   * 而确认块岿然不动——于是冻下去的是一份屏幕上从没显示过的章节组合。
    */
   useEffect(() => {
     if (confirm?.kind === 'closed' && confirm.shape !== plan?.shape) setConfirm(null);
@@ -162,12 +150,11 @@ export function Report({
     if (exporting) return;
     setExporting(kind);
     try {
-      // 🔴 **把屏上这个形态一起带过去**：main 那侧不传就照 agent 的建议值另装一遍，
-      // 于是屏幕上看的是因果链型、落盘的却是时序型——章节集合都不一样，而两边都不报错。
-      // 数据仍由 main 拿它自己那份快照出（界面这份最多晚 60ms），这里只带人挑的那个判断
+      // 形态由 main 那侧从它自己那份快照里定（`reportInput`），这里一个判断都不带过去：
+      // 两处各挑一次的话，屏幕上看的与落盘的迟早各按各的装，而两边都不报错
       const r = await (kind === 'md'
-        ? window.inquestry.exportMarkdown(caseId, effectivePick)
-        : window.inquestry.exportImage(caseId, effectivePick));
+        ? window.inquestry.exportMarkdown(caseId)
+        : window.inquestry.exportImage(caseId));
       if (r.ok) {
         // 顶着同一个名字的旧图要说出来：单页与多页的落点不同名，页数一变，上一次的产物
         // 就留在旁边，看起来正是这次导出的那张（**只报不删**，见 main 的 `staleSiblings`）
@@ -203,11 +190,11 @@ export function Report({
     const r = await window.inquestry.requestClosing(caseId).catch(() => null);
     if (!r) return onNotice('没问到这次调查的状态，可能它已经切走了。切回去再点一次。');
     if (!r.missing.length) {
-      // 🔴 **冻的是屏上此刻装着的那一个**，取自 ref 不取闭包：`pick` 与 `plan` 都是点击
-      // 那一帧的值，而这中间隔着一次 await——人在等 main 回话的这段时间里完全可以再挑一个，
-      // 取闭包的话确认块会带着旧形态挂出来，而纸已经按新的重绘了。
+      // 确认块上写的形态**只是给人读的那一句**，不是冻进库的值——真正落库的由 main 在
+      // 落库那一刻现算（`closeCase()`）。这里取 ref 不取闭包：`plan` 是点击那一帧的值，
+      // 而这中间隔着一次 await，取闭包的话确认块会带着旧形态挂出来，而纸已经按新的重绘了。
       // 也不取 `r.suggestion.shape`：那是 main 刚算的，可能比这一屏的快照新一拍，
-      // 用它同样会让确认块与纸各说各的。**人只能冻他看见过的那一份。**
+      // 用它同样会让确认块与纸各说各的。
       //
       // ⚠️ 建议值那一整份仍然要冻（`suggestion`）：它给的是"状态型填不填得出来"要按哪个
       // 根因判（见 `stateFillable`），与形态是两件事。
@@ -228,13 +215,15 @@ export function Report({
    * 强制 step 可能被推翻、调查可能被切走，两种情况 main 都会回绝；
    * 收掉而什么都没发生的话，人会以为已经定稿了。
    */
-  const doClose = async (kind: 'closed' | 'aborted', id: string, shape: VerdictShape) => {
+  const doClose = async (kind: 'closed' | 'aborted', id: string) => {
     if (kind === 'aborted') {
       const ok = await window.inquestry.archiveCase(id).catch(() => false);
       if (ok) return setConfirm(null);
       return onNotice('归档没执行：这次调查已经不是当前调查了。切回去再试一次。');
     }
-    const r = await window.inquestry.closeCase(id, shape).catch(() => null);
+    // 形态不带过去：main 在落库那一刻自己算（`closeCase()`）。确认块上那个是给人读的，
+    // 而人读的这段时间里 agent 可能已经改了声明——带过去等于冻它刚推翻的那一个
+    const r = await window.inquestry.closeCase(id).catch(() => null);
     if (r?.ok) return setConfirm(null);
     onNotice(
       r && !r.ok && r.missing.length
@@ -296,26 +285,7 @@ export function Report({
             {/* `report-body` 是给章节栏那条 spy 认的标记：同一份纸在这个文档里会画好几遍
                 （缩略一份、导出预览再一份），不认一个的话滚动高亮会把缩略里的小节也算进去 */}
             <article className="paper report-body">
-              <ReportPaper
-                meta={snap.case!}
-                plan={plan}
-                // 冻结之后不传：那时它退成纸头上一行字，与图片里那一份完全一样
-                shapeControl={
-                  frozen ? undefined : (
-                    <ShapeBar
-                      value={plan.shape}
-                      picked={pick !== null}
-                      // 状态型的主体就是应然/实然那一对；根因那一步没给的话，选它等于让报告
-                      // 装一块空的。冻结之后没有回头路，所以要在人按下去**之前**说
-                      stateFillable={snap.shapeSuggestion.stateFillable}
-                      suggested={snap.shapeSuggestion.source}
-                      // 改形态会作废挂着的定稿确认，但那条规则不写在这儿——快照换掉建议值
-                      // 是另一条同样会改形态的路，各补一次必然漏。统一由上面那条不变式管
-                      onPick={setPick}
-                    />
-                  )
-                }
-              />
+              <ReportPaper meta={snap.case!} plan={plan} />
               <PaperFoot meta={snap.case!} plan={plan} />
             </article>
 
@@ -338,7 +308,7 @@ export function Report({
                   : snap.case && setConfirm({ caseId: snap.case.id, kind: 'aborted' })
               }
               onCancel={() => setConfirm(null)}
-              onConfirm={(c) => void doClose(c.kind, c.caseId, c.shape ?? 'open')}
+              onConfirm={(c) => void doClose(c.kind, c.caseId)}
             />
           </div>
         </div>
@@ -363,77 +333,6 @@ export function Report({
 
 function closingLabel(k: ClosingStepKind) {
   return ({ impact: '影响面', leftover: '遗留问题' } as const)[k];
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-/**
- * 纸头上的形态选择器（D25）。**点一下下面整份纸当场换装**——这是这一屏最要紧的一条：
- * 形态决定装哪几块（未决型连根因栏一起没有），而定稿是全应用唯一不可逆的手势。
- * 一度只把它摆在确认条上，于是人在一个从没预览过的五选一上按了那一下。
- *
- * 它长在纸头 stamp 那一行的位置，因为「这份按哪种装」本来就是那行字说的事——
- * 屏幕上它可点，图片里它是一行字，说的是同一件事。
- */
-function ShapeBar({
-  value,
-  picked,
-  stateFillable,
-  suggested,
-  onPick,
-}: {
-  value: VerdictShape;
-  picked: boolean;
-  /** 根因那一步给了应然/实然没有。没给的话状态型的主体块是空的。 */
-  stateFillable: boolean;
-  suggested: 'agent' | 'inferred';
-  onPick: (s: VerdictShape | null) => void;
-}) {
-  const sh = SHAPE_COPY[value];
-  // 不禁用状态型，只把后果说出来：人可能确实知道这是状态型故障，而 agent 没填那一对——
-  // 那一步已经收口了，它补不回来，禁掉等于把人堵死在一个它自己造成的缺口上
-  const empty = value === 'state' && !stateFillable;
-  return (
-    <div className="shapebar">
-      <div className="row">
-        <span className="lead">这份报告按哪种装</span>
-        {VERDICT_SHAPES.map((s) => (
-          <button
-            key={s}
-            className={`${s === value ? 'on' : ''} ${s === 'state' && !stateFillable ? 'thin' : ''}`}
-            title={
-              s === 'state' && !stateFillable
-                ? '状态型 —— 主体是应然 / 实然对照，但根因那一步没给这一对，选了那一块会是空的'
-                : `${SHAPE_COPY[s].when} —— 主体是${SHAPE_COPY[s].body}`
-            }
-            onClick={() => onPick(s)}
-          >
-            {SHAPE_COPY[s].label}
-          </button>
-        ))}
-        {/* 「还原成 agent 声明的」写不进按钮：推断那一档的说法是一整句
-            （「没人声明过，按现有数据推的」），拼进去就成了一句读不通的话。
-            按钮只说动作，出处在下面那行 note 上 */}
-        {picked && (
-          <button className="revert" title={`还原成${shapeSourceLabel(suggested)}那一个`} onClick={() => onPick(null)}>
-            <Icon name="undo" />
-            还原
-          </button>
-        )}
-      </div>
-      <div className="note">
-        <span>
-          <b>{sh.label}</b>：{sh.when}，主体是<b>{sh.body}</b>
-        </span>
-        <em>{picked ? '你选的' : shapeSourceLabel(suggested)}</em>
-        {empty && <span className="warn">根因那一步没有应然 / 实然，这一块会是空的</span>}
-      </div>
-    </div>
-  );
-}
-
-/** 推断值只是个不至于装错块的兜底，不是一次判断——两者必须让人一眼分得出来。 */
-function shapeSourceLabel(source: 'agent' | 'inferred') {
-  return source === 'agent' ? 'agent 声明的' : '没人声明过，按现有数据推的';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -547,7 +446,7 @@ function sectionSum(id: string, plan: ReportPlan): string {
     case 'prose':
       return b.text ? '' : '无';
     case 'absent':
-      return '这一形态不投影';
+      return '这一块装不出来';
   }
 }
 
@@ -759,8 +658,8 @@ function Target({
 /**
  * 确认那一下要说的是**后果**，不是"你确定吗"——两档的后果不一样，说反了就白确认了。
  *
- * 状态型缺应然/实然那一条在这儿再说一遍（纸头上已经说过）：这一下之后没有回头路，
- * 而人可能是从别处滚下来直接按的，纸头那句这会儿在屏幕外。
+ * 状态型缺应然/实然那一条在这儿说，是因为**人这会儿还救得回来**：取消定稿、回工作区
+ * 让 agent 把那一对补上，这一块就装得出来了。冻下去之后就没有这条路了。
  */
 function confirmText(
   confirm: { kind: 'closed' | 'aborted'; shape?: VerdictShape; suggestion?: ShapeSuggestion },
@@ -774,7 +673,7 @@ function confirmText(
   const root = plan.sections.find((s) => s.id === 'verdict');
   const empty =
     shape === 'state' && !stateFillable(confirm.suggestion, live)
-      ? '⚠️ 根因那一步没有应然 / 实然，状态型的主体块会是空的。'
+      ? '⚠️ 根因那一步没有应然 / 实然，状态型排最前的那一块装不出来，报告上只会留一句说明为什么。想要那一块就先取消，回工作区让 agent 把这一对补上。'
       : '';
   const rootText =
     root?.body.kind === 'verdict'

@@ -68,6 +68,15 @@ const dataRow = (out: string) =>
 /** 时间线那一格的原始文本（第一列）。 */
 const whenCell = (out: string) => dataRow(out).split(' | ')[0]!.slice(2);
 
+/**
+ * 把待测的值塞进时间线第一行，**后面必须再垫一行**：系统时间线那一块的门槛是两条
+ * （overview.md §6.1.1），只给一条的话整节不出现，所有按 `dataRow` 取值的检查会一起假红。
+ */
+const timelineWith = (first: Partial<IncidentEntry>): IncidentEntry[] => [
+  { ...incident[0]!, ...first },
+  incident[1]!,
+];
+
 /** 把每条证据的锚点换掉，用来验文末索引里的 code span。 */
 const withAnchor = (anchor: string) =>
   steps.map((x) => ({ ...x, evidence: x.evidence.map((e) => ({ ...e, anchor })) }));
@@ -164,24 +173,32 @@ check(
 );
 
 check(
-  '形态不投影时间线时，一张 mermaid 都不给',
-  ['state', 'distribution'].every((shape) => !md({ shape: shape as never }).includes('mermaid')),
-  '夹具里系统时间线有两条：从这条侧门塞回去，等于让形态表里「不投影」那一列在导出里失效',
-);
-
-check(
-  '一条带时间的证据都没有时不给空图，且写出为什么',
+  '时间线那一块没装出来时，一张 mermaid 都不给',
   (() => {
-    const out = md({ incident: [] });
-    return !out.includes('mermaid') && out.includes('一条带时间的证据都没有');
+    // 一条带时间戳的证据排不出顺序，那一块的门槛因此没过（overview.md §6.1.1）
+    const one = md({ shape: 'chain', incident: [incident[0]!] });
+    return !one.includes('mermaid') && !one.includes('| 时间 | 主体 | 事实 | 出处 |');
   })(),
-  '空 flowchart 在渲染器里是一个空白框；而整节消失读起来像"这次调查没有时间线"',
+  '认 plan 里有没有那一节，别按 input.incident 自己判：从这条侧门塞回去，等于在导出里绕开门槛——Markdown 有图而屏幕上没有那一节',
 );
 
 check(
-  '状态型写出为什么没有系统时间线',
-  md({ shape: 'state' }).includes('状态型故障没有"事发瞬间"'),
-  '默默少一节的话，读者分不出是本来就没有还是漏了（同 spike:report 那条，这次验的是它真的印出来了）',
+  '时间线是主体却装不出来时，写出为什么，且不给空图',
+  (() => {
+    const out = md({ shape: 'sequence', incident: [incident[0]!] });
+    return !out.includes('mermaid') && out.includes('带时间戳的证据不足两条');
+  })(),
+  '空 flowchart 在渲染器里是一个空白框；而主体块默默消失，纸头写着"按时序型装"却没有时间线',
+);
+
+check(
+  '声明了状态型而那一对是空的：写出为什么，不留一节空白',
+  (() => {
+    const out = md({ shape: 'state', report: { ...report, expected: null, actual: null } });
+    // 认"这一块为什么不在"这件事，别认它此刻的措辞——文案改一次这个检查就会假红
+    return out.includes('## 应然 / 实然') && out.includes('根因那一步没有成对地给出');
+  })(),
+  '主体是形态承诺的那一块，默默少掉的话读者分不出是本来就没有还是漏了（同 spike:report 那条，这次验的是它真的印出来了）',
 );
 
 check(
@@ -207,7 +224,7 @@ const impactOf = (out: string) =>
 check(
   '内容里的 HTML 标签一律转义，不原样写进去',
   (() => {
-    const dirty: IncidentEntry[] = [{ ...incident[0]!, claim: `看到 ${EVIL} 这一段` }];
+    const dirty = timelineWith({ claim: `看到 ${EVIL} 这一段` });
     const out = md({ incident: dirty, report: { ...report, impact: `影响面里也来一段 ${EVIL}` } });
     return (
       content(out).match(/(?<!\\)[<>]/g) === null &&
@@ -220,7 +237,7 @@ check(
 check(
   '内容里的 Markdown 元字符一个都不剩，链接与图片都不成立',
   (() => {
-    const dirty: IncidentEntry[] = [{ ...incident[0]!, claim: EVIL }];
+    const dirty = timelineWith({ claim: EVIL });
     const out = md({ incident: dirty, report: { ...report, impact: EVIL } });
     // **只看我们塞进去的那两处**，不去反过来剥自己排的记号：剥法写歪了（漏算单个 `*`
     // 的斜体、行首前缀吃掉半个 `**`）会留下一堆自己的记号，检查就变成在验剥法
@@ -245,7 +262,7 @@ check(
   '裹进反引号的值原样保留，围栏自己加长',
   (() => {
     const out = md({
-      incident: [{ ...incident[0]!, occurredAtRaw: '10:02:11`x`' }],
+      incident: timelineWith({ occurredAtRaw: '10:02:11`x`' }),
       steps: withAnchor('foo`bar'),
     });
     const note = out.split('\n').find((l) => l.startsWith('[^e1]:')) ?? '';
@@ -267,7 +284,7 @@ check(
 check(
   '时间戳进表格用普通文本转义：一字不差，且两种读法下都不切列',
   (() => {
-    const of = (raw: string) => md({ incident: [{ ...incident[0]!, occurredAtRaw: raw }] });
+    const of = (raw: string) => md({ incident: timelineWith({ occurredAtRaw: raw }) });
     const plain = of('10:02:11|y');
     const withSlash = of('10:02:11\\|y');
     return (
@@ -285,7 +302,7 @@ check(
   '溯源字段里的连续空白原样保留，不折成一个空格',
   (() => {
     const out = md({
-      incident: [{ ...incident[0]!, occurredAtRaw: 'Aug  7 03:04:05' }],
+      incident: timelineWith({ occurredAtRaw: 'Aug  7 03:04:05' }),
       steps: withAnchor('col  17'),
     });
     const note = out.split('\n').find((l) => l.startsWith('[^e1]:')) ?? '';
@@ -377,7 +394,7 @@ check(
 check(
   '系统时间线里，被推翻的 step 提供的证据不划删除线',
   (() => {
-    const rows: IncidentEntry[] = [{ ...incident[0]!, stepStatus: 'superseded' }];
+    const rows = timelineWith({ stepStatus: 'superseded' });
     const row = dataRow(md({ incident: rows }));
     return !row.includes('~~') && row.includes('结论已被推翻');
   })(),
@@ -455,10 +472,7 @@ check(
 check(
   '单元格里的 `|` 与换行不会把表格切歪',
   (() => {
-    const dirty: IncidentEntry[] = [
-      { ...incident[0]!, claim: 'a | b\nc', actor: 'svc-a' },
-    ];
-    const row = dataRow(md({ incident: dirty }));
+    const row = dataRow(md({ incident: timelineWith({ claim: 'a | b\nc', actor: 'svc-a' }) }));
     return row.includes('a \\| b c') && bareBars(row) === 5;
   })(),
   '一个未转义的 `|` 凭空多切一列，一个换行把一行拆成两行——后半行还会被渲染成正文',
@@ -467,7 +481,7 @@ check(
 check(
   '内容本来就带 `\\|` 时也不会切歪',
   (() => {
-    const dirty: IncidentEntry[] = [{ ...incident[0]!, claim: 'grep -E "a\\|b" 日志' }];
+    const dirty = timelineWith({ claim: 'grep -E "a\\|b" 日志' });
     return bareBars(dataRow(md({ incident: dirty }))) === 5;
   })(),
   '只转义竖线本身会得到 `\\\\|`：渲染器先把前两个还原成一个字面反斜杠，后面那个竖线照旧切列。日志、路径、正则里这种组合很常见',
@@ -476,7 +490,7 @@ check(
 check(
   'mermaid 标签里的引号、尖括号与反斜杠都被剥掉',
   (() => {
-    const dirty: IncidentEntry[] = [{ ...incident[0]!, claim: '他说 "超时" 了 <b>x</b> 路径 C:\\tmp' }];
+    const dirty = timelineWith({ claim: '他说 "超时" 了 <b>x</b> 路径 C:\\tmp' });
     // `<br/>` 是**我们自己**塞进标签的分隔符，剥掉再看剩下的字符哪来的
     const label = (/n0\["([^"]*)"\]/.exec(detailsOf(md({ incident: dirty })))?.[1] ?? '').replace(
       /<br\/>/g,

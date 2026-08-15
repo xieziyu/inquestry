@@ -3,8 +3,9 @@
  * 是同一份内容的另一个渲染目标——各写一遍的结果必然是图片里的那份与屏幕上的那份对不上，
  * 而图片正是这个工具被转发得最多的产物。
  *
- * 章节装哪几块仍然只认 `reportPlan()`（`shared/report.ts`）。这里只管画，不挑内容：
- * 在这儿加一句 `if (…)` 就是第三个"有数据就装"的入口（ui.md §7.1）。
+ * 章节装哪几块、什么顺序只认 `reportPlan()`（`shared/report.ts`）——**门槛全在那一份里**。
+ * 这里只管画：在这儿补一句 `if (…)` 就是第二处判"装不装"的地方，而两处迟早对不上，
+ * 表现是屏幕上有这一节、Markdown 里没有（ui.md §7.1）。
  *
  * 两个视图的差别只在**外壳**：屏幕那份带锚点导航与导出按钮，图片那份按页切开、每页带水印。
  * 所以壳留给各自的调用方，这里只吐块。
@@ -12,27 +13,26 @@
 
 import type { CaseMeta, IncidentEntry, StepNode } from '../shared/ipc.js';
 import { HEAD_BLOCK } from '../shared/paging.js';
-import { SHAPE_COPY, type ChainLink, type ReportPlan, type ReportSection } from '../shared/report.js';
+import {
+  SHAPE_COPY,
+  SHAPE_SOURCE_COPY,
+  type ChainLink,
+  type ReportPlan,
+  type ReportSection,
+} from '../shared/report.js';
 
 /**
  * @param only 只画这几块（长图的某一页）。不给就是整份。
- * @param shapeControl 屏幕上那份的形态选择器，长在纸头 stamp 那一行的位置（[ui] §6）。
- *
- * **它是个参数而不是这里的一个 `if`**：长图视图压根不传，控件因此**不可能**漏进导出——
- * 靠"记得在导出时删掉"的写法，漏了不会报错，只会在图片里印出一排按钮。
- * 同理它不是"多一个块"：`only` 那条分页逻辑按 `data-block` 认块，多一个块就会多切一页。
  */
 export function ReportPaper({
   meta,
   plan,
   only,
-  shapeControl,
   anchors = true,
 }: {
   meta: CaseMeta;
   plan: ReportPlan;
   only?: readonly string[];
-  shapeControl?: React.ReactNode;
   /**
    * 小节要不要带 `id`。报告屏上同一份纸会**在同一个文档里画好几遍**（正文一遍、
    * 交付台的缩略一遍、导出预览里再一遍），带 id 的话同一个 `sec-*` 出现多次：
@@ -64,15 +64,19 @@ export function ReportPaper({
             <dt>证据</dt>
             <dd>{plan.evidenceCount}</dd>
           </dl>
-          {/* 屏幕上这一行可点，图片里它是一行字，说的是同一件事 */}
-          {shapeControl ?? (
-            <p className="stamp">
-              <span>
-                按{SHAPE_COPY[plan.shape].label}装 · 主体是{SHAPE_COPY[plan.shape].body}
-              </span>
-              {!plan.frozen && <span>这次调查还没收尾，报告会跟着它一起变</span>}
-            </p>
-          )}
+          {/* 形态是谁定的要印出来：`inferred` 说的是"没人判断过，按现有数据兜的底"，
+              读的人凭它决定信到什么程度。人不再挑形态之后，这是这行字唯一的出处 */}
+          <p className="stamp">
+            <span>
+              按{SHAPE_COPY[plan.shape].label}装
+              {/* 主体没装出来就别承诺它：紧接着那一节正在解释自己为什么不在 */}
+              {plan.mainAssembled
+                ? ` · 最前是${SHAPE_COPY[plan.shape].body}`
+                : ` · ${SHAPE_COPY[plan.shape].body}这次装不出来`}
+            </span>
+            <span>{SHAPE_SOURCE_COPY[plan.shapeSource]}</span>
+            {!plan.frozen && <span>这次调查还没收尾，报告会跟着它一起变</span>}
+          </p>
           {/* 半程报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
           {plan.abortedAt !== null && (
             <p className="aborted">调查在第 {plan.abortedAt} 步被人为终止。以下是查到为止的部分。</p>

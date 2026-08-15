@@ -1,5 +1,5 @@
 /**
- * 报告章节的组装：形态决定装哪几块（D25 / overview.md §6.1.1）。
+ * 报告章节的组装：形态决定**哪一块排最前**，其余块各按自己的门槛补（D25 / overview.md §6.1.1）。
  *
  * **纯函数，报告屏与两种导出共用这一份**（ui.md §7）：Markdown 与长图只是换个渲染目标，
  * 章节的取舍与顺序不该各写一遍——写两遍的结果必然是导出的那份与屏幕上的那份对不上，
@@ -29,6 +29,27 @@ export const SHAPE_COPY: Record<VerdictShape, { label: string; when: string; bod
   chain: { label: '因果链型', when: '一处变更连锁放大', body: '因果链 + 最弱一环' },
   distribution: { label: '分布型', when: '问题只在某一小撮上', body: '归因切分' },
   open: { label: '未决型', when: '没查出来', body: '排除矩阵 + 遗留问题' },
+};
+
+/**
+ * 形态是谁定的。**人不再选之后这个信号反而更要紧**：`inferred` 说的是"没人判断过，
+ * harness 按现有数据兜的底"，读报告的人凭它决定信到什么程度。
+ * 冻住之后一律 `frozen`——那时实时建议早就换过好几轮，拿它当出处会说出一句不属于这份报告的话。
+ */
+export type ShapeSource = 'frozen' | 'agent' | 'inferred';
+
+/**
+ * 形态是谁定的，印在纸头 / Markdown 元信息那一行。**长图与 Markdown 共用这一份**，
+ * 理由同 `SHAPE_COPY`：各写一份的话两种导出迟早说出两句不一样的话。
+ *
+ * 三档不能合成一句：`inferred` 说的是"没人判断过，harness 按现有数据兜的底"，
+ * 而读的人正是凭这句决定这个形态信到什么程度。
+ */
+export const SHAPE_SOURCE_COPY: Record<ShapeSource, string> = {
+  // 「收尾」而不是「定稿」：归档同样落形态（强制 `open`），说成定稿等于替一次明写的放弃改口
+  frozen: '收尾时冻住的',
+  agent: 'agent 声明的',
+  inferred: '没人声明过，按现有数据推的',
 };
 
 export type ChainLink = {
@@ -75,6 +96,7 @@ export type ReportInput = {
   case: CaseMeta;
   /** 冻结的那个形态；还没收尾时是推断出来的预览值，由 `reportInput()` 挑。 */
   shape: VerdictShape;
+  shapeSource: ShapeSource;
   /** 形态已经冻住了没有。false = 这份报告只是按当前数据的预览，还会变。 */
   frozen: boolean;
   steps: StepNode[];
@@ -84,6 +106,16 @@ export type ReportInput = {
 
 export type ReportPlan = {
   shape: VerdictShape;
+  shapeSource: ShapeSource;
+  /**
+   * 形态承诺的那一块真的装出来了没有。**纸头那行字靠它决定说不说「最前是 X」**——
+   * 装不出来还照说的话，读者会先读到一句承诺、紧接着读到同一块在解释自己为什么不在。
+   *
+   * 这不是异常路径：一次只有一条已证实结论的调查，`suggestVerdictShape()` 会推 `chain`，
+   * 而五种形态的主体这时一个都装不出来（时间线不足两条、没有应然实然、链不足两环）。
+   * 那样的报告仍旧是完整的——根因加通用四块，只是没有"重点"这一块。
+   */
+  mainAssembled: boolean;
   frozen: boolean;
   /**
    * stepId → 读者看得见的编号。**`ordinal` 是会话内序号，一次调查重开一次就从 1 重来**，
@@ -121,21 +153,23 @@ const TITLES: Record<string, string> = {
 };
 
 /**
- * 报告屏与导出都从快照进来，形态怎么挑只此一处。
+ * 报告屏与两种导出都从快照进来，形态怎么定只此一处。
  *
- * @param pick 人在报告屏上正预演的那一个（[ui] §6）。**优先级低于已冻住的那个**：
- * 冻结之后事后没有入口再改，这里让它盖住的话，屏上会显示一份与库里不同的报告。
- * 参数留在这个函数里而不是让调用方自己改 `input.shape`——挑形态只此一处，
- * 屏上再挑一次的话，屏幕与两种导出迟早各按各的装。
+ * **形态是 agent 的判断，不是人的选择**（D25）。一度在这儿收一个 `pick` 参数，
+ * 让人在纸头上五选一，已推翻：那次判断要人读完整个排查过程才做得了，而最清楚过程的是 agent。
+ * 现在这里只做一件事——冻住的那个盖过实时建议，因为定稿之后没有入口再改，
+ * 让实时值盖住的话，屏上会显示一份与库里不同的报告。
  */
-export function reportInput(snap: Snapshot, pick?: VerdictShape | null): ReportInput | null {
+export function reportInput(snap: Snapshot): ReportInput | null {
   if (!snap.case) return null;
+  const frozen = snap.case.verdictShape !== null;
   return {
     case: snap.case,
-    // 收尾那一下才落形态；在那之前照推断值预览，人动过手就照人挑的——预览与冻结之后
-    // 装的是同几块，于是在按下不可逆那一下之前就见过这份报告长什么样
-    shape: snap.case.verdictShape ?? pick ?? snap.shapeSuggestion.shape,
-    frozen: snap.case.verdictShape !== null,
+    // 收尾那一下才落形态；在那之前照建议值预览——预览与冻结之后装的是同几块，
+    // 于是在按下不可逆那一下之前就见过这份报告长什么样
+    shape: snap.case.verdictShape ?? snap.shapeSuggestion.shape,
+    shapeSource: frozen ? 'frozen' : snap.shapeSuggestion.source,
+    frozen,
     steps: snap.steps,
     incident: snap.incident,
     report: snap.report,
@@ -172,7 +206,8 @@ export function reportPlan(input: ReportInput): ReportPlan {
     );
   }
 
-  sections.push(...mainBody(input));
+  const body = mainBody(input);
+  sections.push(...body);
   // 四块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留问题提成了主体，
   // 于是它在这儿会撞上——**同一节不装两遍**，位置以先出现的那次为准
   sections.push(
@@ -185,6 +220,11 @@ export function reportPlan(input: ReportInput): ReportPlan {
 
   return {
     shape: input.shape,
+    shapeSource: input.shapeSource,
+    // 主体那几块里但凡有一块落成了 `absent`，形态承诺的东西就没有全兑现
+    mainAssembled: MAIN_BLOCKS[input.shape].every(
+      (id) => body.find((s) => s.id === id)?.body.kind !== 'absent',
+    ),
     frozen: input.frozen,
     labels: stepLabels(input.steps),
     evidenceCount: input.steps.reduce((n, s) => n + s.evidence.length, 0),
@@ -193,42 +233,137 @@ export function reportPlan(input: ReportInput): ReportPlan {
   };
 }
 
-/** 形态的主体块。**「不投影」那一列同样是规则**：有数据也不装，装了就稀释掉真正该看的对照。 */
+/**
+ * 主体块的 id：形态挑的就是这几个之一。`leftover` 不在其中——它是通用四块之一，
+ * 未决型只是把它提前，不需要门槛。
+ */
+type BodyId = 'timeline' | 'contrast' | 'chain' | 'split' | 'matrix';
+
+/**
+ * 形态决定**哪一块排最前**，不决定哪几块不许出现（D25 / overview.md §6.1.1）。
+ *
+ * 一度是后者（每种形态硬丢掉另外几块），已推翻：硬丢的代价是 agent 判错一次就少一整块，
+ * 而定稿不可逆。现在判错的代价降成"重点排错了序"——时序型的调查里 agent 写了 chain，
+ * 时间线不会消失，只是排在因果链后面。
+ */
+const MAIN_BLOCKS: Record<VerdictShape, readonly BodyId[]> = {
+  sequence: ['timeline'],
+  state: ['contrast'],
+  chain: ['chain'],
+  distribution: ['split'],
+  open: ['matrix'],
+};
+
+/** 非主体块补在主体之后的固定顺序：发生了什么 → 本该怎样 → 怎么连锁 → 排除了什么。 */
+const BODY_ORDER: readonly BodyId[] = ['timeline', 'contrast', 'chain', 'split', 'matrix'];
+
+/**
+ * 主体块装不出来时那句话。**只有主体块缺席要写出来**——它是形态承诺的那一块，
+ * 默默少掉的话，报告顶上说着"按 X 装"而 X 的主体不在。
+ * 非主体块缺席就静静隐藏，那本来就是"有则展示、无则隐藏"的另一半。
+ */
+const ABSENT_WHY: Record<BodyId, string> = {
+  timeline:
+    '这份报告按时序型装，主体本该是系统时间线，但带时间戳的证据不足两条——两条以下排不出"顺序"，那一块会是一行孤零零的记录。',
+  contrast:
+    '这份报告按状态型装，主体本该是应然 / 实然对照，但根因那一步没有成对地给出这两项。那一步已经收口了，这一块补不回来。',
+  chain: '这份报告按因果链型装，但根因之前只有一条已证实的结论，串不成一条链——它要说的话根因那一栏已经说完了。',
+  // ⚠️ 门槛是**分不分得出两组**，不是"有没有标 actor"：证据全都规规矩矩标着同一个 actor 时
+  // 同样只有一组。按"没标注"写的话，读的人会去补一份本来就不缺的数据
+  split:
+    '这份报告按分布型装，主体本该是归因切分，但全部证据只归得出一组主体，切不出可对照的另一撮——"问题只压在某一小撮上"这句话于是没有依据。',
+  matrix: '没查出根因，也没有哪个方向被明确排除掉。排除矩阵是空的，这份报告能说的只有遗留问题。',
+};
+
+/**
+ * 章节的主体：形态挑的那一块排最前，其余块各按自己的门槛补上（overview.md §6.1.1）。
+ *
+ * **门槛不是"有没有数据"，是"装出来说不说得清一件事"。** 一度是纯粹的有数据就装，
+ * 已推翻：证据一律要填 `actor`（提示词第 4 条），已证实的 step 也总是有的，
+ * 于是归因切分与因果链的原料恒定存在——按"有就装"写的话每份报告都会顶着这两块，
+ * 而把十来条证据按 gateway / db / app 分个组，对绝大多数调查说明不了任何事。
+ *
+ * 🔴 **`split` 是唯一保留"非主体不装"的一块。** 它的门槛数据里没有：证据的 actor 分布
+ * 反映的是**agent 查了哪儿**，不是问题压在哪儿——查了 8 次网关、2 次库，
+ * 网关那组自然最大，而这与"问题只在某一小撮上"毫无关系。只有 agent 说得出这句话。
+ */
 function mainBody(input: ReportInput): ReportSection[] {
-  const { report } = input;
-  switch (input.shape) {
-    case 'sequence':
-      return [sec('timeline', '投影 · ORDER BY occurred_at_ms', { kind: 'timeline', rows: input.incident })];
-    case 'state':
-      return [
-        sec('contrast', 'agent 填写 · 挂在根因那一步', {
-          kind: 'contrast',
-          expected: report.expected,
-          actual: report.actual,
-        }),
-        // 状态型**显式写出为什么没有系统时间线**，而不是默默少一节（overview.md §6.1.1）
-        sec('timeline', '——', {
-          kind: 'absent',
-          why: '状态型故障没有"事发瞬间"：它一直就是错的，直到被发现。硬排一条时间线只会得到「某天变更、某天发现」两行，还会把真正该看的应然 / 实然对照挤到后面去。',
-        }),
-      ];
-    case 'chain':
-      return [sec('chain', '投影 · 已证实的 step 按先后', chainBody(input))];
-    case 'distribution':
-      return [
-        sec('split', '投影 · 证据按 actor 归组', {
-          kind: 'split',
-          groups: splitGroups(input.steps),
-          expected: report.expected,
-          actual: report.actual,
-        }),
-      ];
-    case 'open':
-      return [
-        sec('matrix', '投影 · 被推翻的 step', { kind: 'matrix', rows: report.refuted }),
-        sec('leftover', '投影 · 未查清的 step', { kind: 'notes', rows: report.leftovers }),
-      ];
+  const main = MAIN_BLOCKS[input.shape];
+  const out: ReportSection[] = main.map((id) => block(id, input) ?? absent(id));
+  // 未决型把遗留问题一起提成主体；它没有门槛，通用四块里那一份由 `dedupe` 收掉
+  if (input.shape === 'open') out.push(leftoverSection(input));
+  for (const id of BODY_ORDER) {
+    // 已经在主体里的那几块由 `dedupe` 收掉，不必在这儿再判一次
+    if (id === 'split') continue;
+    const s = block(id, input);
+    if (s) out.push(s);
   }
+  return out;
+}
+
+/** 一块的门槛与内容。`null` = 门槛没过，这一块装不出来。 */
+function block(id: BodyId, input: ReportInput): ReportSection | null {
+  const { report } = input;
+  switch (id) {
+    case 'timeline':
+      // 🔴 **两条这个数与 `suggestVerdictShape()` 推 `sequence` 的门槛是同一个**
+      // （`backend/store/sqlite-store.ts`）。两边分叉的话，推断出来的时序型会配上一个
+      // 装不出主体的报告——而两处都不会报错
+      return input.incident.length >= 2
+        ? sec('timeline', '投影 · ORDER BY occurred_at_ms', { kind: 'timeline', rows: input.incident })
+        : null;
+    case 'contrast':
+      // 🔴 **成对才算数，与 `suggestVerdictShape()` 的 `stateFillable` 是同一个判断**
+      // （`backend/store/sqlite-store.ts` 用的是 AND）。这里放宽成 `||` 的话，
+      // 定稿确认块按 `stateFillable` 说着"这一块装不出来"，而纸上正印着一行
+      // 「实际 ——」——两处各自看都自洽，对不上时没有任何报错
+      return report.expected && report.actual
+        ? sec('contrast', 'agent 填写 · 挂在根因那一步', {
+            kind: 'contrast',
+            expected: report.expected,
+            actual: report.actual,
+          })
+        : null;
+    case 'chain': {
+      const body = chainBody(input);
+      // 一环的"链"不是链，它说的话根因栏已经说完了
+      return body.links.length >= 2 ? sec('chain', '投影 · 已证实的 step 按先后', body) : null;
+    }
+    case 'split': {
+      const groups = splitGroups(input.steps);
+      // 一组切不出对照——"只在某一小撮上"要成立，至少得有另一撮
+      return groups.length >= 2
+        ? sec('split', '投影 · 证据按 actor 归组', {
+            kind: 'split',
+            groups,
+            // 干净的那组 / 出问题的那组同样成对才有意义，理由同 `contrast`
+            expected: paired(report).expected,
+            actual: paired(report).actual,
+          })
+        : null;
+    }
+    case 'matrix':
+      return report.refuted.length
+        ? sec('matrix', '投影 · 被推翻的 step', { kind: 'matrix', rows: report.refuted })
+        : null;
+  }
+}
+
+/**
+ * 应然/实然只有成对才说得出一件事，单边的那一半按没有算。
+ * 写入侧只当场 warning、不拒绝（`shapeWarnings()`），所以库里真会躺着单边的。
+ */
+function paired(report: ReportInput['report']): { expected: string | null; actual: string | null } {
+  const ok = !!(report.expected && report.actual);
+  return { expected: ok ? report.expected : null, actual: ok ? report.actual : null };
+}
+
+function leftoverSection(input: ReportInput): ReportSection {
+  return sec('leftover', '投影 · 未查清的 step', { kind: 'notes', rows: input.report.leftovers });
+}
+
+function absent(id: BodyId): ReportSection {
+  return sec(id, '——', { kind: 'absent', why: ABSENT_WHY[id] });
 }
 
 /**
@@ -244,7 +379,7 @@ function mainBody(input: ReportInput): ReportSection[] {
  * 最弱一环取置信度最低的那一环——它是这条链上最先该被追问的地方。
  * 一条都没标置信度时**不给最弱一环**，而不是随手指一个：没有依据的"最弱"比没有更糟。
  */
-function chainBody(input: ReportInput): ReportBody {
+function chainBody(input: ReportInput): Extract<ReportBody, { kind: 'chain' }> {
   const rootId = input.report.rootCause?.stepId ?? null;
   const confirmed = input.steps.filter((s) => s.kind === 'normal' && s.status === 'confirmed');
   // 认不出根因就整条都留着。**这个兜底方向是有意的**：截空的话主体块会是空的，
@@ -317,8 +452,8 @@ function sec(id: string, source: string, body: ReportBody): ReportSection {
 export type TailSummary = {
   status: CaseMeta['status'];
   shape: VerdictShape;
-  /** `frozen` = 收尾那一下冻住的；另两档是还会变的预选值（ui.md §8.4.2 的三种出处）。 */
-  shapeSource: 'frozen' | 'agent' | 'inferred';
+  /** `frozen` = 收尾那一下冻住的；另两档是还会变的建议值（ui.md §8.4.2）。 */
+  shapeSource: ShapeSource;
   /** 报告真会印的那条根因（`reportedRootCause`）；null 时读 `why`。 */
   rootCause: { text: string; confidence: number | null } | null;
   /** 没有根因时**写出为什么没有**——缺席写出来比留一块白可信（overview.md §6.1.1 同源）。 */
@@ -351,7 +486,7 @@ export function tailSummary(snap: Snapshot): TailSummary | null {
   return {
     status: input.case.status,
     shape: input.shape,
-    shapeSource: input.frozen ? 'frozen' : snap.shapeSuggestion.source,
+    shapeSource: input.shapeSource,
     rootCause: reportedRootCause(input),
     why: whyNoRootCause(input),
     gaps: snap.closingGaps,
@@ -364,11 +499,11 @@ export function tailSummary(snap: Snapshot): TailSummary | null {
  * 尾卡上没有根因时那句话。**它要说的是"这份报告实际会装成什么样"**，
  * 所以三档各说各的，不能合成一句。
  *
- * 🔴 **"没有根因" 与 "按未决型装" 是两件事，别当成一件。** 定稿闸只挡影响面与遗留问题两步，
- * 一条已证实的根因都没有照样结得了案，而确认条上五种形态任人选（[ui] §8.4.2 明说
- * 状态型缺应然/实然时只压暗、不禁用）。于是有这么一份真实的报告：冻在 `state`、
- * 主体是应然/实然对照、根因栏因为没有根因而整个不印——把它说成"按未决型装"，
- * 工作区与报告屏当场自相矛盾，而两边各自看都自洽。
+ * 🔴 **"没有根因" 与 "按未决型装" 是两件事，别当成一件。** 实时那条路上两者现在总是同进同退
+ * （`suggestVerdictShape` 没有根因就推 `open`），但**第三档不能因此删掉**：冻住的形态是
+ * 定稿那一刻落的库值，它与此刻的根因之间没有任何约束再管着。合成一句的话，
+ * 一份冻在 `state`、根因栏因为没有根因而整个不印的报告，会被工作区说成"按未决型装"——
+ * 而报告屏上明写着状态型，两边各自看都自洽。
  *
  * 「这会儿」同理只准出现在没冻住的那一档：冻住之后事后没有入口再改，
  * 那句话读起来像还会变。

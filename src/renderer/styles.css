@@ -1190,11 +1190,11 @@ button.primary:has(> .ic) { gap: 6px; }
 .paper { max-width: 1240px; margin: 0 auto; padding: 56px 60px 96px; font-size: 15.5px; line-height: 1.72; }
 .paper p { max-width: 76ch; }
 /* 纸头两栏：左边是这次调查在问什么，右边是它的身份证。1240 的宽度本来就摊得开，
-   挤成一行读起来像状态栏。第三行（形态条或那句 stamp）横跨两栏 */
+   挤成一行读起来像状态栏。第三行那句 stamp 横跨两栏 */
 .paper header { display: grid; grid-template-columns: minmax(0, 1fr) 216px; gap: 8px 44px; align-items: start; }
 .paper header > .ask { grid-column: 1; }
 .paper header > .idcard { grid-column: 2; grid-row: 1 / span 2; }
-.paper header > .stamp, .paper header > .shapebar, .paper header > .aborted { grid-column: 1 / -1; }
+.paper header > .stamp, .paper header > .aborted { grid-column: 1 / -1; }
 .paper header h1 { margin: 0; font-size: 25px; font-weight: 600; letter-spacing: -.01em; line-height: 1.3; }
 .paper header .question { margin: 12px 0 0; color: var(--dim); font-size: 14.5px; }
 .idcard {
@@ -1204,7 +1204,7 @@ button.primary:has(> .ic) { gap: 6px; }
 .idcard dt { color: var(--dim-2); font-size: 11px; }
 .idcard dd { margin: 0; font-family: var(--mono); color: var(--text); font-size: 11.5px; text-align: right;
   overflow: hidden; text-overflow: ellipsis; }
-/* 冻结之后形态条退成这一行字，与图片里那一份完全一样：事后没有入口再改 */
+/* 形态、它的出处、以及"还会变"那句。屏幕与图片里是同一行字（D25） */
 .paper header .stamp {
   margin: 22px 0 0; padding-top: 12px; border-top: 1px solid var(--line-soft);
   font-size: 12.5px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap;
@@ -1213,35 +1213,6 @@ button.primary:has(> .ic) { gap: 6px; }
   margin: 16px 0 0; padding-left: 14px; border-left: 2px solid var(--dim);
   font-size: 13.5px; color: var(--text);
 }
-
-/* ── 纸头上的形态选择器（D25）──────────────────────────────────
-   点一下下面整份纸当场换装。它长在 stamp 那一行的位置，因为「这份按哪种装」本来就是
-   那行字说的事——屏幕上它可点，图片里它是一行字。**由 `Report.tsx` 作为节点传进来**，
-   长图那份不传，所以它不可能漏进导出 */
-.shapebar {
-  margin: 22px 0 0; padding: 14px 16px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-}
-.shapebar .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.shapebar .lead { font-size: 12.5px; color: var(--dim); margin-right: 4px; }
-.shapebar .row > button {
-  background: none; border: 1px solid var(--line); color: var(--dim);
-  padding: 4px 12px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12.5px;
-}
-.shapebar .row > button:hover { color: var(--text); border-color: var(--dim-2); }
-/* 选中不用填色（ui.md §5）：主色描边 + 主色字 */
-.shapebar .row > button.on { border-color: var(--fill); color: var(--accent); }
-/* 选得了但会装出一块空的：压暗而不是禁用——人可能确实知道是这一类，而 agent 没填那一对 */
-.shapebar .row > button.thin { opacity: .5; }
-.shapebar .row > button.revert { margin-left: auto; border-color: transparent; font-size: 11.5px; padding: 3px 8px; }
-.shapebar .note {
-  margin-top: 10px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
-  font-size: 12px; color: var(--dim);
-}
-.shapebar .note b { color: var(--text); font-weight: 600; }
-/* 推断值与 agent 声明的要分得出来：前者只是个不至于装错块的兜底 */
-.shapebar .note em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--dim-2); }
-.shapebar .note .warn { color: var(--warn); }
 
 .paper section { margin-top: 52px; }
 .paper h2 {

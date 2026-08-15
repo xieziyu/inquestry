@@ -268,9 +268,12 @@ export function installPreviewApi(): void {
       return true;
     },
     requestClosing: async () => ({ missing: current.closingGaps, asked: true, suggestion: current.shapeSuggestion }),
-    closeCase: async (_id, shape) => {
+    closeCase: async () => {
       if (current.closingGaps.length) return { ok: false, missing: current.closingGaps };
-      patch({ case: current.case && { ...current.case, status: 'closed', verdictShape: shape } });
+      // 真 main 在落库那一刻现算（`closeCase()`）；这里照它的来源取，别另挑一个
+      patch({
+        case: current.case && { ...current.case, status: 'closed', verdictShape: current.shapeSuggestion.shape },
+      });
       return { ok: true, status: 'closed' };
     },
     archiveCase: async () => {

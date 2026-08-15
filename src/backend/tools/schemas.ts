@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { DECLARABLE_SHAPES } from '../../shared/ipc.js';
 
 /** 证据引用。`callRef` 用 step 内的调用序号而非 toolUseId —— 让 agent 抄 uuid 不可靠。 */
 export const evidenceItemShape = {
@@ -59,15 +60,17 @@ export const closeStepShape = {
     .optional()
     .describe('本步的结论推翻了此前哪些 step，填它们的 id。'),
   shape: z
-    .enum(['sequence', 'state', 'chain', 'distribution', 'open'])
+    .enum(DECLARABLE_SHAPES)
     .optional()
     .describe(
-      '这是哪一类故障——它决定最终报告装哪几块。**只在这一步给出了整个调查的根因时才填**。' +
-        'sequence = 顺序/竞态错了，主体是系统时间线；' +
-        'state = 某个东西一直就是错的（配置写错、索引缺失、证书过期），主体是应然/实然对照，没有时间线；' +
-        'chain = 一处变更连锁放大，主体是因果链；' +
-        'distribution = 问题只出在某一小撮上，主体是归因切分；' +
-        'open = 没查出来。填错的代价是报告装出一块空的，宁可不填让人来选。',
+      '这是哪一类故障——它决定报告把哪一块排在最前。**给出整个调查根因的那一步必须填**，其余步一律留空。' +
+        '按这个顺序判，第一个成立的就是它：' +
+        'sequence = 顺序 / 竞态错了，先后本身就是解释，主体是系统时间线；' +
+        'state = 某个东西一直就是错的（配置写错、索引缺失、证书过期），主体是应然/实然对照，' +
+        '选它就必须把 expected / actual 成对填上，那一对就是主体；' +
+        'distribution = 问题只压在某一小撮上（某几个租户 / 分片 / 机器），别的同类是干净的，主体是归因切分；' +
+        'chain = 其余一切，一处变更连锁放大，主体是因果链。' +
+        '**判错不会让报告少一块**（其余块照旧按数据补上），只是重点排错了序——所以别因为拿不准就空着。',
     ),
   expected: z
     .string()

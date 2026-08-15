@@ -6,7 +6,6 @@ import type {
   IntakeDraft,
   OperatorReply,
   Snapshot,
-  VerdictShape,
 } from '../shared/ipc.js';
 import type { UiSettings } from '../shared/settings.js';
 
@@ -26,15 +25,13 @@ const api: InquestryApi = {
   interrupt: (caseId: string) => ipcRenderer.invoke('case:interrupt', caseId),
   stopLane: (caseId: string, lane: string) => ipcRenderer.invoke('case:stopLane', caseId, lane),
   requestClosing: (caseId: string) => ipcRenderer.invoke('case:requestClosing', caseId),
-  closeCase: (caseId: string, shape: VerdictShape) => ipcRenderer.invoke('case:close', caseId, shape),
+  closeCase: (caseId: string) => ipcRenderer.invoke('case:close', caseId),
   archiveCase: (caseId: string) => ipcRenderer.invoke('case:archive', caseId),
   answerOperator: (caseId: string, reply: OperatorReply) =>
     ipcRenderer.invoke('case:answerOperator', caseId, reply),
   decideGate: (caseId: string, d: GateDecision) => ipcRenderer.invoke('case:decideGate', caseId, d),
-  exportMarkdown: (caseId: string, shape?: VerdictShape | null) =>
-    ipcRenderer.invoke('case:exportMarkdown', caseId, shape ?? null),
-  exportImage: (caseId: string, shape?: VerdictShape | null) =>
-    ipcRenderer.invoke('case:exportImage', caseId, shape ?? null),
+  exportMarkdown: (caseId: string) => ipcRenderer.invoke('case:exportMarkdown', caseId),
+  exportImage: (caseId: string) => ipcRenderer.invoke('case:exportImage', caseId),
   exportPayload: (token: string) => ipcRenderer.invoke('export:payload', token),
   searchCases: (term: string) => ipcRenderer.invoke('case:search', term),
   snapshot: () => ipcRenderer.invoke('case:snapshot'),

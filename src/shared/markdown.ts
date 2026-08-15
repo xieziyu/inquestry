@@ -17,6 +17,7 @@ import type { CallNode, EvidenceNode, IncidentEntry, ReportStepRef, StepNode } f
 import { exportStamp } from './time.js';
 import {
   SHAPE_COPY,
+  SHAPE_SOURCE_COPY,
   reportPlan,
   type ChainLink,
   type ReportInput,
@@ -97,7 +98,7 @@ function lede(input: ReportInput, ctx: Ctx): string {
     lines.push(`⚠️ 调查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
   }
   if (!ctx.plan.frozen) {
-    lines.push('⚠️ 这次调查还没收尾：形态是按现有数据推的，报告会跟着调查一起变。');
+    lines.push('⚠️ 这次调查还没收尾，报告会跟着它一起变。');
   }
 
   return lines.map((l) => `> ${l}`).join('\n>\n');
@@ -108,7 +109,9 @@ function meta(input: ReportInput, ctx: Ctx): string {
   const shape = SHAPE_COPY[ctx.plan.shape];
   return [
     `- **问的是**：${inline(c.question)}`,
-    `- **按${shape.label}装** · 主体是${shape.body}`,
+    // 形态的出处与形态本身同行：`inferred` 说的是"没人判断过"，读的人凭它决定信到什么程度。
+    // 主体装没装出来同样要照实说，理由与纸头那一行相同
+    `- **按${shape.label}装** · ${ctx.plan.mainAssembled ? `最前是${shape.body}` : `${shape.body}这次装不出来`} · ${SHAPE_SOURCE_COPY[ctx.plan.shapeSource]}`,
     `- **基准日期**：${codeSpan(c.incidentDate)} ${c.tzOffset}`,
   ].join('\n');
 }
@@ -310,8 +313,9 @@ function footnotes(input: ReportInput, ctx: Ctx): string {
 /**
  * mermaid 只作为**附加**，且只在这份报告真的装了系统时间线时才给（§7.1）。
  *
- * 形态说不投影时间线（状态型、分布型）就一张都没有——从这条侧门把它塞回去，
- * 等于让"不投影"那一列在导出里失效。
+ * **认的是 `plan` 里有没有那一节，不是 `input.incident` 有没有行。** 时间线那一块有自己的门槛
+ * （overview.md §6.1.1），从这条侧门按原始数据塞一张回去，等于在导出里绕开那个门槛——
+ * 于是 Markdown 有图、屏幕上没有那一节。
  */
 function mermaid(plan: ReportPlan, ctx: Ctx): string | null {
   const section = plan.sections.find((s) => s.id === 'timeline');

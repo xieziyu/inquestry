@@ -240,13 +240,24 @@ export const isVerdictShape = (v: unknown): v is VerdictShape =>
  * 那条根因说得出这句话。别处（比如一条误填了 shape 的 impact step）说了不算，
  * 否则报告会按 A 步的形态装块、却填 B 步的内容。
  *
+ * **`open` 不是 agent 说得算的一档**，所以它已经不在 `close_step` 的枚举里（`schemas.ts`）。
+ * 它是事实：一条已证实的根因都没有就是它，归档强制也是它。库里若躺着更早写进去的
+ * `open` 声明，这里当作没声明——留着的话，一次真查出了根因的调查会因为那句声明而
+ * 不印根因栏，而声明与事实哪个对，事实说了算。
+ *
  * 没声明才推，而推的规则只有一条准绳：**宁可少装一块，也不能装一块空的或不存在的**。
  *
  * - 没有已证实的根因 → `open`。这不是猜：没查出来就是没查出来，报告里本就不该有根因栏
- * - 根因那一步给了应然/实然 → `state`。这对字段正是状态型的主体，它在就说明是这一类
- * - 系统时间线上有两条以上证据 → `sequence`。少于两条排不出"顺序"，那一块会是一行孤零零的记录
- * - 其余 → `chain`。它的主体（每环带置信度的因果链 + 最弱一环）能从 step 树直接投影，
- *   任何调查都装得出来；换成 `open` 会把一条真实结论从报告里抹掉，换成 `sequence` 是一块空的
+ * - 根因那一步给了应然/实然 → `state`。这对字段正是它排最前的那一块，它在就说明是这一类
+ * - 系统时间线上有两条以上证据 → `sequence`。**两条这个数与 `shared/report.ts` 里
+ *   时间线那一块的门槛是同一个**，两边分叉的话推出来的时序型会配上一个装不出主体的报告
+ * - 其余 → `chain`。它是**终点档**，不是"一定装得出来的那一档"
+ *
+ * 🔴 **兜底兜的是形态，不是"这份报告一定有主体"。** 一次只有一条已证实结论的调查
+ * （没时间戳、没应然实然）会推到 `chain`，而链要两环才成立（`shared/report.ts` 的 `block()`）——
+ * 五种主体这时一个都装不出来。**这不是缺陷，是那种调查本来就没有"重点"这一块**：
+ * 报告仍旧是根因加通用四块。所以别在这儿为了"凑一个装得出来的"去改推断，
+ * 那只会让形态说一件数据不支持的事；报告那侧靠 `mainAssembled` 照实说，纸头不会承诺一块不在的东西。
  */
 export function suggestVerdictShape(db: Db, caseId: string): ShapeSuggestion {
   const root = reportSections(db, caseId).rootCause;
@@ -258,7 +269,9 @@ export function suggestVerdictShape(db: Db, caseId: string): ShapeSuggestion {
     // trim 是兜底：写入侧已经把纯空白归一掉了，但同一 schema 版本里可能躺着更早写进去的
     stateFillable: !!(root?.expected?.trim() && root?.actual?.trim()),
   };
-  if (root && isVerdictShape(root.shape)) return { shape: root.shape, source: 'agent', ...from };
+  if (root && isVerdictShape(root.shape) && root.shape !== 'open') {
+    return { shape: root.shape, source: 'agent', ...from };
+  }
 
   const shape: VerdictShape = !root
     ? 'open'
@@ -802,7 +815,10 @@ function shapeWarnings(
     );
   }
   if (final.shape === 'state' && !(final.expected && final.actual)) {
-    out.push('状态型（state）报告的主体就是 expected / actual 这一对，缺了报告那一栏是空的。');
+    out.push(
+      '状态型（state）排最前的那一块就是 expected / actual 这一对，缺了这一块整个装不出来，' +
+        '报告上只会留一句"声明的是状态型，但根因那一步没给这一对"。',
+    );
   }
   if (!final.expected !== !final.actual) {
     out.push('expected 与 actual 要成对给：只有一半的对照说明不了任何事。');

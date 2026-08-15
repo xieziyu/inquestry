@@ -3,11 +3,14 @@
  *
  * 纯函数，不碰库也不起会话，因此**不用 rebuild ABI**：跑 `npm run spike:report` 即可。
  *
- * 这一带的错法有个共同形状：**"有数据就装"**。它一条都不会报错，装出来的报告看着还更完整——
+ * 这一带的错法有两个方向，且都不会报错：
  *
- *   1. 归档的半程报告明写着"没查出来"，却顶着一条根因（库里确实躺着一条已证实的）
- *   2. 时序型把应然/实然也一并印上，把该看的时间顺序挤到后面
- *   3. 状态型默默少一节时间线，读者不知道是没有还是漏了
+ *   1. **有数据就装**——归档的半程报告明写着"没查出来"却顶着一条根因；每份报告都挂着一节
+ *      按 actor 分的归因切分，而那张表说明不了任何事
+ *   2. **该装的被硬丢**——形态判错一次就少一整块，而定稿不可逆。所以现在形态只管排序，
+ *      取舍交给各块自己的门槛（overview.md §6.1.1）
+ *
+ * 于是缺席分两种，验的时候别混：**主体块缺席要写出为什么，非主体块缺席就隐藏。**
  *
  * 另一个形状是**自己再挑一次根因**：报告的结构（装哪几块）与内容（印哪条结论）
  * 就此指着两条不同的步，同样毫无报错。所以夹具里投影给的根因**故意不是置信度最高的那条**。
@@ -17,10 +20,17 @@
  */
 
 import { EMPTY_SNAPSHOT, VERDICT_SHAPES, type Snapshot } from '../src/shared/ipc.js';
-import { reportInput, reportPlan, tailSummary, type ReportInput } from '../src/shared/report.js';
+import {
+  reportInput,
+  reportPlan,
+  SHAPE_SOURCE_COPY,
+  tailSummary,
+  type ReportInput,
+} from '../src/shared/report.js';
 // 夹具与 spike:markdown 共用一份（`fixtures/report-case.ts`）：章节的取舍与它的渲染是
 // 同一条链路的前后两段，各自造一份的话，一边补了字段另一边没补，那边的检查就变成空的
-import { base, FIX_TEXT, incident, report, steps } from './fixtures/report-case.js';
+import { reportMarkdown } from '../src/shared/markdown.js';
+import { base, FIX_TEXT, incident, report, step, steps } from './fixtures/report-case.js';
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -29,7 +39,7 @@ const ids = (over: Partial<ReportInput>) => reportPlan(base(over)).sections.map(
 const bodyOf = (over: Partial<ReportInput>, id: string) =>
   reportPlan(base(over)).sections.find((s) => s.id === id)?.body;
 
-// ── 形态决定装哪几块，「不投影」那一列同样是规则 ──────────────────────────
+// ── 形态决定哪一块排最前，其余块按门槛补 ────────────────────────────────
 
 check(
   '未决型没有根因栏，哪怕库里正躺着一条已证实的',
@@ -53,24 +63,191 @@ check(
 );
 
 check(
-  '状态型显式写出为什么没有系统时间线',
+  '形态挑的那一块紧跟根因栏排最前',
   (() => {
-    const b = bodyOf({ shape: 'state' }, 'timeline');
-    return b?.kind === 'absent' && b.why.length > 0;
+    const want = { sequence: 'timeline', state: 'contrast', chain: 'chain', distribution: 'split', open: 'matrix' } as const;
+    return VERDICT_SHAPES.every((s) => {
+      const l = ids({ shape: s });
+      // 未决型没有根因栏，主体就是第一块；其余四种排在它后面
+      return l[s === 'open' ? 0 : 1] === want[s];
+    });
   })(),
-  '默默少一节的话，读者分不出是本来就没有还是漏了。缺席写出来比省略可信',
+  '形态现在只决定顺序（D25）：排错了序，读者得先读完两块不相干的才看到这次故障的解释',
 );
 
 check(
-  '时序型与因果链型不装应然实然，哪怕填着',
-  !ids({ shape: 'sequence' }).includes('contrast') && !ids({ shape: 'chain' }).includes('contrast'),
-  '夹具里 expected/actual 是有值的：按"有就装"写的话，该看时间顺序的报告会先被一段对照岔开',
+  '非主体块照旧按门槛补上，不再被形态硬丢',
+  (() => {
+    const l = ids({ shape: 'sequence' });
+    return l.includes('contrast') && l.includes('chain') && l.includes('matrix');
+  })(),
+  '夹具里应然实然填着、已证实的环有两条、被推翻的有一条：硬丢的代价是 agent 判错一次就少一整块，而定稿不可逆',
 );
 
 check(
-  '分布型不装系统时间线，哪怕有带时间的证据',
-  !ids({ shape: 'distribution' }).includes('timeline'),
-  '夹具里系统时间线有两条：装了就把"问题只在某一小撮"这件事稀释掉了',
+  '归因切分只在它是主体时才装',
+  (() => {
+    const others = VERDICT_SHAPES.filter((s) => s !== 'distribution');
+    return ids({ shape: 'distribution' }).includes('split') && others.every((s) => !ids({ shape: s }).includes('split'));
+  })(),
+  '它的门槛数据里没有——证据的 actor 分布反映的是 agent 查了哪儿，不是问题压在哪儿。夹具切得出两组，所以"按有就装"这个错法在这儿真会算错',
+);
+
+// ── 门槛：主体块缺席要写出来，非主体块缺席就隐藏 ──────────────────────────
+
+check(
+  '主体块装不出来时留一句说明，且仍在最前',
+  (() => {
+    // 声明了状态型，而根因那一步没给应然/实然——这一对补不回来，因为那一步已经收口了
+    const over = { shape: 'state' as const, report: { ...report, expected: null, actual: null } };
+    const l = ids(over);
+    const b = bodyOf(over, 'contrast');
+    return l[1] === 'contrast' && b?.kind === 'absent' && b.why.length > 0;
+  })(),
+  '主体是形态承诺的那一块，默默少掉的话纸头写着"按状态型装"而状态型的主体不在。位置也要保住：掉到末尾等于换了一份报告',
+);
+
+check(
+  '只给了一半的应然实然按没填算，状态型照样落进"装不出来"',
+  (() => {
+    // 写入侧对单边只 warning、不拒绝，所以库里真会躺着这一半（`shapeWarnings()`）
+    const halves = [{ actual: null }, { expected: null }];
+    return halves.every((half) => {
+      const over = { shape: 'state' as const, report: { ...report, ...half } };
+      return bodyOf(over, 'contrast')?.kind === 'absent';
+    });
+  })(),
+  '🔴 与 `suggestVerdictShape()` 的 stateFillable 是同一个判断（那边用 AND）。这边放宽成 || 的话，定稿确认块说着"这一块装不出来"，而纸上正印着一行「实际 ——」——两处各自看都自洽',
+);
+
+check(
+  '一半的应然实然也不会作为非主体块补进别的形态',
+  !ids({ shape: 'chain', report: { ...report, actual: null } }).includes('contrast'),
+  '"只有一半的对照说明不了任何事"（提示词里对 agent 就是这么说的），那它也不该因为形态换了就成立',
+);
+
+check(
+  '归因切分里的干净组 / 出问题组同样成对才印',
+  (() => {
+    const b = bodyOf({ shape: 'distribution', report: { ...report, actual: null } }, 'split');
+    return b?.kind === 'split' && b.expected === null && b.actual === null;
+  })(),
+  '它是 split 这一块里的一对，不是单独一节——门槛仍旧写在 report.ts 里，别下放到两个渲染器各判一次',
+);
+
+/**
+ * 只有一条已证实结论的调查：没时间戳、没应然实然，`suggestVerdictShape()` 推到终点档 `chain`，
+ * 而五种主体这时一个都装不出来。**这是正常可达的数据形状，不是异常路径。**
+ */
+const loneRoot = () =>
+  base({
+    shape: 'chain',
+    shapeSource: 'inferred',
+    steps: [
+      step({ id: 'sx1', status: 'confirmed', confidence: 0.8, evidence: [] }),
+      step({ id: 'sx2', kind: 'impact', status: 'confirmed', confidence: 0.7 }),
+      step({ id: 'sx3', kind: 'leftover', status: 'inconclusive' }),
+    ],
+    incident: [],
+    report: {
+      ...report,
+      rootCause: { stepId: 'sx1', text: '就这一步查出来了', confidence: 0.8 },
+      expected: null,
+      actual: null,
+      refuted: [],
+    },
+  });
+
+check(
+  '一条已证实结论的调查：主体装不出来，但报告仍是完整的一份',
+  (() => {
+    const plan = reportPlan(loneRoot());
+    const l = plan.sections.map((s) => s.id);
+    return (
+      plan.mainAssembled === false &&
+      l[0] === 'verdict' &&
+      ['impact', 'path', 'leftover', 'fix'].every((k) => l.includes(k))
+    );
+  })(),
+  '推断的终点档是 chain，而链要两环——那种调查本来就没有"重点"这一块，报告是根因加通用四块。别为了凑一个装得出来的去改推断',
+);
+
+check(
+  '主体装不出来时，纸头不承诺「最前是 X」',
+  (() => {
+    const md = reportMarkdown(loneRoot(), { generatedAt: 0 });
+    return md.includes('这次装不出来') && !md.includes('最前是因果链');
+  })(),
+  '🔴 承诺一句、紧接着同一块在解释自己为什么不在——两句都出自 harness，读的人只会以为报告坏了',
+);
+
+check(
+  '主体装得出来时照旧说「最前是 X」',
+  reportPlan(base({ shape: 'chain' })).mainAssembled === true,
+  '反过来一律说"装不出来"的话，这个标记就是个恒假的摆设，上面那条也就验不出东西',
+);
+
+check(
+  '归因切分切不出组时，说的是"只归得出一组"，不是"没标注 actor"',
+  (() => {
+    // 证据全都规规矩矩标着同一个 actor —— 数据一点没缺，只是分不出两组
+    const oneActor = steps.map((s) => ({
+      ...s,
+      evidence: s.evidence.map((e) => ({ ...e, actor: 'gateway' })),
+    }));
+    const b = bodyOf({ shape: 'distribution', steps: oneActor }, 'split');
+    return b?.kind === 'absent' && !b.why.includes('标注') && b.why.includes('一组');
+  })(),
+  '门槛是分不分得出两组，不是有没有标 actor。按"没标注"写的话，读的人会去补一份本来就不缺的数据',
+);
+
+check(
+  '归档的报告说形态是"收尾时冻住的"，不说"定稿"',
+  (() => {
+    const plan = reportPlan(base({ case: { ...base().case, status: 'aborted' }, shape: 'open', shapeSource: 'frozen' }));
+    return SHAPE_SOURCE_COPY[plan.shapeSource] === '收尾时冻住的';
+  })(),
+  '归档同样落形态（强制 open）。说成"定稿时冻住的"，等于替一次明写的放弃改口——工作区那侧早就分开说了（尾卡的「已归档」/「已定稿」）',
+);
+
+check(
+  '非主体块装不出来就静静隐藏，不留空节也不留说明',
+  (() => {
+    const over = { shape: 'chain' as const, report: { ...report, expected: null, actual: null, refuted: [] } };
+    const l = ids(over);
+    return !l.includes('contrast') && !l.includes('matrix');
+  })(),
+  '"有则展示、无则隐藏"的另一半。每一块缺席都写一句的话，一份报告要顶着四句"这一块没有"',
+);
+
+check(
+  '时间线不足两条就不装：一行孤零零的记录排不出顺序',
+  (() => {
+    const one = [incident[0]!];
+    // 非主体时隐藏，主体时留说明——同一个门槛，两种缺席方式
+    return !ids({ shape: 'chain', incident: one }).includes('timeline')
+      && bodyOf({ shape: 'sequence', incident: one }, 'timeline')?.kind === 'absent';
+  })(),
+  '🔴 两条这个数与 `suggestVerdictShape()` 推 sequence 的门槛是同一个：两边分叉的话，推出来的时序型会配上一个装不出主体的报告，而两处都不报错',
+);
+
+check(
+  '因果链不足两环就不装：一环的"链"根因栏已经说完了',
+  (() => {
+    const oneLink = steps.map((s) => (s.id === 'st1' ? { ...s, status: 'open' as const } : s));
+    return !ids({ shape: 'state', steps: oneLink }).includes('chain');
+  })(),
+  '夹具里默认两环（st1 → st4），去掉一环才触发得到这条——否则这个检查是空的',
+);
+
+check(
+  '归因切分切不出两组就不装，哪怕它是主体',
+  (() => {
+    const oneActor = steps.map((s) => ({ ...s, evidence: s.evidence.map((e) => ({ ...e, actor: 'svc-a' })) }));
+    const b = bodyOf({ shape: 'distribution', steps: oneActor }, 'split');
+    return b?.kind === 'absent';
+  })(),
+  '"只在某一小撮上"要成立，至少得有另一撮。一组的切分是在给一句没有依据的话配一张表',
 );
 
 check(

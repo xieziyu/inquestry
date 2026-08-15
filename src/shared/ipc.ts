@@ -328,7 +328,7 @@ export type ClosingStepKind = 'impact' | 'leftover';
  */
 export type VerdictShape = 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
 
-/** 顺序即选择器上的顺序：从「有时序」到「没查出来」。 */
+/** 顺序即报告上的顺序：从「有时序」到「没查出来」。 */
 export const VERDICT_SHAPES: readonly VerdictShape[] = [
   'sequence',
   'state',
@@ -336,6 +336,17 @@ export const VERDICT_SHAPES: readonly VerdictShape[] = [
   'distribution',
   'open',
 ];
+
+/**
+ * agent 在 `close_step` 上**声明得了**的那几种。`close_step` 的 zod 枚举直接用这一份
+ * （`backend/tools/schemas.ts`），别在那边再抄一遍。
+ *
+ * **`open` 不在其中**：它不是一次判断，是事实——一条已证实的根因都没有就是它，
+ * 归档强制也是它。留在枚举里的话，agent 会拿它当"我没查出来"的表态，
+ * 而那句话会盖掉库里一条真实存在的根因，让报告不印根因栏。
+ */
+export const DECLARABLE_SHAPES = ['sequence', 'state', 'chain', 'distribution'] as const;
+export type DeclarableShape = (typeof DECLARABLE_SHAPES)[number];
 
 /**
  * 定稿确认条上的预选值。
@@ -628,10 +639,12 @@ export type InquestryApi = {
   /**
    * 定稿：**执行且不可逆**，只该由确认按钮调。仍会再校验一次强制 step。
    *
-   * `shape` 与 caseId 同理，取的是**确认条弹出时**那一份：它决定报告装哪几块，
-   * 是人在确认条上看着后果按下去的那个选择，不该被这中间到的新快照换掉。
+   * **不带形态**：它是 agent 的声明，由 main 在校验缺口与冻结的同一条同步路径上现算（D25）。
+   * 一度由界面把确认块弹出那一刻屏上那个带过来，随选择器一起作废了——界面那份只是副本，
+   * 带过来只会让 agent 刚推翻的那个形态被冻进库里。caseId 仍旧要带，它防的是另一件事：
+   * 确认块挂着时调查被切走，那一下会落到另一次调查头上。
    */
-  closeCase(caseId: string, shape: VerdictShape): Promise<ClosingOutcome>;
+  closeCase(caseId: string): Promise<ClosingOutcome>;
   /** 归档：同「停止」，外加标记放弃。证据一条不销毁，半程报告照旧能导。回执是执行了没有。 */
   archiveCase(caseId: string): Promise<boolean>;
   /**
@@ -647,16 +660,15 @@ export type InquestryApi = {
    *
    * 章节由 `shared/report.ts` 组装、`shared/markdown.ts` 渲染，与报告屏同一份。
    *
-   * 🔴 **`shape` 必须传**：它是人此刻在报告屏纸头上选的那一个（[ui] §6）。不传的话 main
-   * 会照 agent 的建议值另装一遍，于是屏上看的是因果链型、导出的却是时序型——章节集合都不一样，
-   * 而两边都不报错。**数据仍由 main 拿它自己那份快照出**，这里只把人挑的那个判断带过去。
+   * **不带形态**：形态是 agent 的判断，两侧都从各自的快照里读同一个来源（D25）。
+   * 一度由界面把人挑的那个带过来，那条随选择器一起没了。
    */
-  exportMarkdown(caseId: string, shape?: VerdictShape | null): Promise<ExportResult>;
+  exportMarkdown(caseId: string): Promise<ExportResult>;
   /**
    * 导出长图（D26 的后一半 / ui.md §7.2）。同吃 `reportPlan()`，只是换个渲染目标。
-   * 超长时按顶层小节切成几张，`pages` 会说共几张。`shape` 同上一条，不传就装错。
+   * 超长时按顶层小节切成几张，`pages` 会说共几张。
    */
-  exportImage(caseId: string, shape?: VerdictShape | null): Promise<ExportResult>;
+  exportImage(caseId: string): Promise<ExportResult>;
   /**
    * 长图那个离屏视图取自己要渲染的东西。**只有它会调**：token 由 main 现给现收，
    * 对不上就是 null——正常界面拿不到 token，也就取不走别人的快照。

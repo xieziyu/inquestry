@@ -32,7 +32,7 @@ import {
   type InvestigationSession,
 } from '../src/backend/store/sqlite-store.js';
 import { CaseRunner, closingMessage } from '../src/main/case-runner.js';
-import type { Snapshot, VerdictShape } from '../src/shared/ipc.js';
+import type { DeclarableShape, Snapshot, VerdictShape } from '../src/shared/ipc.js';
 
 const ASK = 'mcp__inquestry__ask_operator';
 
@@ -97,7 +97,7 @@ async function work(
     callId: string;
     occurredAt: string;
     /** 形态与应然实然只有下根因那一步才给（D25）。 */
-    shape?: VerdictShape;
+    shape?: DeclarableShape;
     expected?: string;
     actual?: string;
     remediation?: string;
@@ -592,12 +592,13 @@ async function main() {
       JSON.stringify(askShape.suggestion) === JSON.stringify(suggestVerdictShape(db, 'case_shape')),
     `问询=${JSON.stringify(askShape.suggestion)} · 库里=${JSON.stringify(suggestVerdictShape(db, 'case_shape'))}`,
   );
-  // 人在确认条上改了形态：报告怎么装是人看着后果按下去的那个选择
-  await cShape.closeCase('state');
+  // 冻的是**落库那一刻**算出来的形态（D25）：界面不再传形态，人也不再选
+  const beforeClose = suggestVerdictShape(db, 'case_shape').shape;
+  await cShape.closeCase();
   check(
-    '人在确认条上选的形态优先于建议值',
-    shapeOf('case_shape') === 'state',
-    `verdict_shape=${shapeOf('case_shape')}（回落到建议值的话这里是 sequence，人那一下等于白点）`,
+    '定稿冻的是落库那一刻算出来的形态，不收界面传来的',
+    shapeOf('case_shape') === beforeClose && beforeClose === 'sequence',
+    `verdict_shape=${shapeOf('case_shape')} · 落库前算出来的=${beforeClose}`,
   );
 
   // 同一步 close 第二次是**我们自己的 warning 指使的**（"请补 evidence 后重新 close"），
@@ -725,8 +726,11 @@ async function main() {
     actual: string | null;
   };
   check(
-    '纯空白的应然实然按没填算：照样报"缺主体"，也不落进库里',
-    wBlank.warnings.some((t) => t.includes('主体')) && blankRow.expected === null && blankRow.actual === null,
+    '纯空白的应然实然按没填算：照样报"这一块装不出来"，也不落进库里',
+    // 认那条警告的稳定标识（形态名），不认它的措辞：文案改一次这个检查就会假红
+    wBlank.warnings.some((t) => t.includes('状态型（state）')) &&
+      blankRow.expected === null &&
+      blankRow.actual === null,
     `warnings=${JSON.stringify(wBlank.warnings)} · 库里=${JSON.stringify(blankRow)}`,
   );
 
@@ -921,8 +925,6 @@ async function main() {
     suggestVerdictShape(db, 'case_shape_open').shape === 'open',
     `建议=${JSON.stringify(suggestVerdictShape(db, 'case_shape_open'))}`,
   );
-  // 界面版本对不上、或从别处调进来时会带一个不认识的值。落 NULL 的话报告没有装法，
-  // 而那是定稿之后才发现的——必须当场退回建议值
   const gaps = missingClosingSteps(db, 'case_shape_open');
   for (const kind of gaps) {
     const st = await sOpen.store.openStep({ direction: `补 ${kind}`, kind });
@@ -934,12 +936,58 @@ async function main() {
       evidence: [],
     });
   }
-  await cOpen.closeCase('时序型' as VerdictShape);
+  await cOpen.closeCase();
   check(
-    '认不出来的形态退回建议值，绝不落一个 NULL 进去',
+    '一条根因都没有时定稿落的是 open，绝不落一个 NULL 进去',
     shapeOf('case_shape_open') === 'open',
-    `verdict_shape=${shapeOf('case_shape_open')}`,
+    `verdict_shape=${shapeOf('case_shape_open')}（落 NULL 的话报告没有装法，而那是定稿之后才发现的）`,
   );
+
+  // 🔴 **确认块挂在屏幕上的这段时间里 agent 改了声明**：形态是它的判断，冻的必须是
+  // 它最后说的那个。一度由界面把弹出那一刻屏上显示的形态传进来，于是冻进库的
+  // 是一个已经被 agent 自己推翻的形态，而两个屏各自看都自洽
+  const cLate = makeRunner('case_shape_late', 'agent 中途改了声明');
+  const sLate = (cLate as unknown as Probe).beginSession();
+  const lateRoot = await sLate.store.openStep({ direction: '扩容那一下把池配置带歪了' });
+  sLate.recordToolStart({ callId: 'call_late', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sLate.recordToolEnd({ callId: 'call_late', output: '命中 1 条\n10:02:11 502 gateway\n(end)' });
+  await sLate.store.closeStep({
+    stepId: lateRoot.stepId,
+    status: 'confirmed',
+    verdict: '扩容复用了旧配置',
+    confidence: 0.9,
+    shape: 'chain',
+    evidence: [{ callRef: '#1', anchor: '2', claim: '10:02:11 观察到 502', occurredAt: '10:02:11', actor: 'gateway' }],
+  });
+  for (const kind of missingClosingSteps(db, 'case_shape_late')) {
+    const st = await sLate.store.openStep({ direction: `补 ${kind}`, kind });
+    await sLate.store.closeStep({
+      stepId: st.stepId,
+      status: 'inconclusive',
+      verdict: `${kind} 收口`,
+      confidence: 0.2,
+      evidence: [],
+    });
+  }
+  const seenOnScreen = suggestVerdictShape(db, 'case_shape_late').shape;
+  // 人正在读确认块，agent 这时改了主意：同一步再 close 一次，只换形态（patch 语义）
+  await sLate.store.closeStep({
+    stepId: lateRoot.stepId,
+    status: 'confirmed',
+    verdict: '扩容复用了旧配置',
+    confidence: 0.9,
+    shape: 'state',
+    expected: '扩容后每个实例各自建池',
+    actual: '扩容后仍共用扩容前那一个',
+    evidence: [],
+  });
+  await cLate.closeCase();
+  check(
+    '确认块挂着时 agent 改了声明：冻的是它最后说的那个，不是屏上那个',
+    seenOnScreen === 'chain' && shapeOf('case_shape_late') === 'state',
+    `屏上那一刻=${seenOnScreen} · 冻进库的=${shapeOf('case_shape_late')}`,
+  );
+  cLate.close();
 
   // ── ⑧ 启动清扫上一进程的僵尸行 ─────────────────────────────────────────
   //
@@ -983,7 +1031,7 @@ async function main() {
   );
   check(
     '重放之后形态也逐字还原：它和状态一样只能走事件，直接 UPDATE 会被 case.opened 抹回 NULL',
-    shapeOf('case_shape') === 'state' && shapeOf('case_abort') === 'open' && shapeOf('case_close') === 'chain',
+    shapeOf('case_shape') === 'sequence' && shapeOf('case_abort') === 'open' && shapeOf('case_close') === 'chain',
     `shape=${shapeOf('case_shape')} · abort=${shapeOf('case_abort')} · close=${shapeOf('case_close')}`,
   );
   check(

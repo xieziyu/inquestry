@@ -742,13 +742,18 @@ export class CaseRunner {
    * **执行入口只回绝、不派活**：派活是问询那条路的事。缺步走到这儿只说明界面那份
    * 快照过期了（或者确认条挂着的时候强制 step 被推翻了），这时该做的是不动手。
    */
-  async closeCase(shape?: VerdictShape): Promise<ClosingOutcome> {
+  async closeCase(): Promise<ClosingOutcome> {
     if (this.caseStatus !== 'open') return { ok: true, status: this.caseStatus };
     const missing = this.closingGaps;
     if (missing.length) return { ok: false, missing };
-    // 界面给的形态是人在确认条上按下去的那个选择，认它；认不出来（版本对不上、
-    // 或是从别处调进来的）才退回建议值——报告总得有个装法，不能落个 NULL 进去
-    this.freeze('closed', '调查已定稿，', isVerdictShape(shape) ? shape : suggestVerdictShape(this.db, this.caseId).shape);
+    // 🔴 **形态在这儿现算，不收界面传来的那个**（D25）。一度由界面把确认块弹出那一刻
+    // 屏上显示的形态带过来，理由是"人只能冻他看见过的那一份"——那条随选择器一起作废了：
+    // 形态现在是 agent 的声明，界面那份只是它的一个副本，最多晚 60ms。
+    // 收下来的后果是 agent 在确认块挂着时改了声明，冻进库的却是被它自己推翻的那一个。
+    //
+    // 根因本来就是这么处理的（报告读的时候才投影，从不钉住），形态跟它对齐。
+    // 界面那侧仍旧守着"屏上变了就作废确认块"，那是给人看的一道闸，不是形态的来源。
+    this.freeze('closed', '调查已定稿，', suggestVerdictShape(this.db, this.caseId).shape);
     return { ok: true, status: 'closed' };
   }
 
