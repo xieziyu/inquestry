@@ -130,7 +130,7 @@ export type StageRow =
  * 拿"当前时间"或"当前在跑哪一步"去定位的话，同一句话会随着调查往下走而挪位置。
  *
  * **每次会话开场那条不织进去**：它是 harness 用建单信息拼的（问题正文 + 基准日期 + 工作区），
- * 立案卡上已经逐字有了，织进来就是同一段话在一屏上出现两次。认法是"以问题正文开头的 user 句"
+ * 信息卡上已经逐字有了，织进来就是同一段话在一屏上出现两次。认法是"以问题正文开头的 user 句"
  * ——`session_id` 在快照里没有，而 role 与正文是有的。
  */
 export function weaveChat(rows: TrackRow[], chat: ChatLine[], question?: string): StageRow[] {

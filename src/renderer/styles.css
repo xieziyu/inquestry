@@ -159,7 +159,7 @@ button:hover > .ic { opacity: 1; }
 }
 
 /* 工作区的页头只说"我在哪个工作区、能去哪儿"（ui.md §2）：
-   标题与基准日期搬去了舞台上的立案卡，运行态搬去了底部状态栏。
+   标题与基准日期搬去了舞台上的信息卡，运行态搬去了底部状态栏。
    顶栏是定高的整幅一格，横向就那么宽——挤进四五项之后每一项都只剩几个字 */
 .pagebody.ws { overflow: hidden; display: flex; flex-direction: column; }
 .pagehead.ws { padding-right: 16px; }
@@ -434,7 +434,7 @@ button.primary:has(> .ic) { gap: 6px; }
 }
 .composer textarea:disabled { background: var(--panel); color: var(--dim); cursor: not-allowed; }
 
-/* ── 立案卡：舞台上的第 0 个节点 ──
+/* ── 信息卡：舞台上的第 0 个节点 ──
    建单信息从顶栏搬下来之后有了自己的行宽：标题能改、问题描述能读全、基准日期是个要对得上的数。
    它比 step 卡淡一档、左边没有序号槽——它不是一步调查，是这次调查的由来 */
 .casecard {

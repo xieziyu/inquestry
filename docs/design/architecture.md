@@ -131,7 +131,7 @@ duetlens 的三层直接沿用，**但 Inquestry 多一类**：
 SPA，屏幕划分沿用 duetlens 的 `screens/` 组织：
 
 - **entry**：Case 列表 + 跨 case 检索（FTS5）
-- **case**：工作区——舞台（立案卡 / 待办 / 轨道）+ 输入框 + 状态栏
+- **case**：工作区——舞台（信息卡 / 待办 / 轨道）+ 输入框 + 状态栏
 - **report**：报告页与两种导出（Markdown / 长图）
 
 ### 两条时间线分属两个屏，不是同一屏的两个 tab

@@ -28,7 +28,7 @@ export type DomainEvents = {
    */
   'case.status_changed': { caseId: string; status: 'open' | 'closed' | 'aborted'; at: number };
   /**
-   * 改标题。**标题不是建单信息的一部分，它会被改两次**：立案那一刻先落一句由问题首行截出的
+   * 改标题。**标题不是建单信息的一部分，它会被改两次**：建单那一刻先落一句由问题首行截出的
    * 兜底，agent 读完问题后改成一句短的，人还能再改。走事件而不是 `UPDATE cases`——
    * 直接改的值一重放就被 `case.opened` 抹回那句兜底。
    *

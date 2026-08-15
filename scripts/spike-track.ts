@@ -267,7 +267,7 @@ async function storeChecks() {
   const talk = (at: number, role: ChatLine['role'], text: string): ChatLine => ({ role, text, at });
   // 夹具里的步是 `seq * 1000`，第 1 到第 9 步分别落在 1000…9000
   const chat: ChatLine[] = [
-    // 开场白：harness 用建单信息拼的，正文以问题开头，立案卡上已经逐字有了
+    // 开场白：harness 用建单信息拼的，正文以问题开头，信息卡上已经逐字有了
     talk(500, 'user', `${question}\n基准日期：2026-08-15（时区 +08:00）。`),
     talk(1500, 'assistant', '先看这两条是不是同一个请求写进去的。'),
     talk(4200, 'user', '别查网关了，先看从库。'),
@@ -284,9 +284,9 @@ async function storeChecks() {
   );
 
   check(
-    '开场白不织进去（立案卡上已经逐字有了）',
+    '开场白不织进去（信息卡上已经逐字有了）',
     !woven.some((i) => i.kind === 'chat' && i.line.text.startsWith(question)),
-    '不认出来的话，同一段问题描述会在一屏上出现两次：立案卡一次、轨道第一行一次',
+    '不认出来的话，同一段问题描述会在一屏上出现两次：信息卡一次、轨道第一行一次',
   );
 
   const at = (id: string) => woven.findIndex((i) => i.kind === 'chat' && i.line.text.startsWith(id));

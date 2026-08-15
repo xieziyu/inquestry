@@ -163,7 +163,7 @@ function createCase(draft: IntakeDraft): IntakeResult {
   if ('error' in root) return { ok: false, field: 'projectRoot', error: root.error };
 
   rememberRoot(root.path);
-  // 基准日期取立案这一刻，不再由人填：填错不会报错，只让无日期的时间串整体挪几天（ui.md §8.1）
+  // 基准日期取建单这一刻，不再由人填：填错不会报错，只让无日期的时间串整体挪几天（ui.md §8.1）
   const now = new Date();
   const incidentDate = todayLocal(now);
   const caseId = `case_${randomUUID().slice(0, 8)}`;

@@ -339,7 +339,7 @@ export function App({
       <header className="pagehead ws">
         {/* 顶栏只回答"我在哪个工作区、能去哪儿"（ui.md §2）。标题、基准日期、模型都不在这儿：
             那一条是定高的整幅一格，几项挤进去之后每一项都只剩几个字。
-            建单信息搬去了舞台上的立案卡，运行态搬去了底部状态栏 */}
+            建单信息搬去了舞台上的信息卡，运行态搬去了底部状态栏 */}
         <span className="wsroot" title={snap.case.projectRoot ?? '这次调查没有工作区'}>
           {snap.case.projectRoot ? (
             <>
@@ -412,7 +412,7 @@ export function App({
       )}
 
       <main className="stage">
-        {/* 立案卡是轨道的第 0 个节点：标题（可改）、问题描述、基准日期、工作区。
+        {/* 信息卡是轨道的第 0 个节点：标题（可改）、问题描述、基准日期、工作区。
             **「接着查」不在这儿**——那是个动作，长在底下输入框旁边；
             摆在舞台顶上的话，点开一次旧调查，第一眼看到的就是一个催你再跑一轮的按钮 */}
         <CaseCard
@@ -531,7 +531,7 @@ function InvestigationTimeline({
   steps: StepNode[];
   /** agent 与人说的话，织进轨道（`weaveChat`）——不再压成底部一条带。 */
   chat: ChatLine[];
-  /** 开场白认不出来就会与立案卡重复一遍，见 `weaveChat`。 */
+  /** 开场白认不出来就会与信息卡重复一遍，见 `weaveChat`。 */
   question: string;
   /** 还在跑的泳道。只有这几条给得出「停」——停一条已经收尾的支线什么都不会发生。 */
   liveLanes: string[];

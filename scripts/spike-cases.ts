@@ -166,7 +166,7 @@ async function main() {
 
   // ── 标题：**它会被改两次**，所以不能跟建单信息一起冻在 `case.opened` 里 ──────
   //
-  // 立案那一刻先落一句由问题首行截出的兜底，agent 读完问题后改成一句短的，人还能再改。
+  // 建单那一刻先落一句由问题首行截出的兜底，agent 读完问题后改成一句短的，人还能再改。
   // 直接 `UPDATE cases` 的错法是静默的：库里改成了，一重放就被 `case.opened` 抹回兜底那句。
   const beforeTitle = readIntake(db, 'case_x')!.title;
   const renamed = renameCase(db, { caseId: 'case_x', blobDir: blobs, now: () => Date.now() }, '订单重复写入', 'agent');
