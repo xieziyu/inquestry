@@ -751,7 +751,10 @@ button.primary:has(> .ic) { gap: 6px; }
 /* ── 轨道 ──
    🔴 **主干由每一行自己画一段**，首尾各收半段（`:first-child` / `:last-child` 的 50%），
    线因此正好起于第一个节点、止于最后一个。列表画一条通长的线会在上下各支出去一截。 */
-.track { margin-top: 6px; }
+/* 🔴 **行与行之间不能有间距**：线是每行自己画的一段，`.track` 那条通用规则给的 `gap`
+   在这儿就是四段没人画的空白，轨道会断成五截。行内 11px 的上下留白已经够开，
+   而轨道本来就该是密的那一档（ui.md §1）。改这儿要连着上面 `.track` 的 gap 一起想。 */
+.home .track { margin-top: 6px; gap: 0; }
 .tr {
   position: relative; display: grid;
   /* 两行写死而不是让它隐式生成：隐式网格里 `-1` 解析回第 1 根线，
@@ -762,27 +765,41 @@ button.primary:has(> .ic) { gap: 6px; }
   color: var(--text); font: inherit; cursor: pointer; transition: background .16s ease;
 }
 .tr:hover { background: var(--panel); }
+/* 12.5 而不是 12：第一列 26px 宽、节点居中，圆心因此在 13px，1px 的线要往回退半格。
+   差这半格时线被节点盖着看不出来，只有行与行之间那一段露在外面（曾经被 gap 遮住过） */
 .tr::before {
-  content: ''; position: absolute; left: 12px; top: 0; bottom: 0; width: 1px; background: var(--line);
+  content: ''; position: absolute; left: 12.5px; top: 0; bottom: 0; width: 1px; background: var(--line);
 }
 .tr:first-child::before { top: 50%; }
 .tr:last-child::before { bottom: 50%; }
 /* ⚠️ **必须跨满整行**（`1 / -1`）：只占第一行的话它落在标题那条基线上，
    而主干那两个收口按的是行高的一半，首尾两个节点会与线错开二十来像素。 */
+/* 五档节点只用色板里的两个语义色 + 中性灰（ui.md §5「语义色只有三个，不加第四个」）。
+   **填实 / 空心分的是「这一条此刻还动不动」**，与报告时间轴那条同一个母题（§6）。
+   ⚠️ 别再借 `--mk-tangle`：那是标记专用色（见文件头），比 `--dim-2` 亮，
+   借来给最常见的那一档之后，最该安静的节点成了整条轨道上最扎眼的一个。 */
 .tr .nd {
   position: relative; z-index: 1; grid-column: 1; grid-row: 1 / -1;
   justify-self: center; align-self: center;
   width: 9px; height: 9px; border-radius: 50%;
-  background: var(--bg); border: 1.5px solid var(--mk-tangle);
+  background: var(--bg); border: 1px solid var(--dim-2);
 }
-.tr.wait .nd { border-color: var(--warn); }
+/* 🔴 **它必须压过下面那颗「运行中」**：暖色是「有事找你」的全局唯一信号（§4），
+   而余光扫过去认的是色块不是圆环——空心橙圈反过来比实心蓝弱，人会先看见在跑的那一条 */
+.tr.wait .nd {
+  background: var(--warn); border-color: var(--warn);
+  box-shadow: 0 0 0 4px rgba(224, 169, 74, .16);
+}
 .tr.live .nd {
   width: 11px; height: 11px; background: var(--accent); border-color: var(--accent);
   box-shadow: 0 0 0 4px rgba(90, 158, 221, .14);
   /* 动效只有两处，这是其中一处：进行中的状态呼吸（ui.md §5） */
   animation: breathe 2.4s ease-in-out infinite;
 }
-.tr.shut .nd { width: 6px; height: 6px; background: var(--line); border-color: var(--line); }
+/* 已定稿：结论「成立」那个色，空心是因为它已经收口了。已归档没有结论，留中性。
+   两档都别用 `--line`——它对底只有 1.5:1，等于在时间轴上留了个洞 */
+.tr.seal .nd { border-width: 1.5px; border-color: var(--accent); }
+.tr.shut .nd { width: 7px; height: 7px; background: var(--dim-2); border-color: var(--dim-2); }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
 @media (prefers-reduced-motion: reduce) { .tr.live .nd { animation: none; } }
 

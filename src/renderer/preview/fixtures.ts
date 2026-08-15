@@ -35,7 +35,9 @@ const min = 60_000;
 const steps = rawSteps.map((s, i) => ({ ...s, startedAt: now - (13 - i) * min }));
 
 const CASES: CaseBrief[] = [
-  { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 2 * min, current: false, todos: 2, running: true, started: true, loaded: true },
+  // 五行**各占一档节点**（运行中 / 等你 / 待开始 / 已定稿 / 已归档）：少一档就等于那一档的配色没人看过。
+  // 这一条要的是「运行中」那颗，所以待办给 0——挂着待办的话它显示的是「等你」那颗
+  { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 2 * min, current: false, todos: 0, running: true, started: true, loaded: true },
   // 当前调查**故意不是最近那条**：轨道按时间排，当前是哪一条只由 `.cur` 说。
   // 把 current 放在第一行的话，"当前被提到最前"与"它本来就在最前"长得一模一样
   { id: 'c2', title: '推送在 12:40 之后整体延迟', status: 'open', updatedAt: now - 40 * min, current: true, todos: 1, running: false, started: true, loaded: true },
