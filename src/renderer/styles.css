@@ -781,12 +781,15 @@ button.primary:has(> .ic) { gap: 6px; }
   display: flex; align-items: center; justify-content: center; gap: 11px;
   margin-bottom: -12px;
 }
-.mast .word { font-size: 21px; font-weight: 600; letter-spacing: .005em; color: var(--text); }
+/* 名字长什么样**只在这一处定死**，不跟 `.mast` 那层容器绑（官网的顶栏与页脚读的是同一条，
+   那儿的容器完全是另一套；绑在 `.mast` 下面的话，站点只能把渐变再抄一份，然后各自漂移）。
+   字号允许各处自己压。 */
+.word { font-size: 21px; font-weight: 600; letter-spacing: .005em; color: var(--text); }
 /* 深的那头止于 `--mk-middle`，别接标记最底那层 `#24577F`——它对底只有 2.5:1，
    落在字上就是读不出来的一截。`color` 先给足再在 supports 里换：不支持 background-clip
    的地方 `color: transparent` 会让整个名字凭空消失 */
 @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-  .mast .word {
+  .word {
     background: linear-gradient(90deg, var(--text) 0%, var(--mk-middle, #4d91d0) 100%);
     -webkit-background-clip: text;
     background-clip: text;

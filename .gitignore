@@ -15,3 +15,5 @@ release/
 # 临时视觉稿：只为当场读方案，落地即删，不进版本追踪
 docs/design/mockups/
 *.mockup.html
+# 官网构建产物
+site/dist/

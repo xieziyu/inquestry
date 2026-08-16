@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <a href="https://xieziyu.github.io/inquestry/">Website</a>
+</p>
+
+<p align="center">
   <a href="README.md">简体中文</a> · English
 </p>
 

@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import type { AppInfo, IntakeOptions } from '../shared/ipc.js';
 import type { UpdateStatus } from '../shared/update.js';
 import { LIMIT_BOUNDS, type UiSettings } from '../shared/settings.js';
+import { PROJECT_LINKS } from '../shared/links.js';
 import { LogoMark } from './LogoMark.js';
 import { Picker, type PickerItem } from './Picker.js';
 
-const REPO = 'https://github.com/xieziyu/inquestry';
+const REPO = PROJECT_LINKS.repo;
 const ISSUES = `${REPO}/issues/new`;
-const AUTHOR = 'https://github.com/xieziyu';
+const AUTHOR = PROJECT_LINKS.author;
 
 /** backend 报出来的「不指定模型」那一档的 value。 */
 const DEFAULT_ROW = 'default';

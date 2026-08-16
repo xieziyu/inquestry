@@ -1,0 +1,67 @@
+# 官网（`site/`）发到 GitHub Pages。
+#
+# 只在官网自己那几份、或它 import 的应用样式/标记变了时才跑 —— 官网读的就是应用的
+# `styles.css` 与 `logo.ts`，改了那两处站点上的部件会跟着变，所以它们也算触发源。
+# 漏了这条的表现是"应用改了主题，官网还是旧的"，而两边都不报错。
+#
+# 首次要在 仓库 Settings → Pages → Source 选 "GitHub Actions"，否则 deploy 步会 404。
+# base 路径在 `vite.site.config.ts` 里（`/inquestry/`），换自定义域名要连着改。
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'vite.site.config.ts'
+      - 'src/renderer/styles.css'
+      - 'src/renderer/logo.ts'
+      - 'src/shared/links.ts'
+      - 'build/logo/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同时只保留一次部署；排队中的旧的直接丢掉，别让两次推送互相覆盖成旧版本
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      # action 一律钉 commit SHA，同 release.yml：@v6 这种可变引用被劫持时会跟着中招
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # ⚠️ 别顺手加 `--ignore-scripts`。官网确实一个原生模块都不碰，但 esbuild 的
+      # `postinstall` 就是靠脚本把本平台那个二进制接上的，跳过之后 vite 起不来——
+      # 省下的是编 better-sqlite3 的那点时间，换来的是发布链路上一个不好查的失败面。
+      - run: npm ci
+
+      - run: npm run site:build
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site/dist
+
+      - id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

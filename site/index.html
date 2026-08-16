@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inquestry — 和 agent 一起调查</title>
+<meta name="description" content="Inquestry 是一个 macOS 桌面应用：和 agent 一起排查线上问题，它每一次工具调用的原始输入输出都完整落库，agent 的文字只做索引和判断。">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<script type="module" src="./main.js"></script>
+</head>
+<body>
+
+<div class="lp-aura" aria-hidden="true"></div>
+<div class="lp-dots" aria-hidden="true"></div>
+
+<nav class="lp-nav" id="nav">
+  <div class="lp-nav-in">
+    <a class="lp-brand" href="#top">
+      <svg class="mark" viewBox="0 0 96 96" width="21" height="21" role="img" aria-label="Inquestry"></svg>
+      <span class="word">Inquestry</span>
+    </a>
+    <div class="lp-nav-r">
+      <a href="#tour">怎么用</a>
+      <a href="#more">功能</a>
+      <a data-link="repo">GitHub</a>
+      <a class="lp-btn solid" data-link="releases">下载</a>
+    </div>
+  </div>
+</nav>
+
+<header class="lp-hero" id="top">
+  <span class="lp-pill up" style="--d:.02s"><span class="glyph"></span> Claude Code · Agent</span>
+  <h1 class="up" style="--d:.1s">和 agent 一起<br><span class="hl">调查、论证和报告</span></h1>
+  <p class="lead up" style="--d:.2s">
+    agent 读了 500 行日志，只写一句「主从复制延迟」——那 500 行没留下来，想复核只能重跑。<br>
+    Inquestry 把每一次工具调用的原始输入输出完整落库，它的文字只做索引和判断。
+  </p>
+  <div class="lp-cta up" style="--d:.3s">
+    <a class="lp-btn solid lg" data-link="releases">下载 macOS 版</a>
+    <a class="lp-btn ghost lg" href="#tour">看它怎么查 ↓</a>
+  </div>
+  <div class="lp-meta up" style="--d:.4s">macOS · Apple Silicon · GPL-3.0 · 需要已登录的 claude CLI</div>
+  <div class="lp-scrollcue" aria-hidden="true"><i></i>SCROLL</div>
+</header>
+
+<!-- ============================================================
+     排查路径：功能卡挂在一条时间轴上，停稳的那一节向右摊开对应的界面
+     ============================================================ -->
+<section class="lp-tour" id="tour">
+  <div class="lp-wrap">
+    <div class="lp-tourhead">
+      <span class="lp-eyebrow">排查路径</span>
+      <h2>六步走完一次调查</h2>
+      <p>固定证据链，排查时间线，因果论证</p>
+    </div>
+
+    <div class="lp-track" id="track">
+      <div class="lp-spine" id="spine"><i id="spineFill"></i></div>
+
+      <!-- 01 -->
+      <section class="lp-stop">
+        <article class="lp-card open">
+          <span class="nd"></span>
+          <div class="c-head"><span class="ord">#01</span><span class="kind">立案</span>
+            <span class="state open"><span class="pulse"></span>待开始</span></div>
+          <h3 class="c-dir">启动一次调查</h3>
+          <p class="c-vd">选定工作区，描述问题，逐步探索事件背后的真相</p>
+          <ul class="lp-pts">
+            <li>检索维度是<b>调查</b></li>
+            <li>事件全部落库<b>本机</b>，真相数据投影可重放重建</li>
+          </ul>
+        </article>
+        <div class="lp-fragwrap">
+          <span class="lp-link" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="lp-frag">
+            <div class="lp-fcap">工作区 · <b>调查卡</b></div>
+            <article class="s-card casecard">
+              <div class="head"><h2>订单提交产生了两条重复记录</h2></div>
+              <p class="question">线上反馈：12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。</p>
+              <div class="meta">基准日期 2026-08-16 +08:00 · <em class="unconfirmed">未确认</em></div>
+            </article>
+            <dl class="lp-kv">
+              <div><dt>工作区</dt><dd>~/Projects/order-api</dd></div>
+              <div><dt>模型</dt><dd>claude · opus[1m] · high</dd></div>
+            </dl>
+            <p class="lp-warnline">这个目录就是信任边界，与在那儿直接跑 claude 等价</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 02 -->
+      <section class="lp-stop">
+        <article class="lp-card confirmed">
+          <span class="nd live"></span>
+          <div class="c-head"><span class="ord">#02</span><span class="kind">留证</span>
+            <span class="state confirmed">已证实</span></div>
+          <h3 class="c-dir">它读的 500 行，一行不少地留下来了</h3>
+          <p class="c-vd">agent 只声明步骤的边界，期间每一次工具调用的原始输入输出由 harness 自动归属、完整落库。它不需要复述，也就不会在复述里丢东西。</p>
+          <ul class="lp-pts">
+            <li>每一步是一个<b>可证伪的命题</b>：一句假设，一句结论</li>
+            <li>agent 的文字<b>只做索引和判断</b>，不承担搬运证据的职责</li>
+            <li>要逐字读原文，点开这一步的详情浮层，原始输出都在里面</li>
+          </ul>
+        </article>
+        <div class="lp-fragwrap">
+          <span class="lp-link" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="lp-frag">
+            <div class="lp-fcap">工作区 · <b>一步，与它自动归属到的证据</b></div>
+            <article class="s-card step confirmed">
+              <div class="c-head"><span class="ord">#1</span><span class="kind">排查</span>
+                <span class="state confirmed">已证实</span></div>
+              <p class="c-dir">先证实两条记录是不是同一个请求写进去的</p>
+              <p class="c-vd">两条 order 来自两个 req_id，第一条超时 2140ms——第二条是网关重试写出来的。</p>
+            </article>
+            <div class="lp-calls">
+              <div class="h">这一步期间的工具调用 · 原文全部入库</div>
+              <div class="c"><span class="tool">Bash</span><span>kubectl logs order-api --since=30m</span><span class="n">512 行</span></div>
+              <div class="c"><span class="tool">Grep</span><span>req_id=8f3a…c1</span><span class="n">41 处</span></div>
+              <pre>12:03:02 svc-a INFO  order created id=88121 <b>req_id=8f3a…c1</b>
+12:03:04 gw    WARN  upstream timeout 2140ms, retrying
+12:04:51 svc-a INFO  order created id=88134 <b>req_id=b70e…9d</b></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 03 -->
+      <section class="lp-stop">
+        <article class="lp-card waiting">
+          <span class="nd wait"></span>
+          <div class="c-head"><span class="ord">#03</span><span class="kind leftover">交回</span>
+            <span class="state inconclusive">等你处理</span></div>
+          <h3 class="c-dir">要凭据的、后果得由人担的，它交回给你</h3>
+          <p class="c-vd">本机的只读查询它自己跑；生产库、敏感数据、写操作永远不给它直连——按后果分，不按工具分。</p>
+          <ul class="lp-pts">
+            <li class="hot"><b>琥珀是全屏唯一的暖色</b>：余光扫过屏幕，有没有事找你是一个颜色的有无</li>
+            <li>它必须先写下<b>预期看到什么</b>才能看结果，挡住事后合理化</li>
+            <li>你贴回去的结果照样进库，和它自己跑出来的证据同一等级</li>
+          </ul>
+        </article>
+        <div class="lp-fragwrap">
+          <span class="lp-link" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="lp-frag">
+            <div class="lp-fcap">工作区 · <b>①档 需要你执行</b></div>
+            <section class="pending">
+              <div class="head">
+                <span class="tag">需要你执行</span>
+                <span class="engine">mysql</span>
+                <span class="env">prod-读库</span>
+              </div>
+              <p class="why"><b>为什么</b>要确认 cart_key 上是唯一索引还是普通索引——这决定第二次写入能不能被数据库自己挡住。</p>
+              <p class="expect"><b>预期看到</b>建表语句里 cart_key 那一行的索引类型</p>
+              <textarea class="stmt" rows="2" readonly>SHOW CREATE TABLE `t_order`;</textarea>
+              <div class="fill">
+                <textarea rows="3" readonly placeholder="把执行结果粘贴到这里"></textarea>
+                <div class="side">
+                  <label>执行时间<input value="2026-08-09 12:41:07 +08:00" readonly></label>
+                  <button class="primary" type="button" disabled>↑ 回填</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- 04 -->
+      <section class="lp-stop">
+        <article class="lp-card open">
+          <span class="nd live"></span>
+          <div class="c-head"><span class="ord">#04</span><span class="kind">介入</span>
+            <span class="state open"><span class="pulse"></span>进行中</span></div>
+          <h3 class="c-dir">时间线是控制面，不是展示层</h3>
+          <p class="c-vd">节点上直接放行、改写、拒绝、接管、停止。它跑偏了不用等它跑完，当场换方向。</p>
+          <ul class="lp-pts">
+            <li>要动生产的命令停在<b>闸门</b>上等你，拒绝时可以留一句话告诉它换个方向</li>
+            <li>它自己开出去的支线独立跑，<b>停一条支线只停它自己</b>，主线照旧</li>
+            <li>随时补一句进去，作为异步入队的补充，不打断当前这一步</li>
+          </ul>
+        </article>
+        <div class="lp-fragwrap">
+          <span class="lp-link" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="lp-frag">
+            <div class="lp-fcap">工作区 · <b>②档 闸门，与一条独立跑的支线</b></div>
+            <section class="gate">
+              <div class="head">
+                <span class="tag">要不要放行</span>
+                <span class="tool">Bash</span>
+                <span class="clock">1:38 后自动放行</span>
+              </div>
+              <p class="why">要读生产 pod 的日志</p>
+              <textarea class="stmt" rows="3" readonly>{ "command": "kubectl -n prod logs deploy/order-api --since=30m | grep u1001" }</textarea>
+              <div class="acts">
+                <button class="ghost bad" type="button" disabled>✕ 拒绝并留话</button>
+                <button class="primary" type="button" disabled>✓ 放行 <small>A</small></button>
+              </div>
+            </section>
+            <div class="lp-lane">
+              <span class="lanehead fork"><span class="tag">支线</span><span class="note">子 agent 01ab9f</span></span>
+              <article class="s-card step converged">
+                <div class="c-head"><span class="ord">#7</span><span class="kind">排查</span>
+                  <span class="state converged">已收口</span></div>
+                <p class="c-dir">近 30 分钟上游超时都发生在什么时候</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 05 -->
+      <section class="lp-stop">
+        <article class="lp-card confirmed">
+          <span class="nd"></span>
+          <div class="c-head"><span class="ord">#05</span><span class="kind">推翻</span>
+            <span class="state confirmed">已证实</span></div>
+          <h3 class="c-dir">第 3 步的判断，经常被第 7 步否掉</h3>
+          <p class="c-vd">真实调查就是这样走的。纯 append-only 的呈现会造出一条「一路顺利推导到真相」的假历史，而调查的价值恰恰在走错又折回的地方。</p>
+          <ul class="lp-pts">
+            <li class="bad">全屏<b>只有这一种曲线</b>，它只表示推翻——不用读字也知道发生了什么</li>
+            <li><b>结论可以被推翻，事实不会</b>：被推翻的那一步连同它的证据强制留在报告里</li>
+            <li>提前终止也不销毁任何证据</li>
+          </ul>
+        </article>
+        <div class="lp-fragwrap">
+          <span class="lp-link" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="lp-frag">
+            <div class="lp-fcap">工作区 · <b>#2 被 #4 推翻</b></div>
+            <div class="lp-refute">
+              <svg viewBox="0 0 36 200" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <marker id="lp-rtip" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M0 0 L6 3 L0 6 z"/>
+                  </marker>
+                </defs>
+                <path d="M33,170 C2,170 2,24 30,24" marker-end="url(#lp-rtip)"/>
+              </svg>
+              <article class="s-card step superseded">
+                <div class="c-head"><span class="ord">#2</span><span class="kind">排查</span>
+                  <span class="refbadge">← 被 #4 推翻</span><span class="state superseded">被推翻</span></div>
+                <p class="c-dir">是不是重试风暴本身造成的重复</p>
+                <p class="c-vd">重试解释了第二个请求的存在，解释不了它为什么能落库。</p>
+              </article>
+              <article class="s-card step confirmed">
+                <div class="c-head"><span class="ord">#4</span><span class="kind">排查</span>
+                  <span class="state confirmed">已证实</span></div>
+                <p class="c-dir">幂等键为什么没拦住第二次写入</p>
+                <p class="c-vd">cart_key 上只有普通索引——2026-03 那次迁移漏掉了这一行。</p>
+              </article>
+            </div>
+            <p class="lp-badline">#2 连同它的两条证据留在报告里，不会被删掉</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 06 -->
+      <section class="lp-stop">
+        <article class="lp-card converged">
+          <span class="nd seal"></span>
+          <div class="c-head"><span class="ord">#06</span><span class="kind impact">收口</span>
+            <span class="state converged">已定稿</span></div>
+          <h3 class="c-dir">报告是投影，不是 agent 写的总结</h3>
+          <p class="c-vd">每一块都有确定的数据来源，全从库里投影出来。它真正生成的只有修复建议——报告与过程天然一致，改不了也编不了。</p>
+          <ul class="lp-pts">
+            <li>系统时间线按<b>事件真实发生时间</b>重排，不让它凭记忆再写一遍</li>
+            <li>中途被推翻的结论连同证据一起留在报告里</li>
+            <li>Markdown 与长图两种导出并列一等，共用同一份章节组装</li>
+          </ul>
+        </article>
+        <div class="lp-fragwrap">
+          <span class="lp-link" aria-hidden="true"><i></i><i></i><i></i></span>
+          <div class="lp-frag">
+            <div class="lp-fcap">报告 · <b>每一块的来源都是定死的</b></div>
+            <div class="lp-proj">
+              <div class="col">
+                <div class="cap">库里的事实</div>
+                <div>steps · verdicts</div>
+                <div>evidence_refs</div>
+                <div>occurred_at</div>
+              </div>
+              <div class="arrow" aria-hidden="true">→</div>
+              <div class="col out">
+                <div class="cap">报告里的章节</div>
+                <div>根因 · 因果链</div>
+                <div>系统时间线 · 影响面</div>
+                <div>排查路径 · 遗留问题</div>
+              </div>
+            </div>
+            <div class="lp-root">
+              <div class="cap">根因 · 置信度 0.40</div>
+              <p>cart_key 缺唯一约束：2026-03 迁移漏建，重试写入不再被数据库挡住</p>
+            </div>
+            <div class="lp-outs"><span>导出 Markdown</span><span>导出长图</span><span>定稿</span></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 其余功能 ============ -->
+<section class="lp-more" id="more">
+  <div class="lp-wrap">
+    <span class="lp-eyebrow">还有这些</span>
+    <div class="lp-cards">
+      <div class="lp-mini"><h4>你配好的能力照常能用</h4><p>这样跑起来的会话会加载你已有的 skill 与 MCP：日志查询、Sentry、代码检索不用重建一遍。</p></div>
+      <div class="lp-mini"><h4>历史调查可检索</h4><p>按调查检索，不按会话。已定稿的那一条带着它的形态与置信度，日后翻出来直接复用。</p></div>
+      <div class="lp-mini"><h4>本地优先</h4><p>事件全部落本机 SQLite，大 payload 内容寻址落盘，不出这台机器。</p></div>
+    </div>
+
+    <div class="lp-final">
+      <h2>和 agent 一起探索更多事件真相</h2>
+      <p>macOS · Apple Silicon · 需要已在终端登录过的 <code>claude</code> CLI</p>
+      <div class="lp-cta">
+        <a class="lp-btn solid lg" data-link="releases">下载最新版本</a>
+        <a class="lp-btn ghost lg" data-link="changelog">CHANGELOG</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="lp-foot">
+  <div class="lp-wrap">
+    <span class="lp-brand">
+      <svg class="mark" viewBox="0 0 96 96" width="18" height="18" role="img" aria-label="Inquestry"></svg>
+      <span class="word">Inquestry</span>
+    </span>
+    <span class="lp-copy">© <span id="year">2026</span> <a data-link="author">xieziyu</a> · <a data-link="license">GPL-3.0-or-later</a></span>
+    <nav class="lp-flinks" aria-label="项目链接">
+      <a data-link="repo">GitHub</a>
+      <a data-link="issues">反馈 issue</a>
+      <a data-link="changelog">CHANGELOG</a>
+      <a data-link="releases">下载</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,382 @@
+/* 官网自己的版式与滚动动效。
+   🔴 **工作区部件的样式不在这里**——`.s-card` / `.casecard` / `.pending` / `.gate` /
+   `.nd` / `.lanehead` 那几套由 main.js import 的应用 `styles.css` 供，站点上出现的
+   界面因此跟着应用一起改。本文件只做三件事：站点外壳（导航 / hero / 时间轴 / 页脚）、
+   把那几个部件从画布搬到页面流里所必需的少量覆写、以及滚动驱动的动画。
+   覆写一律限定在 `.lp-frag` 内，别污染被 import 的那一份。
+
+   站点自己的类名一律 `lp-` 前缀。**没前缀的类名归应用**：`brand` / `pill` / `word` /
+   `gate` / `pending` / `track` 在 styles.css 里都已经有主，重名就会互相盖。 */
+
+:root {
+  /* 标记那三层的定稿色。`logo.ts` 把 svg 里的固定色换成这几个变量，
+     应用名字的渐变（`.word`）也取 middle 那一档 */
+  --mk-top: #C9D5E0;
+  --mk-middle: #4D91D0;
+  --mk-bottom: #24577F;
+  /* 时间轴的几何。改这几个数，脊线 / 节点 / 直角连线 / 右边那块一起跟着走 */
+  --lp-spine: 34px;   /* 脊线到卡片左沿 */
+  --lp-cardw: 520px;
+  --lp-elbow: 56px;   /* 卡片右沿到片段的那段直角连线 */
+  --lp-fragw: 560px;
+  --lp-drop: 64px;    /* 直角连线往下拐这么多，拐点才看得出来 */
+  /* 卡片那条语义色左边框的宽。**节点与它的横线都要把这一条扣掉**：
+     absolute 的 left 从内边距框算起，不减就整体右偏 3px，脊线与节点对不齐 */
+  --lp-cardbl: 3px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+/* 吸附：proximity 定"松手后停在哪"，`.lp-stop` 上的 always 定"一次不许跨过一节"——
+   缺了它一次快甩会飞过整节，那一节摊开的东西从没被看见过 */
+html { scroll-behavior: smooth; scroll-snap-type: y proximity; }
+/* 应用那份把 body 定成 13.5px/1.6（一屏要塞下很多行），落地页要松一档 */
+body { font-size: 14px; line-height: 1.7; overflow-x: hidden; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3, h4, p, ul, dl, dd, dt { margin: 0; }
+ul { padding: 0; list-style: none; }
+code { font-family: var(--mono); font-size: .92em; }
+
+/* ---------- 环境光：只有蓝。整页唯一的暖色留给「要你出手」那一节 ---------- */
+.lp-aura, .lp-dots { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.lp-aura::before, .lp-aura::after { content: ''; position: absolute; border-radius: 50%; filter: blur(140px); }
+.lp-aura::before { width: 820px; height: 820px; left: -260px; top: -320px; background: rgba(42, 101, 152, .30); }
+.lp-aura::after { width: 600px; height: 600px; right: -220px; top: 38vh; background: rgba(90, 158, 221, .12); }
+/* 点阵同工作区画布，只是淡得多：这一层说的是"你在一幅图上"，不是装饰 */
+.lp-dots {
+  opacity: .6;
+  background-image: radial-gradient(circle at 1px 1px, rgba(223, 229, 236, .055) 1px, transparent 0);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(ellipse 78% 52% at 50% 0%, #000, transparent 72%);
+  mask-image: radial-gradient(ellipse 78% 52% at 50% 0%, #000, transparent 72%);
+}
+
+/* ---------- 通用件 ---------- */
+.lp-wrap { max-width: 1240px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+.lp-eyebrow {
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--accent);
+}
+.lp-pill {
+  display: inline-flex; align-items: center; gap: 9px; padding: 5px 13px 5px 9px;
+  border: 1px solid var(--line); border-radius: 999px; background: rgba(26, 33, 40, .7);
+  font-size: 12.5px; color: var(--dim);
+}
+.lp-pill .glyph {
+  width: 10px; height: 10px; border-radius: 3px;
+  background: linear-gradient(150deg, var(--mk-top), var(--mk-middle) 55%, var(--mk-bottom));
+}
+.lp-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 8px;
+  border: 1px solid transparent; font-size: 13.5px; font-weight: 500; cursor: pointer;
+  transition: background .18s ease, border-color .18s ease;
+}
+.lp-btn.lg { padding: 11px 22px; font-size: 14.5px; }
+.lp-btn.solid { background: var(--fill); color: var(--on-fill); }
+.lp-btn.solid:hover { background: #3175ae; }
+.lp-btn.ghost { border-color: var(--line); color: var(--text); background: rgba(26, 33, 40, .6); }
+.lp-btn.ghost:hover { border-color: var(--dim-2); }
+
+/* ---------- 顶部导航 ---------- */
+.lp-nav {
+  position: fixed; inset: 0 0 auto; z-index: 40; backdrop-filter: blur(14px);
+  background: rgba(20, 26, 31, .76); border-bottom: 1px solid transparent;
+  transition: border-color .3s ease;
+}
+.lp-nav.stuck { border-bottom-color: var(--line-soft); }
+.lp-nav-in { max-width: 1240px; margin: 0 auto; padding: 12px 32px; display: flex; align-items: center; gap: 14px; }
+.lp-brand { display: flex; align-items: center; gap: 9px; }
+/* `.word` 的渐变与字重在应用那份里，这儿**只压字号**——把那几行渐变再抄一遍的结果是各自漂移 */
+.lp-brand .word { font-size: 16px; }
+.lp-nav-r { margin-left: auto; display: flex; align-items: center; gap: 26px; font-size: 13.5px; color: var(--dim); }
+.lp-nav-r a:not(.lp-btn) { cursor: pointer; }
+.lp-nav-r a:not(.lp-btn):hover { color: var(--text); }
+
+/* ---------- Hero ---------- */
+.lp-hero {
+  position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column;
+  justify-content: center; align-items: center; text-align: center; padding: 128px 32px 72px;
+}
+.lp-hero h1 {
+  font-size: clamp(38px, 6.2vw, 74px); line-height: 1.1; letter-spacing: -.035em;
+  font-weight: 600; margin-top: 24px;
+}
+/* 标题那半句同样止于 `--mk-middle`，理由与 `.word` 那条一样：再深就读不出来 */
+.lp-hero h1 .hl {
+  background: linear-gradient(100deg, #9ec8ee 6%, var(--ok) 55%, var(--fill) 96%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.lp-hero .lead { max-width: 680px; margin-top: 24px; font-size: 16.5px; color: var(--dim); }
+.lp-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 34px; }
+.lp-meta { margin-top: 20px; font-family: var(--mono); font-size: 12px; color: var(--dim-2); }
+.lp-scrollcue {
+  position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--dim-2);
+}
+.lp-scrollcue i {
+  width: 1px; height: 38px; background: linear-gradient(var(--accent), transparent);
+  animation: lp-drop 1.9s ease-in-out infinite;
+}
+@keyframes lp-drop {
+  0% { opacity: 0; transform: scaleY(.2); }
+  40% { opacity: 1; }
+  100% { opacity: 0; transform: scaleY(1); }
+}
+.up { opacity: 0; transform: translateY(16px); animation: lp-up .85s cubic-bezier(.2, .8, .2, 1) forwards; animation-delay: var(--d, 0s); }
+@keyframes lp-up { to { opacity: 1; transform: none; } }
+
+/* ============================================================
+   排查路径：整页就是一条时间轴，功能卡随滚动一张张接上去
+   ============================================================ */
+.lp-tour { position: relative; z-index: 1; padding: 9vh 0 2vh; }
+.lp-tourhead { max-width: 660px; }
+.lp-tourhead h2 {
+  margin-top: 14px; font-size: clamp(26px, 3.2vw, 40px); line-height: 1.2;
+  letter-spacing: -.03em; font-weight: 600;
+}
+.lp-tourhead p { margin-top: 16px; color: var(--dim); font-size: 15px; }
+
+.lp-track { position: relative; margin-top: 5vh; padding-left: var(--lp-spine); }
+/* 脊线本体（暗）与被滚动"画出来"的那一段（亮）叠着放：
+   只画亮的那条会让还没走到的路径整个消失，而路径有多长本身是信息 */
+.lp-spine { position: absolute; left: 0; top: 0; bottom: 0; width: 1.5px; background: var(--wire); opacity: .55; }
+.lp-spine i { position: absolute; left: 0; top: 0; width: 100%; height: 0; background: var(--accent); opacity: .7; }
+.lp-spine::after {
+  content: ''; position: absolute; left: 50%; top: var(--headY, 0);
+  width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 12px rgba(90, 158, 221, .7); opacity: var(--headOn, 0);
+}
+
+/* 一节 = 一张功能卡 + 它右边摊开的那块界面。整节吸附居中。
+   grid 而不是 flex：`align-content: center` 把这一行整体摆到中间，
+   `align-items: start` 又让卡与片段顶对齐——连线的落点是按"两者同一个顶"算的 */
+.lp-stop {
+  position: relative; display: grid;
+  grid-template-columns: var(--lp-cardw) var(--lp-fragw); gap: var(--lp-elbow);
+  align-content: center; align-items: start;
+  min-height: 64vh; padding: 2vh 0;
+  scroll-snap-align: center; scroll-snap-stop: always;
+}
+
+/* ---------- 功能卡 ----------
+   刻意**不复用** `.s-card`：那一张是画布上的东西（绝对定位、高度由 track.ts 算好写在
+   style 上、正文按算好的行数裁），搬进页面流要覆写的比重写还多。这一张是落地页的卡，
+   只借它的解剖与色板——序号 · 类型 · 状态 · 假设句 · 结论——所以 `.c-head` / `.ord` /
+   `.kind` / `.state` / `.pulse` 那几个类名照用，样式由应用那份供。 */
+.lp-card {
+  position: relative; background: var(--panel); border: 1px solid var(--line);
+  border-left: var(--lp-cardbl) solid var(--line); border-radius: 12px; padding: 16px 20px 18px;
+  opacity: 0; transform: translateY(22px);
+  transition: opacity .55s ease, transform .6s cubic-bezier(.2, .8, .2, 1);
+}
+.lp-stop.in .lp-card { opacity: 1; transform: none; }
+.lp-card.confirmed { border-left-color: var(--ok); }
+.lp-card.open { border-left-color: var(--accent); }
+.lp-card.waiting { border-left-color: var(--warn); border-color: #45381f; }
+.lp-card.converged { border-left-color: var(--line); }
+/* 应用那份把 `.c-head` 定成 11.5px 的一行小字，落地页照用；下面两条只放大正文 */
+.lp-card .c-dir {
+  margin-top: 10px; font-size: 20px; line-height: 1.35; letter-spacing: -.02em; font-weight: 600;
+  -webkit-line-clamp: none; display: block;
+}
+.lp-card .c-vd { margin-top: 10px; font-size: 13.5px; line-height: 1.7; padding-left: 11px; display: block; }
+.lp-pts { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--dim); }
+.lp-pts li { position: relative; padding-left: 15px; line-height: 1.6; }
+.lp-pts li::before {
+  content: ''; position: absolute; left: 0; top: 8px; width: 5px; height: 5px;
+  border-radius: 50%; border: 1.5px solid var(--dim-2);
+}
+.lp-pts li b { color: var(--text); font-weight: 500; }
+.lp-pts li.hot::before { border-color: var(--warn); background: var(--warn); }
+.lp-pts li.bad::before { border-color: var(--bad); background: var(--bad); }
+
+/* 节点用应用列表里那颗 `.nd`（分档同样由应用那份供），这里只管**摆在哪**。
+   它挂在卡片上而不是这一节上——这一节比卡片高得多，挂错了会飘在卡片上方一大截。
+
+   🔴 **居中靠 translate，不许用负 margin**：应用那三档节点尺寸并不一样
+   （空心 9px · 运行中 11px · 已归档 7px），按其中任一档写死负 margin 的话，
+   另外两档会偏出脊线几个像素——不报错，只是看着"这一颗没对齐"。 */
+.lp-card .nd {
+  position: absolute; left: calc(-1 * var(--lp-spine) - var(--lp-cardbl)); top: 25px; z-index: 2;
+  transform: translate(-50%, -50%) scale(.4); opacity: 0;
+  transition: transform .4s cubic-bezier(.2, 1.5, .4, 1), opacity .3s ease;
+}
+.lp-stop.in .lp-card .nd { transform: translate(-50%, -50%); opacity: 1; }
+/* 节点到卡片左沿的那一小段横线。**挂在卡片上而不是节点上**，理由同上：
+   挂在节点上的话起点跟着那一档的尺寸变，而且默认那一档是空心的，线会从圆环里穿过去。
+   从最大一档的外沿（8px）起画才与三档都不打架 */
+.lp-card::before {
+  content: ''; position: absolute; top: calc(25px - .75px);
+  left: calc(-1 * var(--lp-spine) - var(--lp-cardbl) + 8px);
+  width: calc(var(--lp-spine) + var(--lp-cardbl) - 8px); height: 1.5px; background: var(--wire);
+  transform-origin: 0 50%; transform: scaleX(0); transition: transform .45s ease .1s;
+}
+.lp-stop.in .lp-card::before { transform: none; }
+
+/* ---------- 右边：直角连线 + 摊开的界面片段 ---------- */
+.lp-fragwrap { position: relative; padding-top: var(--lp-drop); }
+/* 横 → 竖 → 横，三段按顺序长出来。与应用里 open 那条 `H mid V H` 同形——
+   拐出去的线一律走直角，曲线只留给推翻 */
+.lp-link {
+  position: absolute; left: calc(-1 * var(--lp-elbow)); top: 28px;
+  width: var(--lp-elbow); height: calc(var(--lp-drop) + 4px); pointer-events: none;
+}
+.lp-link i { position: absolute; background: var(--wire); }
+.lp-link i:nth-child(1) { left: 0; top: 0; height: 1.5px; width: 50%; transform-origin: 0 50%; transform: scaleX(0); transition: transform .3s ease; }
+.lp-link i:nth-child(2) { left: calc(50% - .75px); top: 0; width: 1.5px; height: 100%; transform-origin: 50% 0; transform: scaleY(0); transition: transform .35s ease .28s; }
+.lp-link i:nth-child(3) { left: 50%; bottom: 0; height: 1.5px; width: 50%; transform-origin: 0 50%; transform: scaleX(0); transition: transform .3s ease .6s; }
+.lp-stop.settled .lp-link i:nth-child(1),
+.lp-stop.settled .lp-link i:nth-child(3) { transform: scaleX(1); }
+.lp-stop.settled .lp-link i:nth-child(2) { transform: scaleY(1); }
+
+/* 片段的底：画布那一档深色 + 点阵。它替代了截图的边框——一看就是"画布上的东西"，
+   而不是又一张与左边同级的卡 */
+.lp-frag {
+  position: relative; border: 1px solid var(--line-soft); border-radius: 12px;
+  background: var(--world); padding: 16px; overflow: hidden;
+  opacity: 0; transform: translateX(-10px);
+  /* 延迟等三段连线走完（.3 + .28+.35 = .93，取 .82 让它压着最后一段的尾巴接上） */
+  transition: opacity .5s ease .82s, transform .55s cubic-bezier(.2, .8, .2, 1) .82s;
+}
+.lp-stop.settled .lp-frag { opacity: 1; transform: none; }
+.lp-frag::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background-image: radial-gradient(circle at 1px 1px, #263039 1px, transparent 0);
+  background-size: 26px 26px;
+}
+.lp-frag > * { position: relative; }
+.lp-fcap {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+  color: var(--dim-2); margin-bottom: 12px;
+}
+.lp-fcap b { color: var(--dim); font-weight: 400; }
+
+/* ---------- 把应用部件从画布搬进页面流所必需的覆写 ----------
+   🔴 只写"位置与尺寸"这一类，颜色、边框、字号一概不碰——碰了就是在站点上悄悄
+   另开一套外观，而这一段的全部意义就是"页面上这块跟应用里那块是同一个东西"。 */
+.lp-frag .s-card {
+  /* 画布上它是 absolute + 由 track.ts 写死 width/height；页面流里按内容排 */
+  position: static; width: auto; height: auto; cursor: default;
+  padding-bottom: 12px;
+}
+.lp-frag .s-card + .s-card { margin-top: 12px; }
+/* 「详情 →」是画布上"这张卡点得开"的提示，站点上点不开 */
+.lp-frag .s-card::after { content: none; }
+/* 正文在画布上按算好的行数裁（`-webkit-line-clamp` 由 JSX 内联给），这里让它自己排 */
+.lp-frag .c-dir, .lp-frag .c-vd, .lp-frag .question { -webkit-line-clamp: none; display: block; }
+.lp-frag .casecard h2 { -webkit-line-clamp: none; }
+/* 待办卡在应用里钉在视口右上、宽 372px；这儿窄一些，回填区照 `.todolayer` 那条改单列 */
+.lp-frag .pending .fill { grid-template-columns: minmax(0, 1fr); }
+.lp-frag .pending .side { flex-direction: row; align-items: flex-end; gap: 8px; }
+.lp-frag .pending .side label { flex: 1; }
+.lp-frag .pending .side input { margin-top: 4px; }
+/* 站点上的部件是给人看的，不是给人填的 */
+.lp-frag textarea, .lp-frag input, .lp-frag button { pointer-events: none; resize: none; }
+.lp-frag button:disabled { opacity: .75; }
+
+/* ---------- 片段里站点自己加的几块 ---------- */
+.lp-kv { margin-top: 12px; font-size: 12.5px; }
+.lp-kv > div { display: flex; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+.lp-kv > div:last-child { border-bottom: 0; }
+.lp-kv dt { width: 64px; flex: none; color: var(--dim-2); font-family: var(--mono); font-size: 11.5px; }
+.lp-kv dd { font-family: var(--mono); color: var(--text); }
+.lp-warnline { margin-top: 10px; color: var(--warn); font-size: 11.5px; }
+.lp-badline { margin-top: 12px; color: var(--bad); font-size: 11.5px; }
+
+.lp-calls { margin-top: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); overflow: hidden; }
+.lp-calls .h {
+  padding: 7px 11px; border-bottom: 1px solid var(--line-soft); font-size: 11px;
+  color: var(--dim-2); font-family: var(--mono); letter-spacing: .04em;
+}
+.lp-calls .c {
+  display: flex; align-items: baseline; gap: 9px; padding: 7px 11px; font-size: 12px;
+  color: var(--dim); border-bottom: 1px solid var(--line-soft);
+}
+.lp-calls .c .tool { font-family: var(--mono); color: var(--accent); font-size: 11px; width: 44px; flex: none; }
+.lp-calls .c .n { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text); }
+.lp-calls pre {
+  margin: 0; padding: 9px 11px; background: var(--code); font-family: var(--mono);
+  font-size: 11px; line-height: 1.7; color: var(--dim); white-space: pre-wrap;
+}
+.lp-calls pre b { color: var(--text); font-weight: 400; }
+
+/* 支线：虚线拐出去的一条。虚线在应用里就是"开出一条新线"那一形 */
+.lp-lane { margin-top: 16px; padding-left: 26px; position: relative; }
+.lp-lane::before {
+  content: ''; position: absolute; left: 0; top: -8px; width: 14px; height: 34px;
+  border-left: 1.5px dashed var(--wire); border-bottom: 1.5px dashed var(--wire);
+  border-bottom-left-radius: 2px;
+}
+.lp-lane .lanehead { position: static; display: flex; margin-bottom: 6px; }
+
+/* 推翻：全屏唯一的那条曲线，从下面那张卡绕回上面那张 */
+.lp-refute { position: relative; padding-left: 36px; }
+.lp-refute svg { position: absolute; left: 0; top: 0; width: 36px; height: 100%; overflow: visible; }
+.lp-refute path { fill: none; stroke: var(--bad); stroke-width: 1.6; opacity: .85; }
+.lp-refute marker path { fill: var(--bad); stroke: none; }
+.lp-refute .s-card + .s-card { margin-top: 16px; }
+
+/* 报告投影：左边来源，右边章节 */
+.lp-proj { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; font-size: 11.5px; }
+.lp-proj .col { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 11px; color: var(--dim); }
+.lp-proj .col .cap, .lp-root .cap {
+  font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim-2); font-family: var(--mono); margin-bottom: 8px;
+}
+.lp-proj .col div + div { margin-top: 6px; }
+.lp-proj .col.out div { color: var(--text); }
+.lp-proj .arrow { color: var(--dim-2); font-size: 16px; }
+.lp-root {
+  margin-top: 14px; border-left: 3px solid var(--accent); border-radius: 0 9px 9px 0;
+  background: var(--panel); padding: 9px 11px;
+}
+.lp-root .cap { margin-bottom: 5px; }
+.lp-root p { font-size: 13px; line-height: 1.45; }
+.lp-outs { margin-top: 12px; display: flex; gap: 8px; font-size: 11.5px; color: var(--dim); }
+.lp-outs span { border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; background: var(--panel); }
+
+/* ---------- 其余功能 ---------- */
+.lp-more { position: relative; z-index: 1; padding: 10vh 0 6vh; }
+.lp-cards { margin-top: 26px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.lp-mini { border: 1px solid var(--line); border-radius: 12px; background: rgba(26, 33, 40, .6); padding: 18px 18px 20px; }
+.lp-mini h4 { font-size: 14.5px; font-weight: 600; }
+.lp-mini p { margin-top: 8px; font-size: 13px; color: var(--dim); line-height: 1.65; }
+.lp-final { margin-top: 10vh; text-align: center; padding-bottom: 6vh; }
+.lp-final h2 { font-size: clamp(26px, 3.4vw, 40px); letter-spacing: -.03em; font-weight: 600; }
+.lp-final p { margin-top: 16px; color: var(--dim); font-size: 14.5px; }
+.lp-foot { border-top: 1px solid var(--line-soft); padding: 26px 0; position: relative; z-index: 1; }
+.lp-foot .lp-wrap { display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: var(--dim-2); }
+.lp-foot .word { font-size: 13.5px; }
+.lp-flinks { margin-left: auto; display: flex; gap: 20px; }
+.lp-foot a { cursor: pointer; }
+.lp-foot a:hover { color: var(--text); }
+
+@media (max-width: 1200px) {
+  :root { --lp-cardw: 460px; --lp-fragw: 470px; --lp-elbow: 44px; }
+}
+/* 摆不下两列就摞起来：直角连线在摞起来之后没有意义（它说的是"往右拐"），整条撤掉；
+   吸附一并关掉——一节变长之后吸附会把人按在半截内容上 */
+@media (max-width: 1040px) {
+  :root { --lp-elbow: 0px; --lp-drop: 0px; }
+  html { scroll-snap-type: none; }
+  .lp-stop { display: block; min-height: 0; padding: 0 0 9vh; scroll-snap-align: none; }
+  .lp-link { display: none; }
+  .lp-fragwrap { padding-top: 18px; }
+  /* 摞起来之后右边那块不再"摊开"，跟着卡片一起落 */
+  .lp-frag { transition-delay: .2s; }
+  .lp-stop.in .lp-frag { opacity: 1; transform: none; }
+}
+@media (max-width: 760px) {
+  .lp-cards { grid-template-columns: 1fr; }
+  .lp-card .c-dir { font-size: 18px; }
+  .lp-proj { grid-template-columns: 1fr; }
+  .lp-proj .arrow { display: none; }
+  .lp-foot .lp-wrap { flex-wrap: wrap; }
+  .lp-flinks { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .lp-card, .lp-card .nd, .lp-card .nd::after, .lp-link i, .lp-frag { transition: none; }
+  .lp-scrollcue i, .up { animation: none; }
+  .up { opacity: 1; transform: none; }
+}

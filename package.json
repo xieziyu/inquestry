@@ -35,6 +35,8 @@
     "preview": "electron-vite preview",
     "app": "npm run rebuild:electron && electron-vite preview",
     "preview:ui": "vite --config vite.preview.config.ts --port 5178 --strictPort",
+    "site:dev": "vite --config vite.site.config.ts --port 5179 --strictPort",
+    "site:build": "vite build --config vite.site.config.ts",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "rebuild:node": "cd node_modules/better-sqlite3 && npm run build-release"
   },
