@@ -16,7 +16,7 @@ PRAGMA foreign_keys = ON;
 
 export const SCHEMA_SQL = `
 -- Inquestry schema v1
--- 设计依据见 docs/design/data-model.md；决策来源见 docs/design/overview.md §4。
+-- 产品概念（层级、两条时间线、event sourcing）见 docs/design/overview.md；字段取舍理由见各表注释。
 --
 -- 两条铁律：
 --   1. \`events\` 是唯一真相，其余表都是它的物化投影，可 truncate 后重放重建
