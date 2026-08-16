@@ -25,13 +25,10 @@ export function Rail({
    * 上的支线在别的屏上一点痕迹都没有，而①档不处理就是永远等下去。
    */
   todo,
-  /** claude 找不到。坏消息用绯色，别占掉暖色那一档。 */
-  envBad,
   onGo,
 }: {
   screen: Screen;
   todo: boolean;
-  envBad: boolean;
   onGo: (s: Screen) => void;
 }) {
   /**
@@ -64,10 +61,9 @@ export function Rail({
       )}
       {item('history', '历史调查', '历史调查 · 检索与切换', <HistoryIcon />)}
       <span className="rail-gap" />
-      <span
-        className={`env ${envBad ? 'bad' : ''}`}
-        title={envBad ? '没找到 claude 可执行文件' : 'claude 已就绪'}
-      />
+      {/* claude 在不在**不挂在这儿**：常态是在，那颗点于是常年亮着说一件不用管的事，
+          而 rail 上一个亮点的默认读法是"有事找你"。不在的时候工作区有横幅、
+          设置屏「关于」那一节写着找没找到——两处都说得比一颗点清楚 */}
       {item('settings', '设置', '设置', <GearIcon />)}
     </nav>
   );

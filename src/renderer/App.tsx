@@ -217,7 +217,7 @@ export function App({
 
   const shell = (content: React.ReactNode) => (
     <div className="app">
-      <Rail screen={screen} todo={anyTodo} envBad={!!env && !env.claude} onGo={setScreen} />
+      <Rail screen={screen} todo={anyTodo} onGo={setScreen} />
       {/* 顶栏左端的应用标记。由外壳画一次而不是各屏各画一次——它在每一屏上都是同一个东西，
           而各屏的页头只管自己那份内容（见 styles.css 的 `.brand` 与外壳网格） */}
       <span className="brand">

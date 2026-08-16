@@ -126,8 +126,6 @@ body {
 }
 .rail-btn.on .dot { border-color: var(--panel-2); }
 .rail-gap { flex: 1; }
-.rail .env { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-bottom: 8px; }
-.rail .env.bad { background: var(--bad); }
 
 /* ── 动作按钮上的图标（`Icon.tsx`）──
    一律**图标 + 字**：图标负责"在一排字里一眼分得出哪个是哪个"，字负责"它到底是什么"。
@@ -847,6 +845,28 @@ button.primary:has(> .ic) { gap: 6px; }
 /* 下面放不下就朝上开（`Picker.tsx` 量完再挂这个类） */
 .picker-menu.up { top: auto; bottom: calc(100% + 5px); }
 
+/* ── seg：并排的单选（参照 duetlens 的 `.choice`）──
+   内嵌轨道 + 一枚浮在上面的当前项。未选中那几档走 `--dim` 而不是压到 `--dim-2`：
+   它们是可点的另一半，不是失效项——失效项另有一档更暗的。
+
+   🔴 **这一份是全应用共用的**（合成器、历史筛选、设置）。一处改了另两处跟着变，
+   而三处各自坐在不同底色上：轨道色由 `--seg-track` 出，坐在 `--code` 上的那一处
+   （合成器的高级选项）必须自己改这个变量，否则轨道与它的底同色、整个凹槽消失。 */
+.seg {
+  --seg-track: var(--code);
+  display: flex; gap: 2px; padding: 2px; flex: none; width: max-content;
+  background: var(--seg-track); border: 1px solid var(--line); border-radius: 9px;
+}
+.seg button {
+  display: flex; align-items: center;
+  background: none; border: 0; color: var(--dim); font: inherit; font-size: 12px;
+  padding: 0 13px; min-height: 26px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  transition: background .16s ease, color .16s ease;
+}
+.seg button:hover:not(:disabled):not(.on) { color: var(--text); }
+.seg button.on { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--fill); }
+.seg button:disabled { color: var(--dim-2); opacity: .5; cursor: default; }
+
 /* 🔴 **不能用 `overflow: hidden` 去圆角**：Picker 的菜单是绝对定位的，靠下那几格
    （思考强度、权限模式）一展开就被这一层裁掉半截。首尾两段各自圆自己的角。 */
 .compose {
@@ -880,19 +900,8 @@ button.primary:has(> .ic) { gap: 6px; }
 .compose .adv .f { display: contents; }
 .compose .adv .k { justify-self: start; }
 .compose .adv .hint { grid-column: 2; margin: 0; }
-.compose .seg { display: flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; width: max-content; }
-.compose .seg button {
-  background: none; border: 0; color: var(--dim); padding: 5px 12px; cursor: pointer; font: inherit; font-size: 12.5px;
-}
-.compose .seg button.on { background: var(--panel-2); color: var(--accent); }
-.compose select {
-  background: var(--panel); border: 1px solid var(--line); color: var(--text);
-  border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12.5px;
-  width: max-content; max-width: 100%; cursor: pointer;
-  transition: border-color .16s ease;
-}
-.compose select:hover { border-color: var(--fill); }
-.compose select:focus { outline: 0; border-color: var(--fill); }
+/* 高级选项那一格的底就是 `--code`，轨道得让开一档，否则凹槽整个看不见 */
+.compose .adv .seg { --seg-track: var(--bg); }
 .compose .hint { font-size: 11.5px; line-height: 1.6; color: var(--dim-2); margin: 2px 0 0; max-width: 62ch; }
 .compose .hint.err { color: var(--bad); }
 
@@ -1051,14 +1060,9 @@ button.primary:has(> .ic) { gap: 6px; }
   background: none; border: 0; border-radius: 50%; color: var(--dim-2); cursor: pointer; padding: 0;
 }
 .qbox .clear:hover { background: var(--line); color: var(--text); }
-.filters .seg { display: flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex: none; }
-.filters .seg button {
-  background: none; border: 0; color: var(--dim); padding: 7px 13px; cursor: pointer; font: inherit; font-size: 12px;
-  transition: background .16s ease, color .16s ease;
-}
-.filters .seg button:hover:not(:disabled):not(.on) { background: var(--panel); color: var(--text); }
-.filters .seg button.on { background: var(--panel-2); color: var(--text); }
-.filters .seg button:disabled { opacity: .35; cursor: default; }
+/* 抻到与同一行最高的那个（搜索框）齐平。写死一个高度的话，
+   搜索框的字号或内边距一改，这一行就又错开了 */
+.filters .seg { align-self: stretch; }
 
 /* 一行调查从左到右分四段读：
      ① 状态节点  ② 标题 / 出处·摘要（①② 合起来是一颗按钮，键盘够得到）
@@ -1174,47 +1178,97 @@ button.primary:has(> .ic) { gap: 6px; }
 }
 .blank .retry:hover { color: var(--text); border-color: var(--dim-2); }
 
-/* ── 设置 ── */
-.set-sec { margin-bottom: 26px; }
-.set-sec h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
-.set-sec .desc { font-size: 12px; color: var(--dim); margin: 0 0 10px; }
-.set-body { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.srow { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
-.srow:last-child { border-bottom: 0; }
-.srow .lab { flex: 1; min-width: 0; }
-.srow .lab .n { font-size: 13px; }
-.srow .lab .h {
-  font-size: 11.5px; color: var(--dim); margin-top: 1px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* ── 设置 ──
+   每一项只占一行：标签在左、控件在右，中间是空的。**没有说明小字**——
+   标签自己说得清的那句话再写一遍，只会把每一行撑成两倍高，一屏就装不下三节了。 */
+
+/* 一行只有标签和控件之后，940 的通用宽度就太空了：一条 12 个字的标签
+   与一枚 170px 的控件之间会拉开半屏，读的时候得横着扫过去才对得上 */
+.settings .pad { max-width: 700px; }
+
+.set-sec { margin-bottom: 30px; }
+.set-sec h2 {
+  margin: 0 0 9px 3px; font-size: 11.5px; font-weight: 600;
+  color: var(--dim); letter-spacing: .08em;
 }
-.srow .ctl { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
-.srow .ctl .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.srow .ctl .seg.wrap { flex-wrap: wrap; }
-.srow .ctl .seg button {
-  background: none; border: 0; color: var(--dim); padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px;
+.set-body { border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+
+/* 每一格控件都定死 34px 高（见下面的 `--ctl-h`）：seg / Picker / 数字框各自的
+   内边距算下来差着三四个像素，一列排下来每行都错半格 */
+.set-body { --ctl-h: 34px; }
+.srow {
+  position: relative;
+  display: flex; align-items: center; gap: 16px;
+  min-height: 52px; padding: 9px 15px;
 }
-.srow .ctl .seg button.on { background: var(--panel-2); color: var(--accent); box-shadow: inset 0 0 0 1px var(--fill); }
-.srow .ctl .seg button:disabled { opacity: .35; cursor: default; }
+/* 分隔线画成伪元素、且从内边距那儿起画：整幅横线一路顶到圆角边上，
+   一张卡看起来会像是被切成了几张。**不能给 `.set-body` 加 overflow: hidden 去圆角**，
+   Picker 的菜单是绝对定位的，靠下那几格一展开就被裁掉半截 */
+.srow + .srow::before,
+.about + .srow::before,
+.srow + .links::before {
+  content: ''; position: absolute; left: 15px; right: 15px; top: 0;
+  height: 1px; background: var(--line-soft);
+}
+.srow .lab { flex: 0 0 auto; font-size: 13px; }
+.srow .ctl { flex: 0 0 auto; margin-left: auto; display: flex; gap: 8px; align-items: center; min-width: 0; }
+/* 路径那种要靠省略号收尾的：控件列吃掉标签之外的全部宽 */
+.srow.wide .ctl { flex: 1 1 auto; }
+
+/* 这一项这会儿真出了问题（不是说明），落在它自己那一行底下。
+   走 `--bad` 不走暖色：暖色是「需要人动手」的全局专属（ui.md §4），
+   而合成器上同一句话（`.compose .hint.err`）本来就是这个色，两处说的是同一件事 */
+.srow.errored { flex-wrap: wrap; padding-bottom: 10px; }
+.srow .err { flex-basis: 100%; font-size: 11.5px; color: var(--bad); margin-top: 7px; }
+
+/* 本体在上面「seg」那一节，这儿只把它拉到与同行的 Picker / 数字框同高 */
+.srow .ctl .seg { height: var(--ctl-h); }
+
+/* Picker 默认铺 `--panel`，与设置卡同色就看不出是个控件——落到内嵌那一档，
+   与旁边的 seg 轨道、数字框同一个底 */
+.srow .ctl .picker .pk {
+  background: var(--code); min-width: 178px; height: var(--ctl-h); border-radius: 9px;
+}
+.srow .ctl .picker .pk:hover, .srow .ctl .picker .pk.open { background: var(--panel-2); }
+/* 控件在行的右端，菜单跟着右对齐：左对齐的话它会从卡片右边缘探出去一截。
+   也得比按钮宽出不少——「模型」那几行右边还挂着实际落到的模型 id */
+.srow .ctl .picker-menu { left: auto; right: 0; min-width: 296px; }
+
 .srow .ctl > button {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
-  padding: 4px 11px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px;
+  height: var(--ctl-h); padding: 0 13px; border-radius: 9px; cursor: pointer;
+  font: inherit; font-size: 12px; white-space: nowrap;
+  transition: border-color .16s ease, color .16s ease;
 }
+.srow .ctl > button:hover { border-color: var(--dim-2); }
 .srow .ctl input.num {
-  width: 66px; background: var(--code); border: 1px solid var(--line); color: var(--text);
-  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12.5px;
+  width: 72px; height: var(--ctl-h); background: var(--code);
+  border: 1px solid var(--line); color: var(--text);
+  border-radius: 9px; padding: 0 10px; font: inherit; font-size: 12.5px;
   font-family: var(--mono); text-align: right;
+  transition: border-color .16s ease;
 }
+.srow .ctl input.num:hover { border-color: var(--dim-2); }
 .srow .ctl input.num:focus { outline: 0; border-color: var(--fill); }
-.srow .ctl .unit { font-size: 11.5px; color: var(--dim); }
+/* 定宽：不然「分钟」比「个」宽出十几像素，几个数字框左边缘就对不上了 */
+.srow .ctl .unit { flex: 0 0 auto; min-width: 30px; font-size: 11.5px; color: var(--dim); }
 .srow .ctl .ro { font-size: 12px; color: var(--dim); }
 .srow .ctl .ro.bad { color: var(--bad); }
-.about { display: flex; align-items: center; gap: 14px; padding: 16px 14px; border-bottom: 1px solid var(--line); }
+/* 从头上截：靠后那几级才认得出是哪一个，开头的 `/Users/<自己>` 条条都一样 */
+.srow .ctl .ro.path {
+  flex: 1 1 auto; min-width: 0; font-size: 11.5px; color: var(--dim-2); direction: rtl;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.srow .ctl .ro.sz { flex: 0 0 auto; }
+
+.about { display: flex; align-items: center; gap: 14px; padding: 17px 15px; }
 .about .vmeta .v { font-size: 14px; }
 .about .vmeta .v b { font-family: var(--mono); }
 .about .vmeta .sub { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
 .about .lic { margin-left: auto; font-size: 11.5px; color: var(--dim); }
-.links { display: flex; align-items: center; gap: 12px; padding: 11px 14px; font-size: 12.5px; }
+.links { position: relative; display: flex; align-items: center; gap: 12px; padding: 12px 15px; font-size: 12.5px; }
 .links a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.links a:hover { text-decoration: underline; }
 .links i { width: 1px; height: 11px; background: var(--line); }
 .copyright {
   padding: 11px 14px; margin: 0; font-size: 11.5px; color: var(--dim);

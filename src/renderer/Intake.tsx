@@ -182,7 +182,8 @@ export function Intake({
             />
             {modelMissing && (
               <span className="hint err">
-                设置里挑的 <code>{agent.model}</code> 这会儿没探测到，跑起来会退回默认模型。
+                设置里挑的 <code>{agent.model}</code> 这会儿探测不到，仍会原样交给 backend；
+                真下线了的话这次调查起不来。
               </span>
             )}
             {opts && !opts.modelsProbed && (

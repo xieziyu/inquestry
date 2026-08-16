@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppInfo, IntakeOptions } from '../shared/ipc.js';
 import { LIMIT_BOUNDS, type UiSettings } from '../shared/settings.js';
 import { LogoMark } from './LogoMark.js';
+import { Picker, type PickerItem } from './Picker.js';
 
 const REPO = 'https://github.com/xieziyu/inquestry';
 const ISSUES = `${REPO}/issues/new`;
@@ -9,6 +10,9 @@ const AUTHOR = 'https://github.com/xieziyu';
 
 /** backend 报出来的「不指定模型」那一档的 value。 */
 const DEFAULT_ROW = 'default';
+
+/** 「不指定」那一档的 value：`null` 不能当选项的值。与 `Intake.tsx` 同一套。 */
+const NONE = '';
 
 /**
  * 设置屏（ui.md §8.5）。三节：新建调查的默认值 / 超时与限流 / 关于。
@@ -42,9 +46,24 @@ export function Settings() {
   const patchIntake = (p: Partial<UiSettings['intake']>) => save({ ...s, intake: { ...s.intake, ...p } });
   const patchLimits = (p: Partial<UiSettings['limits']>) => save({ ...s, limits: { ...s.limits, ...p } });
 
-  const hasDefaultRow = !!opts?.models.some((m) => m.value === DEFAULT_ROW);
   const model = opts?.models.find((m) => m.value === (s.intake.agent.model ?? DEFAULT_ROW));
   const efforts = model?.efforts ?? [];
+  // backend 报得出「默认」那一档时就用它那行——它说得出默认到底落到哪个模型
+  const defaultRow = opts?.models.find((m) => m.value === DEFAULT_ROW);
+  /**
+   * 这儿挑的模型这会儿可能探测不到了（那时探到、这时退回内置表）。
+   * 说出来比默默换掉强：默默换掉的话，人以为在用 opus，报告里记的是另一个。
+   */
+  const modelMissing = s.intake.agent.model !== null && !!opts && !model;
+
+  const models: PickerItem[] = [
+    { value: NONE, label: defaultRow?.label ?? '默认模型', note: defaultRow?.resolvedModel },
+    ...(opts?.models ?? [])
+      .filter((m) => m.value !== DEFAULT_ROW)
+      .map((m) => ({ value: m.value, label: m.label, note: m.resolvedModel, title: m.description })),
+    // 探测不到的那个也要显示成选中的，否则按钮上会跳回默认那一档
+    ...(modelMissing ? [{ value: s.intake.agent.model!, label: s.intake.agent.model! }] : []),
+  ];
 
   return (
     <div className="page settings">
@@ -57,21 +76,15 @@ export function Settings() {
           <section className="set-sec">
             <h2>默认偏好</h2>
             <div className="set-body">
-              {/* 说清是**哪一个** backend 没接入：只印那条 note（"未接入"）的话，
-                  它挨着 Backend 这个标题，读起来像是当前这个没接上 */}
-              <Row
-                label="Backend"
-                hint={opts?.backends
-                  .filter((b) => !b.enabled)
-                  .map((b) => `${b.label} ${b.note ?? '不可用'}`)
-                  .join(' · ')}
-              >
+              <Row label="Backend">
                 <div className="seg">
                   {opts?.backends.map((b) => (
                     <button
                       key={b.value}
                       className={s.intake.agent.backend === b.value ? 'on' : ''}
                       disabled={!b.enabled}
+                      // 压暗那一档得说得出为什么，否则读起来像是坏了
+                      title={b.enabled ? undefined : (b.note ?? '不可用')}
                       onClick={() =>
                         patchIntake({ agent: { backend: b.value, model: null, effort: null } })
                       }
@@ -84,66 +97,35 @@ export function Settings() {
 
               <Row
                 label="模型"
-                hint={
-                  opts && !opts.modelsProbed
-                    ? '没能从 backend 问到模型列表（可能是还没登录），这几项是内置兜底'
-                    : '列表是探测出来的，探测不到才退回内置表'
-                }
+                err={modelMissing ? '这会儿探测不到，仍会原样交给 backend；真下线了的话调查起不来' : undefined}
               >
-                <div className="seg wrap">
-                  {!hasDefaultRow && (
-                    <button
-                      className={s.intake.agent.model === null ? 'on' : ''}
-                      onClick={() =>
-                        patchIntake({ agent: { ...s.intake.agent, model: null, effort: null } })
-                      }
-                    >
-                      默认
-                    </button>
-                  )}
-                  {opts?.models.map((m) => {
-                    const value = m.value === DEFAULT_ROW ? null : m.value;
-                    return (
-                      <button
-                        key={m.value}
-                        className={s.intake.agent.model === value ? 'on' : ''}
-                        title={m.description}
-                        onClick={() =>
-                          patchIntake({ agent: { ...s.intake.agent, model: value, effort: null } })
-                        }
-                      >
-                        {m.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                <Picker
+                  label="模型"
+                  value={s.intake.agent.model ?? NONE}
+                  items={models}
+                  bad={modelMissing}
+                  onPick={(v) =>
+                    patchIntake({ agent: { ...s.intake.agent, model: v || null, effort: null } })
+                  }
+                />
               </Row>
 
               {/* 模型不支持 effort 就整项不出现，而不是给个拧了不生效的假开关（D19） */}
               {efforts.length > 0 && (
-                <Row label="思考强度" hint="再点一下取消，交给 backend 自己定">
-                  <div className="seg">
-                    {efforts.map((e) => (
-                      <button
-                        key={e}
-                        className={s.intake.agent.effort === e ? 'on' : ''}
-                        onClick={() =>
-                          patchIntake({
-                            agent: {
-                              ...s.intake.agent,
-                              effort: s.intake.agent.effort === e ? null : e,
-                            },
-                          })
-                        }
-                      >
-                        {e}
-                      </button>
-                    ))}
-                  </div>
+                <Row label="思考强度">
+                  <Picker
+                    label="思考强度"
+                    value={s.intake.agent.effort ?? NONE}
+                    items={[
+                      { value: NONE, label: '默认' },
+                      ...efforts.map((e) => ({ value: e, label: e })),
+                    ]}
+                    onPick={(v) => patchIntake({ agent: { ...s.intake.agent, effort: v || null } })}
+                  />
                 </Row>
               )}
 
-              <Row label="权限模式初值" hint="随时可切；接管档每次调用都要你放行，且不会自动过去">
+              <Row label="权限模式初值">
                 <div className="seg">
                   <button
                     className={s.intake.takeover ? '' : 'on'}
@@ -159,29 +141,13 @@ export function Settings() {
                   </button>
                 </div>
               </Row>
-
-              <Row
-                label="最近工作区"
-                hint={
-                  opts?.recentRoots.length
-                    ? `${opts.recentRoots.length} 条，首页那张表单上的快捷入口`
-                    : '还没有用过任何工作区'
-                }
-              >
-                <span className="ro mono">
-                  {opts?.recentRoots[0]?.split('/').slice(-1)[0] ?? '—'}
-                </span>
-              </Row>
             </div>
           </section>
 
           <section className="set-sec">
             <h2>超时与限流</h2>
             <div className="set-body">
-              <Row
-                label="闸门自动放行"
-                hint='②档倒计时归零按预设放行，节点标记"自动放行"。接管模式下这一项不生效'
-              >
+              <Row label="闸门自动放行">
                 <Num
                   value={Math.round(s.limits.gateTimeoutMs / 60_000)}
                   min={Math.ceil(LIMIT_BOUNDS.gateTimeoutMs.min / 60_000)}
@@ -190,10 +156,7 @@ export function Settings() {
                   onCommit={(v) => patchLimits({ gateTimeoutMs: v * 60_000 })}
                 />
               </Row>
-              <Row
-                label="同时在跑的调查"
-                hint="超上限时降级最久没动的那个。当前这个、正在跑的、挂着待办的都不会被降"
-              >
+              <Row label="同时在跑的调查">
                 <Num
                   value={s.limits.maxLiveCases}
                   min={LIMIT_BOUNDS.maxLiveCases.min}
@@ -202,10 +165,7 @@ export function Settings() {
                   onCommit={(v) => patchLimits({ maxLiveCases: v })}
                 />
               </Row>
-              <Row
-                label="载入内存的调查"
-                hint="只是投影缓存，降级不影响库里的数据。它不会小于上面那个数"
-              >
+              <Row label="载入内存的调查">
                 <Num
                   value={s.limits.maxLoadedCases}
                   min={LIMIT_BOUNDS.maxLoadedCases.min}
@@ -242,17 +202,18 @@ export function Settings() {
                 <span className="lic mono">GPL-3.0</span>
               </div>
 
-              <Row
-                label="claude 可执行文件"
-                hint={info?.claudePath ?? '没找到。装上 Claude Code 并在终端登录一次。'}
-              >
-                <span className={`ro ${info && !info.claudePath ? 'bad' : ''}`}>
-                  {info?.claudePath ? '已就绪' : '未找到'}
-                </span>
+              {/* 这两行的值就是路径本身，不是说明——所以它们占控件那一列，不做成第二行小字 */}
+              <Row label="claude 可执行文件" wide>
+                {info?.claudePath ? (
+                  <Path value={info.claudePath} />
+                ) : (
+                  <span className="ro bad">未找到，装上 Claude Code 并在终端登录一次</span>
+                )}
               </Row>
 
-              <Row label="数据库" hint={info?.dbPath}>
-                <span className="ro mono">{info ? mb(info.dbBytes) : '—'}</span>
+              <Row label="数据库" wide>
+                {info && <Path value={info.dbPath} />}
+                <span className="ro mono sz">{info ? mb(info.dbBytes) : '—'}</span>
                 <button onClick={() => void window.inquestry.revealDb()}>在访达中显示</button>
               </Row>
 
@@ -271,23 +232,39 @@ export function Settings() {
   );
 }
 
+/**
+ * 一条设置。**没有说明小字**：这一页每一项的标签自己说得清，
+ * 挂在下面的那句话只是把同一件事再讲一遍，还把行高撑成两倍。
+ *
+ * `err` 是**状态**不是说明——它只在那一项这会儿真出了问题时才有（比如挑的模型探测不到）。
+ */
 function Row({
   label,
-  hint,
+  err,
+  wide,
   children,
 }: {
   label: string;
-  hint?: string;
+  err?: string;
+  /** 控件那一列要占满剩下的宽（路径那种要靠省略号收尾的）。 */
+  wide?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="srow">
-      <div className="lab">
-        <div className="n">{label}</div>
-        {hint && <div className="h">{hint}</div>}
-      </div>
+    <div className={`srow${wide ? ' wide' : ''}${err ? ' errored' : ''}`}>
+      <div className="lab">{label}</div>
       <div className="ctl">{children}</div>
+      {err && <div className="err">{err}</div>}
     </div>
+  );
+}
+
+/** 路径。**从头上截**：靠后那几级才认得出是哪一个，开头的 `/Users/<自己>` 条条都一样。 */
+function Path({ value }: { value: string }) {
+  return (
+    <span className="ro mono path" title={value}>
+      <bdi>{value}</bdi>
+    </span>
   );
 }
 
