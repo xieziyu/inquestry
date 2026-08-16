@@ -55,11 +55,7 @@ export function Settings() {
       <div className="pagebody">
         <div className="pad">
           <section className="set-sec">
-            <h2>新建调查的默认值</h2>
-            <p className="desc">
-              首页那张表单的预填。改这里不影响已经建好的调查——agent 三项落在会话上，
-              一次调查中途换模型是常态。
-            </p>
+            <h2>默认偏好</h2>
             <div className="set-body">
               {/* 说清是**哪一个** backend 没接入：只印那条 note（"未接入"）的话，
                   它挨着 Backend 这个标题，读起来像是当前这个没接上 */}
@@ -181,7 +177,6 @@ export function Settings() {
 
           <section className="set-sec">
             <h2>超时与限流</h2>
-            <p className="desc">改这些之前先想清楚"不处理会怎样"——一档一档的语义写在旁边。</p>
             <div className="set-body">
               <Row
                 label="闸门自动放行"
