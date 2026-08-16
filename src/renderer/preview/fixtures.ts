@@ -21,6 +21,7 @@ import type {
   PendingGate,
   Snapshot,
 } from '../../shared/ipc.js';
+import type { UpdateStatus } from '../../shared/update.js';
 import { DEFAULT_UI_SETTINGS } from '../../shared/settings.js';
 import { incident, report, steps as rawSteps } from '../../../scripts/fixtures/report-case.js';
 
@@ -32,7 +33,76 @@ const min = 60_000;
  * 预览这一侧要看的恰恰是**对话织进轨道之后长什么样**，所以在这儿把它挪到最近十几分钟内，
  * 与下面那份 CHAT 咬得上——不挪的话每一句话都会堆在轨道末尾，那一版看不出织没织对。
  */
-const steps = rawSteps.map((s, i) => ({ ...s, startedAt: now - (13 - i) * min }));
+/**
+ * 借来的 spike 夹具满屏是「st1 的结论」这类占位文案——它只为让检查算错，不为给人看。
+ * 预览（以及 README 截图）看的是版面与文案本身，所以在预览这一侧把每一步换成与下面
+ * CHAT / 支线同一个故事的说法。**只换文案字段**：状态、置信度、证据结构原样保留，
+ * 那些才是版面差异的来源，动了它们预览就不再覆盖那些形态。
+ */
+const STORY: Record<string, { direction: string; verdict: string }> = {
+  st1: {
+    direction: '先证实两条记录是不是同一个请求写进去的',
+    verdict: '两条 order 来自两个 req_id，第一条超时 2140ms——第二条是网关重试写出来的。',
+  },
+  st2: {
+    direction: '是不是重试风暴本身造成的重复',
+    verdict: '重试解释了第二个请求的存在，解释不了它为什么能落库。',
+  },
+  st3: {
+    direction: '圈出受影响范围',
+    verdict: '12:00–12:10 间同型重复订单共 37 笔，全部伴随网关重试。',
+  },
+  st4: {
+    direction: '幂等键为什么没拦住第二次写入',
+    verdict: 'cart_key 上只有普通索引——第二次写入不会被数据库挡住，幂等只剩应用层那一道。',
+  },
+  st5: {
+    direction: '应用层的幂等检查当时为什么也没兜住',
+    verdict: '写后读打在从库上，复制延迟 0.34s，幂等检查因此 MISS。',
+  },
+  st6: {
+    direction: '重试为什么没按幂等约定退避',
+    verdict: '还没查清。',
+  },
+};
+const EV_STORY: Record<string, { claim: string; occurredAtRaw: string | null }> = {
+  e1: { claim: 't_order 落下第一条 u1001:cart7 订单', occurredAtRaw: '12:03:02' },
+  e2: { claim: '同一 cart_key 的第二条写入落库，没有被索引拦下', occurredAtRaw: '12:04:51' },
+  e3: { claim: '从库 seconds_behind_master=0.34，幂等检查读到的是旧数据', occurredAtRaw: null },
+};
+const steps = rawSteps.map((s, i) => ({
+  ...s,
+  startedAt: now - (13 - i) * min,
+  ...(STORY[s.id] ?? {}),
+  evidence: s.evidence.map((e) => ({ ...e, ...(EV_STORY[e.id] ?? {}) })),
+}));
+
+/** 报告与系统时间线两份投影的预览版：同一个故事，来源字段（stepId / 置信度）原样保留。 */
+const INCIDENT = incident.map((r) => ({
+  ...r,
+  claim: EV_STORY[r.evidenceId]?.claim ?? r.claim,
+  occurredAtRaw: EV_STORY[r.evidenceId]?.occurredAtRaw ?? r.occurredAtRaw,
+}));
+const REPORT: Snapshot['report'] = {
+  ...report,
+  rootCause: report.rootCause && {
+    ...report.rootCause,
+    text: 'cart_key 缺唯一约束：2026-03 迁移漏建，重试写入不再被数据库挡住',
+  },
+  impact: '12:00–12:10 间重复订单 37 笔，涉及 29 个用户',
+  remediation: '给 `t_order.cart_key` 补 UNIQUE 索引并清理 37 笔重复；迁移脚本加一条索引一致性校验',
+  expected: '唯一索引挡住同 cart_key 的第二次写入',
+  actual: '普通索引放行，重试写入直接落库',
+  leftovers: [{ stepId: 'st6', direction: '重试为什么没按幂等约定退避', text: '还没查清', supersededBy: null }],
+  refuted: [
+    {
+      stepId: 'st2',
+      direction: '是不是重试风暴本身造成的重复',
+      text: '重试解释了第二个请求的存在，解释不了它为什么能落库',
+      supersededBy: 'st4',
+    },
+  ],
+};
 
 /**
  * 舞台是画布之后，**列**成了语义轴（主干 / 子 agent 支线 / agent 声明的分叉，见 `track.ts`）。
@@ -160,13 +230,13 @@ const FULL: Snapshot = {
   backgroundLanes: 1,
   liveLanes: ['lane_a'],
   steps,
-  incident,
+  incident: INCIDENT,
   pending: PENDING,
   gates: GATES,
   chat: CHAT,
   closingGaps: ['impact'],
   shapeSuggestion: { shape: 'chain', source: 'agent', rootStepId: 'st4', stateFillable: true },
-  report,
+  report: REPORT,
 };
 
 /** 刚建完、一步都没跑的样子：空态与"什么都有"是两种要分别看的版面。 */
@@ -218,6 +288,27 @@ const APP_INFO: AppInfo = {
   dbPath: '~/Library/Application Support/inquestry/inquestry.db',
   dbBytes: 4_812_345,
 };
+
+/**
+ * 更新那一行的预览档。默认给 `ready`——那是唯一带第二颗按钮的形态；
+ * `?upd=downloading|error|current|checking|idle` 换档看其余几种。
+ */
+function updateFixture(params: URLSearchParams): UpdateStatus {
+  switch (params.get('upd')) {
+    case 'downloading':
+      return { phase: 'downloading', version: '0.2.0', percent: 62 };
+    case 'error':
+      return { phase: 'error', message: 'net::ERR_INTERNET_DISCONNECTED' };
+    case 'current':
+      return { phase: 'current' };
+    case 'checking':
+      return { phase: 'checking' };
+    case 'idle':
+      return { phase: 'idle' };
+    default:
+      return { phase: 'ready', version: '0.2.0' };
+  }
+}
 
 /** 没人接的那些手势统一从这儿出声，免得点了没反应像是界面坏了。 */
 function inert(name: string) {
@@ -336,6 +427,10 @@ export function installPreviewApi(): void {
     appInfo: async () => APP_INFO,
     revealDb: async () => inert('revealDb')(),
     openExternal: async (url) => void window.open(url, '_blank', 'noopener'),
+    updateStatus: async () => updateFixture(params),
+    updateCheck: async () => inert('updateCheck')(),
+    updateInstall: async () => inert('updateInstall')(),
+    onUpdateStatus: () => () => {},
   };
 
   (window as unknown as { inquestry: InquestryApi }).inquestry = api;

@@ -15,8 +15,21 @@ import '../styles.css';
 
 installPreviewApi();
 
+const params = new URLSearchParams(location.search);
 const SCREENS: Screen[] = ['home', 'workspace', 'history', 'settings'];
-const asked = new URLSearchParams(location.search).get('screen');
+const asked = params.get('screen');
 const screen = SCREENS.find((s) => s === asked);
 
 createRoot(document.getElementById('root')!).render(<App initialScreen={screen} />);
+
+// `?screen=workspace&report` 直达报告屏。报告不是 Rail 上的一屏（它是工作区里的状态），
+// 所以在这儿替人点那颗 `.toreport`，不让 App 为预览多长一个口子。
+if (params.has('report')) {
+  const t = setInterval(() => {
+    const b = document.querySelector<HTMLButtonElement>('.toreport');
+    if (b) {
+      b.click();
+      clearInterval(t);
+    }
+  }, 100);
+}

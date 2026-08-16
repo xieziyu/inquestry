@@ -1,7 +1,7 @@
 {
   "name": "inquestry",
   "productName": "Inquestry",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Troubleshooting console for software engineers — evidence-first timeline over a live agent session",
   "private": true,
   "type": "module",
@@ -29,6 +29,9 @@
     "start": "electron-vite dev",
     "dev": "npm run rebuild:electron && electron-vite dev",
     "build": "electron-vite build",
+    "package": "npm run build && electron-builder --dir --arm64 -c.mac.identity=- -c.mac.notarize=false -c.mac.entitlements=build/entitlements.mac.dev.plist -c.mac.entitlementsInherit=build/entitlements.mac.dev.plist",
+    "dist": "npm run build && electron-builder --mac --publish never",
+    "release": "npm run build && electron-builder --mac --publish always",
     "preview": "electron-vite preview",
     "app": "npm run rebuild:electron && electron-vite preview",
     "preview:ui": "vite --config vite.preview.config.ts --port 5178 --strictPort",
@@ -39,10 +42,15 @@
     "name": "xieziyu",
     "email": "rainnyxzy@gmail.com"
   },
-  "license": "GPL-3.0",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xieziyu/inquestry.git"
+  },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.220",
     "better-sqlite3": "^12.11.1",
+    "electron-updater": "^6.8.9",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4"
@@ -55,6 +63,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^43.2.0",
+    "electron-builder": "^26.15.7",
     "electron-vite": "^5.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

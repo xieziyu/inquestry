@@ -25,6 +25,7 @@ import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js'
 import { proposeCaseFacts } from './case-namer.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
+import { createUpdater } from './updater.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
@@ -982,6 +983,17 @@ app.whenReady().then(async () => {
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
     current()?.excerpt(callId, anchor) ?? '(没有选中的调查)',
   );
+
+  const updater = createUpdater({
+    onStatus: (s) => {
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send('update:status', s);
+    },
+    // 与 before-quit 同一份收尾；closeAll 幂等，装更新触发的那次 before-quit 再跑一遍也无妨
+    cleanup: () => cases.closeAll(),
+  });
+  ipcMain.handle('update:status', () => updater.getStatus());
+  ipcMain.handle('update:check', () => updater.check());
+  ipcMain.handle('update:install', () => updater.install());
 
   createWindow();
   app.on('activate', () => {

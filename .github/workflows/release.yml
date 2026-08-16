@@ -1,0 +1,102 @@
+# 打 tag 出正式包：签名 + 公证 + 传 GitHub Releases 草稿。
+# 草稿要人手点 publish 才对外 —— electron-updater 不读 draft，点之前老用户收不到推送。
+#
+# 需要的 secrets（逐条怎么拿见 docs/design/release.md）：
+#   CSC_LINK / CSC_KEY_PASSWORD          Developer ID Application 证书（.p12 的 base64）与其密码
+#   APPLE_API_KEY_P8 / _ID / _ISSUER     公证用的 App Store Connect API key
+#   APPLE_TEAM_ID                        10 位 Team ID
+#
+# 这个 job 手里有签名证书和 Apple 密钥，所以入口收得很窄：
+#   - 只有 v* tag 能触发。不留 workflow_dispatch —— 那等于允许从任意分支带着密钥跑。
+#   - 挂 release environment，人工审批前 job 不启动，secrets 也就不注入。
+#     供应链投毒因此不能静默拿走密钥，总得有人点一下。
+#   - action 一律钉 commit SHA。@v6 这种可变引用被劫持时会跟着中招。
+#   - secrets 只出现在真正需要的两步的 env 里，且不经 ${{ }} 插值进 run —— 别改成插值。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    # macos-latest 自 macos-14 起是 arm64；只出 arm64 包，better-sqlite3 得按目标架构编
+    runs-on: macos-latest
+    timeout-minutes: 45
+    environment: release
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # 不把 GITHUB_TOKEN 落盘 —— 同 job 里 npm ci 会跑依赖的安装脚本
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # tag 与 package.json 对不上就别发：产物里的版本号来自 package.json，
+      # 发出去会得到一个「v0.2.0 的 release 里装着 0.1.0 的包」。
+      - name: check tag matches package version
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag $tag != package.json $pkg"
+            exit 1
+          fi
+
+      # notes 与 CHANGELOG 同一份来源。抽不到就在这里失败，别等出完包才发现 notes 是空的。
+      - name: build release notes from CHANGELOG
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
+
+      - run: npm run typecheck
+
+      # 先手建 draft，别让 electron-builder 自己建：它的 publisher 缓存在 get 与 set 之间有 await
+      # （createPublisher → resolveReleaseBody 会读一个通常不存在的 release-notes.md），并发的
+      # artifactCreated 因此拿到两个 publisher 实例，各建一条 draft，产物被拆两边 —— 上游 #6676。
+      # release 已存在时两个实例都会复用它，竞态就没了后果。
+      - name: pre-create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --draft \
+              --title "Inquestry ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      # electron-builder 的 notarize 只认文件路径，secret 是字符串，得先落盘
+      - name: write notarization key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s' "$APPLE_API_KEY_P8" > ~/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+
+      - name: build, sign, notarize, publish
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export APPLE_API_KEY=~/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          npm run release
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: always()
+        with:
+          name: inquestry-macos-arm64
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
+          if-no-files-found: warn

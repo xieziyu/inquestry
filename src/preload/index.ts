@@ -8,6 +8,7 @@ import type {
   Snapshot,
 } from '../shared/ipc.js';
 import type { UiSettings } from '../shared/settings.js';
+import type { UpdateStatus } from '../shared/update.js';
 
 /** renderer 只能经这里够到 main —— contextIsolation 开、nodeIntegration 关。 */
 const api: InquestryApi = {
@@ -47,6 +48,14 @@ const api: InquestryApi = {
     const handler = (_e: unknown, s: Snapshot) => cb(s);
     ipcRenderer.on('snapshot', handler);
     return () => ipcRenderer.off('snapshot', handler);
+  },
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (cb: (s: UpdateStatus) => void) => {
+    const handler = (_e: unknown, s: UpdateStatus) => cb(s);
+    ipcRenderer.on('update:status', handler);
+    return () => ipcRenderer.off('update:status', handler);
   },
 };
 

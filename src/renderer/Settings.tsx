@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AppInfo, IntakeOptions } from '../shared/ipc.js';
+import type { UpdateStatus } from '../shared/update.js';
 import { LIMIT_BOUNDS, type UiSettings } from '../shared/settings.js';
 import { LogoMark } from './LogoMark.js';
 import { Picker, type PickerItem } from './Picker.js';
@@ -199,8 +200,10 @@ export function Settings() {
                       : '…'}
                   </div>
                 </div>
-                <span className="lic mono">GPL-3.0</span>
+                <span className="lic mono">GPL-3.0-or-later</span>
               </div>
+
+              <UpdateRow />
 
               {/* 这两行的值就是路径本身，不是说明——所以它们占控件那一列，不做成第二行小字 */}
               <Row label="claude 可执行文件" wide>
@@ -257,6 +260,53 @@ function Row({
       {err && <div className="err">{err}</div>}
     </div>
   );
+}
+
+/**
+ * 更新状态一行。更新本身是后台下载、退出时静默安装的，所以这里不是升级的必经之路——
+ * 只让用户看得见进度、并能提前重启。dev（unsupported）整行不渲染。
+ */
+function UpdateRow() {
+  const [st, setSt] = useState<UpdateStatus>({ phase: 'idle' });
+
+  useEffect(() => {
+    void window.inquestry.updateStatus().then(setSt).catch(() => undefined);
+    return window.inquestry.onUpdateStatus(setSt);
+  }, []);
+
+  if (st.phase === 'unsupported') return null;
+
+  const busy = st.phase === 'checking' || st.phase === 'downloading';
+  return (
+    <Row label="更新">
+      <span className={`ro${st.phase === 'error' ? ' bad' : ''}`}>{updateText(st)}</span>
+      {st.phase === 'ready' ? (
+        <button onClick={() => void window.inquestry.updateInstall()}>立即重启</button>
+      ) : (
+        <button disabled={busy} onClick={() => void window.inquestry.updateCheck()}>
+          检查更新
+        </button>
+      )}
+    </Row>
+  );
+}
+
+function updateText(s: UpdateStatus): string {
+  switch (s.phase) {
+    case 'checking':
+      return '正在检查…';
+    case 'current':
+      return '已是最新';
+    case 'downloading':
+      // update-available 之后、第一个进度事件之前 version 才会是空
+      return s.version ? `正在下载 ${s.version} · ${s.percent}%` : '正在下载新版本…';
+    case 'ready':
+      return `${s.version} 已下好，重启后生效`;
+    case 'error':
+      return `检查失败：${s.message}`;
+    default:
+      return '尚未检查';
+  }
 }
 
 /** 路径。**从头上截**：靠后那几级才认得出是哪一个，开头的 `/Users/<自己>` 条条都一样。 */

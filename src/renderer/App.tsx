@@ -384,8 +384,9 @@ export function App({
           {/* 「预览」是这句话的一部分，不是挂在「报告」后面的一个小字：
               没收尾时这份还会变，收尾之后它就是冻住的那一份，两句话该各说各的 */}
           <button
-            // `toreport` 现在只是无人值守探针的抓手（`main/index.ts` 的 `INQUESTRY_SHOT_REPORT`
-            // 靠它进报告屏），样式走 `.headacts button`。删它之前先看那一段
+            // `toreport` 是两处探针的抓手：`main/index.ts` 的 `INQUESTRY_SHOT_REPORT`
+            // 与 preview 的 `?report` 直达参数都靠它进报告屏，样式走 `.headacts button`。
+            // 删它之前先看那两段
             className="toreport"
             title={frozen ? '这次调查已经收尾，报告是冻住的那一份' : '按现有数据看报告：可以就此定稿，也可以直接导出半成品'}
             onClick={() => setReportOf(openCase)}

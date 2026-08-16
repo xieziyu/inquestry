@@ -8,6 +8,7 @@
 // 只借一个类型：报告要装哪几块由 `shared/report.ts` 定，在这儿照抄一份必然与它长歪
 import type { ReportInput } from './report.js';
 import type { UiSettings } from './settings.js';
+import type { UpdateStatus } from './update.js';
 
 /**
  * 新建调查面板收集的东西（ui.md §8.1）。
@@ -725,4 +726,11 @@ export type InquestryApi = {
   revealDb(): Promise<void>;
   /** 用系统浏览器开链接。**只认 https**，别的一律不开。 */
   openExternal(url: string): Promise<void>;
+
+  /** 自动更新（后台下载、退出时装上）。这几个只喂设置屏「关于」那一行。 */
+  updateStatus(): Promise<UpdateStatus>;
+  updateCheck(): Promise<void>;
+  /** 只在 `ready` 档有效：先收掉全部运行时，再重启装上。 */
+  updateInstall(): Promise<void>;
+  onUpdateStatus(cb: (s: UpdateStatus) => void): () => void;
 };

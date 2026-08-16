@@ -1,0 +1,52 @@
+appId: com.xieziyu.inquestry
+productName: Inquestry
+directories:
+  output: release
+  buildResources: build
+
+# 只装构建产物 + package.json；生产依赖由 electron-builder 自动带上（见 asarUnpack）
+files:
+  - out/**
+  - package.json
+
+asar: true
+# better-sqlite3 是原生模块，.node 不能留在 asar 里
+asarUnpack:
+  - node_modules/better-sqlite3/**
+
+# Electron 安全基线；electron-builder 在打包后、签名前翻转
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+
+# 不签名的产物一启动就被 SIGKILL（fuses 翻过之后原签名失效），与其出个跑不起来的包不如直接失败
+forceCodeSigning: true
+
+mac:
+  # dmg 给人下载，zip 给 electron-updater —— 少一个更新链就断了。
+  # 只出 arm64：受众是 macOS 上用 Claude Code 的开发者，双架构要为每个架构重编 better-sqlite3。
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  # 不写 identity：从钥匙串自动发现 Developer ID Application。
+  # 本地 `npm run package` 在命令行覆盖成 ad-hoc，见 package.json。
+  hardenedRuntime: true
+  notarize: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+# 草稿发布：CI 出完包不直接对外，人过一眼再点 publish。
+# electron-updater 不读 draft，所以点之前老用户不会收到推送。
+publish:
+  provider: github
+  owner: xieziyu
+  repo: inquestry
+  releaseType: draft
