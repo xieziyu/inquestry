@@ -244,7 +244,7 @@ export function Settings() {
                       : '…'}
                   </div>
                 </div>
-                <span className="lic mono">GPL-3.0-or-later</span>
+                <span className="lic mono">GPL-3.0</span>
               </div>
 
               <Row
@@ -268,10 +268,6 @@ export function Settings() {
                 <i />
                 <Link href={AUTHOR}>作者 @xieziyu</Link>
               </div>
-              <p className="copyright">
-                Copyright © 2026 xieziyu。本程序是自由软件，依 GNU 通用公共许可证第 3 版
-                或任何更新版本发布；它不附带任何担保，详见许可证全文。
-              </p>
             </div>
           </section>
         </div>
