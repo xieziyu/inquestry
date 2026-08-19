@@ -8,6 +8,7 @@
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { IntakeOptions, ModelOption } from '../../shared/ipc.js';
+import { sdkClaudeExecutable } from '../env/sdk-bin.js';
 
 /** 探测要 spawn 一次 CLI。装了但没登录时它会卡在那儿，所以必须有上限。 */
 const PROBE_TIMEOUT_MS = 20_000;
@@ -77,7 +78,10 @@ export async function loadModelOptions(io: {
 }
 
 async function probeModels(): Promise<ModelOption[] | null> {
-  const q = query({ prompt: '', options: { settingSources: [] } });
+  const q = query({
+    prompt: '',
+    options: { settingSources: [], pathToClaudeCodeExecutable: sdkClaudeExecutable() },
+  });
   try {
     const list = await withTimeout(q.supportedModels(), PROBE_TIMEOUT_MS);
     return list.map((m) => ({

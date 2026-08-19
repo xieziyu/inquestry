@@ -27,6 +27,7 @@
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { tmpdir } from 'node:os';
+import { sdkClaudeExecutable } from '../backend/env/sdk-bin.js';
 
 /** 标题的字数上限。超了当场截，不指望提示词自觉——它只是个建议，而列宽是硬的。 */
 const MAX_TITLE = 24;
@@ -72,6 +73,7 @@ export async function proposeCaseFacts(
       options: {
         model,
         settingSources: [],
+        pathToClaudeCodeExecutable: sdkClaudeExecutable(),
         cwd: tmpdir(),
         systemPrompt: SYSTEM,
         maxTurns: 1,

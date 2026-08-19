@@ -29,6 +29,7 @@ import {
   type LaneOutcome,
 } from '../backend/store/sqlite-store.js';
 import { createInquestryMcpServer, toolName } from '../backend/tools/sdk-mcp-adapter.js';
+import { sdkClaudeExecutable } from '../backend/env/sdk-bin.js';
 import {
   EMPTY_SNAPSHOT,
   type AgentChoice,
@@ -393,6 +394,7 @@ export class CaseRunner {
         // 自己发出的调用。真正的信任边界是「新建调查时选的那个目录」，等价于在那儿直接跑 claude。
         // 已决定接受该风险（overview §8 风险表最后一行）。
         settingSources: ['user', 'project', 'local'],
+        pathToClaudeCodeExecutable: sdkClaudeExecutable(),
         // 工作区决定 agent 继承哪套 skill / MCP，也决定会话记录落在哪（D27）
         cwd: this.intake.projectRoot ?? undefined,
         model: this.init.agent.model ?? undefined,
