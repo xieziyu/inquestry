@@ -23,7 +23,7 @@ import { casePage } from '../backend/db/queries.js';
 import { exportStamp, localTzOffset, todayLocal } from '../shared/time.js';
 import { hydratePath } from '../backend/env/shell-path.js';
 import { claudeAuthStatus, sdkClaudeExecutable } from '../backend/env/sdk-bin.js';
-import { proposeCaseFacts } from './case-namer.js';
+import { proposeCaseFacts, timebaseFrom } from './case-namer.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
 import { createUpdater } from './updater.js';
@@ -164,7 +164,15 @@ function rememberRoot(root: string | null) {
 }
 
 /**
- * 新建调查：新开一个 case，它下面的第一个 session 要到点「开始排查」才开。
+ * 新建调查：新开一个 case，并**自己把第一轮跑起来**（`openFirstTurn`）。
+ *
+ * 建完不跑是行不通的：人在建单面板里已经把问题写完了，而工作区那侧唯一的起点是输入框
+ * 那枚钮，它空着输入是禁用的（`App.tsx` 的 `submit`）——于是屏幕上只剩一张什么都不会
+ * 发生的主干卡，且没有任何东西说明它在等什么。开场白由建单信息拼（`openingMessage`），
+ * 本来就不需要人再补一句话。
+ *
+ * **回执只说"这次调查建起来了"**：第一轮是不是跑起来了要十几秒才知道，等着回它会把
+ * 建单面板挂在那儿；跑不起来由工作区那条错误横幅说（`CaseRunner.start` 的 catch）。
  *
  * **不动别的调查**（D28）：手上那个可能正跑着，或者正卡在待办上等人。
  */
@@ -178,7 +186,7 @@ function createCase(draft: IntakeDraft): IntakeResult {
   const now = new Date();
   const incidentDate = todayLocal(now);
   const caseId = `case_${randomUUID().slice(0, 8)}`;
-  cases.adopt(
+  const runner = cases.adopt(
     caseId,
     new CaseRunner({
       db,
@@ -205,20 +213,55 @@ function createCase(draft: IntakeDraft): IntakeResult {
   );
   writeCaseUi(caseId, { agent: draft.agent, takeover: draft.takeover });
   schedulePush();
-  // 起标题是**新建之后的一件后台事**，不挡这一下：它要 spawn 一次 CLI，
-  // 而人点完「新建」的下一个动作是点「开始排查」。落地了自己会推一轮快照
-  void readCaseFacts(caseId, question, incidentDate);
+  void openFirstTurn(caseId, question, incidentDate, runner);
   return { ok: true };
+}
+
+/**
+ * 建单之后那十几秒：先把问题读完（标题与基准日期），**读完了才跑第一轮**。
+ *
+ * 顺序是硬的。开场白把基准日期写死进 agent 的上下文（`openingMessage`），而那一天要读完
+ * 问题才定得下来：抢先跑的话，第一轮很可能已经按建单当天去框日志窗口、落下带完整日期的
+ * 证据了，而库里那次重算只救得回纯时分秒的时间串，救不回 agent 已经查过的东西。
+ * 事后补一条「基准日期改了」也不算数——它最早也要等当前这一轮跑完才轮得到被读。
+ *
+ * 代价是屏幕上多等十几秒，所以先交代一句：这段等待不该看起来像"它压根没起来"。
+ */
+async function openFirstTurn(caseId: string, question: string, intakeDate: string, runner: CaseRunner) {
+  runner.note('正在读一遍问题，定标题与基准日期，随后自动开跑。');
+  // 交给 runner 保管：开会话的入口不止这一个，人在这十几秒里补一句话会从 `case:start`
+  // 抢先开首轮，那条路也得等同一件事落定
+  runner.prepare(
+    readCaseFacts(caseId, question, intakeDate).catch((err) => {
+      // 读问题整个失败也照跑：基准日期沿用建单当天、且仍是未确认态，比不开跑好
+      console.error('[main] 读问题失败，按建单当天开跑', err);
+    }),
+  );
+  await startWhenReady(caseId, runner);
+}
+
+/**
+ * 等首轮的准备落定再开跑，**并且醒来之后重新确认这个 runner 还算数**。
+ *
+ * 这一等长达十几秒，期间人完全可以把这次调查删掉，限流也可能把它收走。两种情况下
+ * 库里那行和 registry 里那条都没了，而手上这个 runner 引用照旧能用：拿它 `start()`，
+ * `openCase` 会看见 case 不存在于是重发一遍 `case.opened`——**刚删掉的调查就此长回来**，
+ * 还带着一个 registry 不认识、因此不受限流也不会被收尾的会话。
+ */
+async function startWhenReady(caseId: string, runner: CaseRunner, question?: string) {
+  await runner.ready();
+  if (cases.loaded(caseId) !== runner) return;
+  await runner.start(question);
 }
 
 /**
  * 让 agent 读完问题后定下标题与基准日期（`case-namer.ts` 说明了为什么它另开一次 spawn）。
  *
- * **两处都只在还没被人动过时才写**：这一趟要几秒，这几秒里人完全可能已经自己改过了，
+ * **两处都只在还没被人动过时才写**：这一趟要十几秒，这十几秒里人完全可能已经自己改过了，
  * 而人改过的东西不该被一条迟到的建议盖掉。
  *
- * 基准日期那一条**推不出来时也要落**（沿用建单当天，`source` 变成 agent）：那同样是一次
- * 确认——「问题里没说别的日子」。不落的话它会一直是未确认态，落证据时那条提醒就永远关不掉。
+ * 基准日期那一条按 `timebaseFrom` 走：答上来了就落（说不准也算一次确认），
+ * **问不出来则一个字都不落**——那会把兜底那天签成 agent 确认过的。
  */
 async function readCaseFacts(caseId: string, question: string, intakeDate: string) {
   const facts = await proposeCaseFacts(question, intakeDate);
@@ -226,11 +269,12 @@ async function readCaseFacts(caseId: string, question: string, intakeDate: strin
   if (!current) return;
   let changed = false;
   // 标题：兜底那句还在，才轮得到这条建议
-  if (facts.title && current.title === titleOf(question)) {
+  if (facts?.title && current.title === titleOf(question)) {
     changed = renameTo(caseId, facts.title, 'agent') || changed;
   }
-  if (readTimeBase(db, caseId)?.source === 'intake') {
-    changed = setTimebase(caseId, facts.incidentDate ?? intakeDate, 'agent') || changed;
+  const date = timebaseFrom(facts, intakeDate);
+  if (date && readTimeBase(db, caseId)?.source === 'intake' && setTimebase(caseId, date, 'agent')) {
+    changed = true;
   }
   if (changed) schedulePush();
 }
@@ -860,9 +904,10 @@ app.whenReady().then(async () => {
   // 用户那侧只看到输入框被清空、内容没了
   // 这四个还要核对 renderer 说的是哪个调查（`currentIf`）：光判空不够，
   // 切过去之后 current 是**新**调查，旧界面那一下会正正好落到它头上
-  ipcMain.handle('case:start', (_e, caseId: string, question?: string) =>
-    cases.currentIf(caseId)?.start(question),
-  );
+  ipcMain.handle('case:start', (_e, caseId: string, question?: string) => {
+    const runner = cases.currentIf(caseId);
+    return runner && startWhenReady(caseId, runner, question);
+  });
   ipcMain.handle('case:restart', (_e, caseId: string) => cases.currentIf(caseId)?.restart());
   // 接管模式（overview §3.5）。**要落 `case_ui_state`**：只存运行时里的话，限流把这个
   // runner 降级一次、或关一次 app，"我要自己判"就被静默取消了——而那正是它要防的
@@ -1018,7 +1063,7 @@ app.whenReady().then(async () => {
     win?.webContents.once('did-finish-load', async () => {
      try {
       if (process.env.INQUESTRY_AUTOSTART) {
-        // 无人值守时替人立一次案，好让整条链路能自己跑完
+        // 无人值守时替人立一次案，好让整条链路能自己跑完（建单自己会把第一轮跑起来）
         createCase({
           // 探针也要给工作区：起点是必填项，缺了它这一条什么都立不起来
           projectRoot: process.env.INQUESTRY_AUTOSTART_ROOT || process.cwd(),
@@ -1026,7 +1071,6 @@ app.whenReady().then(async () => {
           agent: { backend: 'claude', model: null, effort: null },
           takeover: false,
         });
-        void current()?.start();
       }
       for (const [i, spec] of shots.entries()) {
         const [file, delay] = spec.split('@');

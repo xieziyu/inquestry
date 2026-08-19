@@ -37,9 +37,21 @@ import {
   type CaseIntake,
   type SessionContext,
 } from '../src/backend/store/sqlite-store.js';
-import { checkDate, parseFacts } from '../src/main/case-namer.js';
+import { checkDate, parseFacts, timebaseFrom } from '../src/main/case-namer.js';
 
 const checks: [string, boolean, string][] = [];
+
+/** 临时换个时区跑一小段。夏令时那条只有在有 DST 的时区才现形，本机（+08:00）永远看不见它。 */
+const withTz = <T,>(tz: string, fn: () => T): T => {
+  const prev = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.TZ;
+    else process.env.TZ = prev;
+  }
+};
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
 
 const INTAKE_DAY = '2026-08-15';
@@ -250,21 +262,57 @@ async function main() {
     '沿用建单当天并标成未确认，好过落一个解析不了的值',
   );
   check(
+    '换季那几天不多算一小时：刚好卡在上限那天照旧收得下',
+    withTz('America/New_York', () => checkDate('2026-10-31', '2026-11-30') === '2026-10-31') &&
+      withTz('America/New_York', () => checkDate('2026-10-30', '2026-11-30') === null),
+    '拿两个本机午夜的毫秒差去除 86400000，跨秋季回拨那次得到 30.0417，' +
+      '第 30 天会被当成超界丢掉，而模型推的日期就此整段作废',
+  );
+  check(
+    '不存在的日子一律丢掉（格式是对的，日子是假的）',
+    checkDate('2026-02-30', INTAKE_DAY) === null &&
+      checkDate('2026-04-31', INTAKE_DAY) === null &&
+      setCaseTimebase(db, ctx('case_same'), '2026-02-30', 'agent') === false &&
+      readTimeBase(db, 'case_same')?.incidentDate === INTAKE_DAY,
+    'Date.parse 只拦得住 13 月：2 月 30 日会被静默挪到 3 月 2 日，' +
+      '卡片上写一天、所有纯时分秒的证据落在另一天，两边都不报错',
+  );
+  check(
     '模型输出：裹了代码块也读得出来',
     parseFacts('```json\n{"title":"订单查不到","incidentDate":"2026-08-14"}\n```', INTAKE_DAY)
-      .incidentDate === REAL_DAY,
+      ?.incidentDate === REAL_DAY,
     '说了不要代码块它还是会给，而外面那对反引号会让 JSON.parse 直接失败',
   );
   check(
     '模型输出：解析不了就整个作废，不从半截文本里捞标题',
-    parseFacts('抱歉，我需要更多信息', INTAKE_DAY).title === null &&
-      parseFacts('抱歉，我需要更多信息', INTAKE_DAY).incidentDate === null,
+    parseFacts('抱歉，我需要更多信息', INTAKE_DAY) === null,
     '标题捞错了只是难看，基准日期捞错了整条时间线静默错位，而两件是同一段输出',
   );
   check(
     '模型输出：incidentDate 给 null 时不瞎填',
-    parseFacts('{"title":"订单查不到","incidentDate":null}', INTAKE_DAY).incidentDate === null,
+    parseFacts('{"title":"订单查不到","incidentDate":null}', INTAKE_DAY)?.incidentDate === null,
     '「问题里没说」与「就是今天」是两件事，前者由调用方决定沿用建单当天',
+  );
+  check(
+    '模型输出：给了个用不了的日期，整段作废，不当成「它说没有」',
+    parseFacts('{"title":"订单查不到","incidentDate":"2026-08-25"}', INTAKE_DAY) === null &&
+      parseFacts('{"title":"订单查不到","incidentDate":"2026/08/14"}', INTAKE_DAY) === null &&
+      parseFacts('{"title":"订单查不到","incidentDate":20260814}', INTAKE_DAY) === null,
+    '推错了日期还把「未确认」关掉，等于两道网一起没了',
+  );
+  check(
+    '模型输出：漏答日期只丢日期那一项，标题照留',
+    parseFacts('{"title":"订单查不到"}', INTAKE_DAY)?.title === '订单查不到' &&
+      parseFacts('{"title":"订单查不到"}', INTAKE_DAY)?.incidentDate === undefined,
+    '漏答不是答，不该关掉「未确认」；但标题是另一问，为它陪葬只会让列表上留一句截断的原文',
+  );
+  check(
+    '只有「答了」才落基准日期：漏答与问不出来都不落，答了说不准才沿用建单当天',
+    timebaseFrom(null, INTAKE_DAY) === null &&
+      timebaseFrom({ title: null }, INTAKE_DAY) === null &&
+      timebaseFrom({ title: null, incidentDate: null }, INTAKE_DAY) === INTAKE_DAY &&
+      timebaseFrom({ title: null, incidentDate: REAL_DAY }, INTAKE_DAY) === REAL_DAY,
+    '拒答 / 超时 / spawn 失败 / 漏答也落的话，界面上那条「未确认」就被一个没人签过的确认关掉了',
   );
 
   console.log('\n===== Spike Timebase 结果 =====');
