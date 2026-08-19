@@ -229,6 +229,12 @@ button:hover > .ic { opacity: 1; }
   background: var(--world); cursor: grab; touch-action: none;
 }
 .stage:active { cursor: grabbing; }
+/* 抓手只属于画布本身。`cursor` 是继承来的：钉在画布上的那几层不各自收回的话，
+   整片浮层与待办都挂着抓手，正文看着不像能框选。`auto` 是交回给浏览器——
+   落在文字上给 I 型、其余给箭头，各控件自己声明的 `pointer` 不受影响；
+   HUD 那簇里没有正文，给 `default` 免得在按钮之间的标注上闪出 I 型 */
+.stage .stepsheet, .stage .todolayer { cursor: auto; }
+.stage .s-hud { cursor: default; }
 /* 点阵是画布的落脚点：没有它，拖拽时屏幕上没有任何东西说明"这一层在动"。
    §5 那条「不加纹理」管的是卡片与正文那一带——那儿纹理会和等宽字打架；
    这一层在卡片背后，且跟着 transform 一起走，所以它说的是位置而不是装饰 */
@@ -409,9 +415,11 @@ button.primary:has(> .ic) { gap: 6px; }
 
 /* 旁白：agent 的判断 / 人的补充。刻意不做成卡、不带边框——它是旁白，不是节点。
    做成同样一张卡的话，一屏上会有两种长得一样、而其中一种什么证据都没有的东西 */
+/* 对话行不参与拖拽（`Stage.tsx` 的 pointerdown 把它排除在外），所以它是画布上
+   少有的一段能框选的正文——抓手在这儿是句假话 */
 .s-say {
   position: absolute; padding: 2px 0 2px 12px; border-left: 2px solid var(--line);
-  font-size: 12px; color: var(--dim); overflow: hidden;
+  font-size: 12px; color: var(--dim); overflow: hidden; cursor: text;
 }
 .s-say .who {
   display: block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
