@@ -37,14 +37,14 @@ Inquestry 是一个 macOS 桌面应用：和 agent 一起排查问题，它每�
 
 ![报告：根因、因果链与系统时间线](docs/assets/screen-report.jpg)
 
-一次调查可以跨多个会话，数据全部落在本机 SQLite。应用 spawn 本机 `claude` CLI，走你已有的 Claude 订阅，不用配 API key，你配好的 skill 和 MCP 照常能用。
+一次调查可以跨多个会话，数据全部落在本机 SQLite。应用自带 `claude` CLI 并 spawn 它，走你已有的 Claude 订阅，不用配 API key，你配好的 skill 和 MCP 照常能用。
 
 ## 安装
 
 ### 前置
 
 - macOS，Apple Silicon
-- [Claude Code](https://claude.com/claude-code)（`claude` CLI）已安装并在终端登录过
+- 登录过的 [Claude](https://claude.com/claude-code) 账号。CLI 由应用自带，但首次登录要在终端里跑一次 `claude auth login`
 
 > ⚠️ 新建调查时选定的工作区目录就是信任边界，与在那个目录直接跑 `claude` 等价：目录里的 hooks 与 `.mcp.json` 加载即执行。只选你信任的仓库。
 

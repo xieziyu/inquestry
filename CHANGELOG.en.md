@@ -4,6 +4,13 @@ Only **user-visible** changes are recorded here. Internal refactors, docs and CI
 listed — read `git log` for those. Versions follow [Semantic Versioning](https://semver.org/);
 while on `0.x`, the minor position doubles as the breaking-change position.
 
+## [0.1.1] - 2026-08-19
+
+Fixes 0.1.0 not being able to reach Claude at all.
+
+- **Fixed: investigations could not start in the released build.** The CLI the agent runs was packed inside the asar archive and could not be spawned (`spawn ENOTDIR`). It showed up as an empty backend and model list in the new-investigation panel, and nothing happening on "start". Only the packaged app was affected; running from source was not.
+- **Claude Code no longer has to be installed.** The app ships its own CLI; all it needs is a logged-in Claude account (the first login still happens in a terminal via `claude auth login`). The About section now shows the login state and account, and the environment warning says that instead of "claude executable not found".
+
 ## [0.1.0] - 2026-08-16
 
 First public release.

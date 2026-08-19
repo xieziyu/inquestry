@@ -37,14 +37,14 @@ The report is not a summary written by the agent. It is projected from the datab
 
 ![Report: root cause, causal chain and system timeline](docs/assets/screen-report.jpg)
 
-One investigation can span multiple sessions, and everything lives in a local SQLite database. The app spawns your local `claude` CLI on your existing Claude subscription, so no API key is needed, and your skills and MCP configs work as usual.
+One investigation can span multiple sessions, and everything lives in a local SQLite database. The app ships the `claude` CLI and spawns it on your existing Claude subscription, so no API key is needed, and your skills and MCP configs work as usual.
 
 ## Install
 
 ### Prerequisites
 
 - macOS, Apple Silicon
-- [Claude Code](https://claude.com/claude-code) (`claude` CLI) installed and logged in from a terminal
+- A logged-in [Claude](https://claude.com/claude-code) account. The CLI ships with the app, but the first login happens in a terminal via `claude auth login`
 
 > ⚠️ The workspace directory you pick when creating an investigation is the trust boundary, equivalent to running `claude` there: hooks and `.mcp.json` in that directory execute on load. Only pick repositories you trust.
 
