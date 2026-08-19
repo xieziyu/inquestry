@@ -439,6 +439,8 @@ export function App({
         meta={snap.case}
         steps={snap.steps}
         chat={snap.chat}
+        busy={snap.busy}
+        sessionId={snap.sessionId}
         liveLanes={snap.liveLanes}
         tail={tail}
         pending={snap.pending}

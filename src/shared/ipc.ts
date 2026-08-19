@@ -192,6 +192,14 @@ export type CallNode = {
   gate: string | null;
   outputPreview: string;
   outputLines: number;
+  startedAt: number;
+  /**
+   * 收回来那一刻；`null` = 还在跑。
+   *
+   * 舞台的心跳层靠这一对答"此刻在干什么、跑了多久"（`renderer/live.ts`）。
+   * **别拿快照的到达时刻代替它**：快照是事件驱动的，一次几十秒的调用期间一条都不推。
+   */
+  endedAt: number | null;
 };
 
 export type EvidenceNode = {
@@ -210,6 +218,15 @@ export type StepNode = {
    * 轨道自己的顺序永远是到达顺序，不按时间排——按时间排就等于允许重排（D23）。
    */
   startedAt: number;
+  /**
+   * 收口那一刻（`steps.t_end`）；`null` = 还开着。同一步再 close 一次会把它改掉。
+   *
+   * 🔴 **舞台的「最后更新」非要它不可**：`close_step` 是结构工具，`case-runner.ts` 的
+   * 三条 hook 把它挡在 `tool_calls` 之外（账本不给自己记一笔），证据也只在 close 里落，
+   * 所以"刚收了一步、刚挂上五条证据"这件事在调用与对话里一点痕迹都没有——
+   * 少了这一个字段，HUD 会把刚刚收口的调查说成几分钟没动静。
+   */
+  endedAt: number | null;
   /**
    * 会话内序号，**不是调查内的**：一次调查跨多会话，重开一次它就从 1 重来。
    * 轨道上因此会出现两个 #1，得靠 `sessionIndex` 标出断点。
@@ -479,6 +496,16 @@ export type Snapshot = {
   lastError: string | null;
   busy: boolean;
   /**
+   * runner **这会儿这一轮**跑在哪个 session 上。还没开过会话时它指向一个库里还不存在的 id。
+   *
+   * 🔴 **舞台的心跳层非要它不可**：`busy` 与 `liveLanes` 说的都是"现在有没有事在跑"，
+   * 而一次调查跨多会话，上一次会话留下的 `open` 步会一直留在轨道上（收尾只收支线，
+   * 主干那一步没人替它 `close_step`）。少了这个字段，新一轮一开，那些早就不会再动的旧步
+   * 会跟着一起"活"过来：崩溃后接着发一句话，旧那条没收的调用又挂上工具名和秒表，
+   * 而「agent 在想」会落到上一次会话最后那张卡上，秒数从几小时前算起。
+   */
+  sessionId: string;
+  /**
    * 这一轮结束时上下文窗口用掉多少（底部状态栏那一格）。
    *
    * **会话没起来、或还没跑完第一轮时是 null**，那时不显示——编一个 0%
@@ -580,6 +607,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   takeover: false,
   lastError: null,
   busy: false,
+  sessionId: '',
   context: null,
   backgroundLanes: 0,
   liveLanes: [],

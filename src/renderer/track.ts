@@ -31,6 +31,12 @@ export type TrackLane = {
   id: string;
   col: number;
   kind: 'trunk' | 'agent' | 'fork';
+  /**
+   * 这条线对应的 `StepNode.lane`；只有子 agent 支线有。
+   * **与 `id` 不是同一个串**（`id` 带 `lane:` 前缀，三种线共用一个命名空间），
+   * 而 `snap.liveLanes` 装的是这一个——两边直接比 `id` 的话永远比不中。
+   */
+  laneKey: string | null;
   /** 列头上那枚标签。 */
   label: string;
   /** 标签后面那句补充（支线的短 id / 分叉接在谁下面）；没有就是 null。 */
@@ -107,7 +113,7 @@ export function trackLayout(steps: StepNode[]): TrackLayout {
   }
 
   /** 主干先占 0 列：信息卡是它的头，哪怕第一步就来自支线也抢不走这一列。 */
-  const lanes: TrackLane[] = [{ id: TRUNK, col: 0, kind: 'trunk', label: '主干', note: null }];
+  const lanes: TrackLane[] = [{ id: TRUNK, col: 0, kind: 'trunk', laneKey: null, label: '主干', note: null }];
   const seen = new Set<string>();
 
   const rows: TrackRow[] = steps.map((step, i) => {
@@ -130,6 +136,7 @@ export function trackLayout(steps: StepNode[]): TrackLayout {
         id: laneId,
         col: lanes.length,
         kind: step.lane ? 'agent' : 'fork',
+        laneKey: step.lane,
         label: step.lane ? '支线' : '分叉',
         note: step.lane ? `子 agent ${step.lane.slice(-6)}` : parent ? `接 ${refTo(parent, step)}` : null,
       };

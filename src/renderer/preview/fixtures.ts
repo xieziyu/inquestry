@@ -112,6 +112,8 @@ const REPORT: Snapshot['report'] = {
  * 往共用夹具里加的话，`spike:report` 覆盖的那个案子就和屏幕上这个慢慢变成两回事。
  */
 const LANE = 'toolu_01ab9f';
+/** 底带上那个「N 证据」不是 0 才看得出版面；内容在这一层用不到。 */
+const ev0 = (id: string) => ({ id, claim: id, anchor: null, occurredAtRaw: null, actor: null, callId: 'lc1' });
 steps.push(
   {
     ...rawSteps[0]!,
@@ -150,6 +152,76 @@ steps.push(
     verdict: '建表语句里是 KEY `idx_cart_key`，不是 UNIQUE KEY——2026-03 那次迁移漏了这一行。',
     evidence: [],
     calls: [],
+  },
+);
+
+/**
+ * 心跳层的三档各摆一份（卡面底带的「在跑一次调用」与「agent 在想」、支线列头那枚芯片）。
+ *
+ * 🔴 **`startedAt` 一律从真实时钟起算**，不用夹具里那串固定小整数：这一层给的是
+ * `Date.now() - startedAt`，写死的话预览里看到的秒数是个荒唐的大数。
+ * ⚠️ 但预览里**只看得到版面**——秒数会走（`clock.ts` 的秒钟在浏览器里照常跑），
+ * 而"快照不推它也照走"那件事得在真 app 里验，这儿没有 main 进程。
+ */
+const liveCall = (id: string, toolName: string, agoMs: number) => ({
+  id,
+  callNumber: 1,
+  toolName,
+  origin: 'agent' as const,
+  status: 'pending',
+  input: '{}',
+  gate: null,
+  outputPreview: '',
+  outputLines: 0,
+  startedAt: now - agoMs,
+  endedAt: null,
+});
+const doneCall = (id: string, toolName: string, agoMs: number) => ({
+  ...liveCall(id, toolName, agoMs),
+  status: 'done',
+  endedAt: now - agoMs + 4_000,
+});
+
+steps.push(
+  // 一次已经跑过 60s 还没回来的调用：秒数后面该缀「未回」，而颜色照旧是灰
+  {
+    ...rawSteps[0]!,
+    id: 'live1',
+    ordinal: 10,
+    startedAt: now - 3 * min,
+    parentStepId: null,
+    direction: '把 12:00–12:10 那一段的重试全量捞出来，看还有没有别的表被写重',
+    status: 'open',
+    verdict: null,
+    evidence: [ev0('le1'), ev0('le2'), ev0('le3')],
+    calls: [doneCall('lc1', 'Grep', 4 * min), doneCall('lc2', 'Read', 3 * min), liveCall('lc3', 'Bash', 75_000)],
+  },
+  // 没有调用在跑、这一轮也没交回来：**主干最后那一步**才有的「agent 在想」
+  {
+    ...rawSteps[0]!,
+    id: 'live2',
+    ordinal: 11,
+    startedAt: now - 40_000,
+    parentStepId: null,
+    direction: '这一轮还在想下一步查什么',
+    status: 'open',
+    verdict: null,
+    evidence: [],
+    calls: [doneCall('lc4', 'Grep', 38_000)],
+  },
+  // 支线上在跑的一步：列头那枚芯片报的是这一条自己的工具名
+  {
+    ...rawSteps[0]!,
+    id: 'lane3',
+    ordinal: 12,
+    startedAt: now - 2 * min,
+    lane: LANE,
+    parentStepId: steps[1]!.id,
+    direction: null,
+    status: 'open',
+    verdict: null,
+    evidence: [],
+    calls: [liveCall('lc5', 'WebFetch', 22_000)],
   },
 );
 
@@ -226,9 +298,14 @@ const FULL: Snapshot = {
   takeover: true,
   lastError: null,
   busy: true,
+  // **必须与上面那几步的 sessionId 对得上**：对不上的话心跳层会把每一步都当成上一次会话
+  // 留下的旧账，底带与列头芯片一个都不出——而这份夹具正是拿来看它们的
+  sessionId: 'se1',
   context: { usedTokens: 63_400, maxTokens: 200_000, percent: 31.7, model: 'claude-opus-5[1m]' },
   backgroundLanes: 1,
-  liveLanes: ['lane_a'],
+  // **与上面那条支线用的是同一个键**：对不上的话「停」与列头芯片一个都不出现，
+  // 而它们恰恰是这份夹具要看的东西
+  liveLanes: [LANE],
   steps,
   incident: INCIDENT,
   pending: PENDING,

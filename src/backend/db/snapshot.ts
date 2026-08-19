@@ -43,6 +43,7 @@ export function buildSnapshot(
   extra: Pick<
     Snapshot,
     | 'busy'
+    | 'sessionId'
     | 'backgroundLanes'
     | 'liveLanes'
     | 'chat'
@@ -73,7 +74,7 @@ export function buildSnapshot(
   const steps = db
     .prepare(
       `SELECT s.id, s.session_id, s.parent_step_id, s.lane, s.ordinal, s.kind, s.status, s.direction,
-              s.verdict_text, s.verdict_confidence, s.superseded_by, s.t_start
+              s.verdict_text, s.verdict_confidence, s.superseded_by, s.t_start, s.t_end
        FROM steps s JOIN sessions se ON se.id = s.session_id
        WHERE se.case_id=? ORDER BY se.started_at, se.rowid, s.ordinal`,
     )
@@ -87,6 +88,7 @@ export function buildSnapshot(
     status: StepNode['status'];
     direction: string | null;
     t_start: number;
+    t_end: number | null;
     verdict_text: string | null;
     verdict_confidence: number | null;
     superseded_by: string | null;
@@ -95,7 +97,7 @@ export function buildSnapshot(
   const calls = db
     .prepare(
       `SELECT tc.id, tc.step_id, tc.tool_name, tc.origin, tc.status, tc.input_json, tc.gate_decision,
-              tc.output_sha256, b.line_count
+              tc.output_sha256, tc.started_at, tc.ended_at, b.line_count
        FROM tool_calls tc
        JOIN sessions se ON se.id = tc.session_id
        LEFT JOIN blobs b ON b.sha256 = tc.output_sha256
@@ -110,6 +112,8 @@ export function buildSnapshot(
     input_json: string;
     gate_decision: string | null;
     output_sha256: string | null;
+    started_at: number;
+    ended_at: number | null;
     line_count: number | null;
   }[];
 
@@ -142,6 +146,7 @@ export function buildSnapshot(
   const stepNodes: StepNode[] = steps.map((s) => ({
     id: s.id,
     startedAt: s.t_start,
+    endedAt: s.t_end,
     ordinal: s.ordinal,
     sessionId: s.session_id,
     sessionIndex: sessionIndex.get(s.session_id) ?? 1,
@@ -163,6 +168,8 @@ export function buildSnapshot(
       gate: c.gate_decision,
       outputPreview: preview(ctx.blobDir, c.output_sha256),
       outputLines: c.line_count ?? 0,
+      startedAt: c.started_at,
+      endedAt: c.ended_at,
     })),
     evidence: (evidenceByStep.get(s.id) ?? []).map((e) => ({
       id: e.id,
