@@ -136,7 +136,7 @@ export class CaseRunner {
    * 两侧的键天生不同：账上的是 backend 的 `toolUseID`，回填卡上的是自己发的 `ask_*`。
    * hook 一定先于工具正文，所以这里排的就是"已记账、还没开始等人"的那些。
    */
-  private askCalls: { callId: string; statement: string }[] = [];
+  private askCalls: { callId: string; ask: AskKey }[] = [];
   private gates = new Map<string, Gate>();
   /** 闸门赶在 PreToolUse 之前落定时，判决先搁这儿，等 started 事件把它带上。 */
   private preGated = new Map<string, GateOutcome>();
@@ -660,7 +660,7 @@ export class CaseRunner {
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       if (p.callId) this.abandonCall(p.callId, why);
-      p.resolve({ id: p.ask.id, statement: p.ask.statement, answer: `(${why}这条回填作废)` });
+      p.resolve({ id: p.ask.id, action: 'answer', statement: p.ask.statement, answer: `(${why}这条回填作废)` });
     }
     this.pending.clear();
     // 还没认领的也要收：PreToolUse 记完账、工具正文还没跑到 askOperator 的那一小段里
@@ -879,9 +879,40 @@ export class CaseRunner {
     if (!p) return false;
     clearTimeout(p.timer);
     this.pending.delete(reply.id);
+    try {
+      if (reply.action === 'decline' && p.callId) this.declineCall(p.callId, reply.reason);
+    } catch (err) {
+      // 🔴 **留痕失败不能拖着这条 Promise 一起死。** 上面两行已经把超时兜底清了、卡片也从
+      // `pending` 上摘了，`resolve` 再跑不到的话 agent 那侧就永远等下去——而屏幕上卡片
+      // 正常消失，一点异样都看不出来。记不上的那次调用退回由 PostToolUse 收尾（记成 done），
+      // 错一个状态远好过整场调查挂死
+      console.error(`[case] ${this.caseId} 人工拒绝的留痕没落下，那次调用的状态会退回按结果记`, err);
+    }
     p.resolve(reply);
     this.onChange();
     return true;
+  }
+
+  /**
+   * 人在回填卡上拒了这一条。
+   *
+   * 记 `denied` 与②档人拒同档——**有人看过这一条并说了不行**，正是那一档的定义；
+   * 记 `done` 的话轨道上是一次"跑完了"的查询，而它一行数据都没有。
+   *
+   * 这一笔得在**这里**落：拒绝同样是"给工具那侧一个结果"，那条调用随后照样走完 PostToolUse，
+   * 而它只收还挂着 `pending` 的调用（见 `onToolEnd`）——不先记，这条就被那一下记成 `done`。
+   *
+   * 认不到调用（`claimAskCall` 没认上）时这里什么也做不了，那条调用照旧由 PostToolUse
+   * 记成 `done`。宁可这样也不猜一个：猜错就是把**别人**那次调用判成被拒。
+   */
+  private declineCall(callId: string, reason?: string) {
+    if (!this.session?.hasToolCall(callId)) return;
+    if (this.statusOf(callId) !== 'pending') return;
+    this.session.recordToolEnd({
+      callId,
+      output: `(人工拒绝) ${reason?.trim() || '没说理由'}`,
+      status: 'denied',
+    });
   }
 
   /** 待办栏上的两个控制手势最终都落到这里（ui.md §8.2）。 */
@@ -1013,9 +1044,9 @@ export class CaseRunner {
     why: string;
     expect: string;
     env?: string;
-  }): Promise<{ answer: string; statement: string; executedAt?: string }> {
+  }): Promise<{ answer: string; statement: string; executedAt?: string; declined?: boolean }> {
     const id = `ask_${randomUUID().slice(0, 8)}`;
-    const callId = this.claimAskCall(args.statement);
+    const callId = this.claimAskCall(askKey(args));
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -1026,7 +1057,14 @@ export class CaseRunner {
       this.pending.set(id, {
         ask: { id, askedAt: Date.now(), ...args },
         callId,
-        resolve: (r) => resolve({ answer: r.answer, statement: r.statement, executedAt: r.executedAt }),
+        // 拒绝要**说成一句 agent 读得懂的话**：原样回一句空的理由，读起来就是"查了，没数据"，
+        // 而这两件事在后面的推理里分量完全相反
+        resolve: (r) =>
+          resolve(
+            r.action === 'decline'
+              ? { answer: r.reason?.trim() ?? '', statement: args.statement, declined: true }
+              : { answer: r.answer, statement: r.statement, executedAt: r.executedAt },
+          ),
         timer,
       });
       this.onChange();
@@ -1040,15 +1078,26 @@ export class CaseRunner {
    * 放弃记到乙头上。认之前先把**已经不在 pending 上的**清掉——被规则拦下、
    * 或压根没跑起来的调用会一直留在队列里。
    *
-   * **认不到就认不到，不拿队首兜底。** 语句两边同源（都来自这次调用的入参），
+   * **认不到就认不到，不拿队首兜底。** 两边的键同源（都来自这次调用的入参），
    * 对不上就说明这条根本不是它；猜一个的代价是散场时把**别人**那次调用记成放弃，
    * 而真正该收的那条继续挂着——正好是"三种没跑成不能混"要防的那类错账。
    * 没认到的调用由停止/收尾那条路统一清，不靠这里猜。
+   *
+   * 🔴 **同一条语句可以同时问出好几次**（同一个查询问 prod 与 staging 是常事），
+   * 那时语句这一个字段不足以认人。撞上了就拿整份入参再筛一遍；**逐字相同的那种一条都不认**
+   * ——谁配谁本来就没有事实可依，而认错的代价不是少一条连线，是把**另一次**调用记成被拒，
+   * 真正被拒那次反被它自己的 PostToolUse 记成 done，连人贴进去的结果都落不下（那条路
+   * 只收还挂着 pending 的调用）。
+   *
+   * 额外字段只在撞上时才动用，不当主键：两侧入参的形状若哪天不一致（一侧经过 zod、
+   * 一侧是 SDK 原样给的），拿整份当主键会让**每一次**认领都悄悄失败。
    */
-  private claimAskCall(statement: string): string | undefined {
+  private claimAskCall(ask: AskKey): string | undefined {
     this.askCalls = this.askCalls.filter((c) => this.statusOf(c.callId) === 'pending');
-    const at = this.askCalls.findIndex((c) => c.statement === statement);
-    if (at < 0) return undefined;
+    let hits = this.askCalls.filter((c) => c.ask.statement === ask.statement);
+    if (hits.length > 1) hits = hits.filter((c) => sameAsk(c.ask, ask));
+    if (hits.length !== 1) return undefined;
+    const at = this.askCalls.indexOf(hits[0]!);
     return this.askCalls.splice(at, 1)[0]?.callId;
   }
 
@@ -1087,12 +1136,16 @@ export class CaseRunner {
       lane,
       gate,
     });
-    // 回填卡与它的调用在这里连线：hook 一定先于工具正文，正文里才发得出那张卡
-    if (i.tool_name === toolName('ask_operator') && !gate) {
-      this.askCalls.push({
-        callId: toolUseID,
-        statement: String((i.tool_input as { statement?: unknown } | undefined)?.statement ?? ''),
-      });
+    // 回填卡与它的调用在这里连线：hook 一定先于工具正文，正文里才发得出那张卡。
+    //
+    // 🔴 排掉的是**被拒**那一档，不是"有过判决"那一批：被拒的调用工具正文根本不执行，
+    // 也就没有卡；放行 / 改写 / 到点放行三档照跑照发卡，漏掉它们的话卡上的拒绝认不回
+    // 这次调用（`declineCall` 拿不到 callId），最后被迟到的 PostToolUse 记成 `done`。
+    // 今天这条走不到（`ask_operator` 在 `allowed` 里，`canUseTool` 见它直接放行，
+    // 判决进不了 `preGated`），但按"有没有判决"写的话，哪天它不在 `allowed` 里了，
+    // 错法是静默的——而这条连线现在是人工拒绝那一档的唯一依据
+    if (i.tool_name === toolName('ask_operator') && !(gate && isDeny(gate.decision))) {
+      this.askCalls.push({ callId: toolUseID, ask: askKeyFrom(gate?.input, i.tool_input) });
     }
     if (gate) this.closeIfDenied(toolUseID, gate);
     this.onChange();
@@ -1221,6 +1274,38 @@ export class CaseRunner {
     if (this.session) this.session.appendChat({ role, text });
     else this.chat.push({ id: `mem_${++this.chatSeq}`, role, text, at: Date.now() });
     this.onChange();
+  }
+}
+
+/**
+ * 认领回填卡用的那份入参（`claimAskCall`）。**取整份而不只是语句**——同一条 SQL 配不同 env
+ * 是两次不同的调用，只按语句认会把甲的处置记到乙头上。
+ *
+ * 缺字段一律归成空串：一侧是 SDK 原样给的入参，另一侧经过 zod（`env` 没填时是 undefined
+ * 还是压根没这个键，两侧不保证一致），不归一化的话逐字比较会在这种地方莫名其妙地不等。
+ */
+type AskKey = { engine: string; statement: string; why: string; expect: string; env: string };
+
+function askKey(input: unknown): AskKey {
+  const v = (input ?? {}) as Record<string, unknown>;
+  const s = (k: string) => (typeof v[k] === 'string' ? (v[k] as string) : '');
+  return { engine: s('engine'), statement: s('statement'), why: s('why'), expect: s('expect'), env: s('env') };
+}
+
+const sameAsk = (a: AskKey, b: AskKey) =>
+  a.engine === b.engine &&
+  a.statement === b.statement &&
+  a.why === b.why &&
+  a.expect === b.expect &&
+  a.env === b.env;
+
+/** **参数被闸门改写过就按改写后那份**——工具正文收到的是它。解析不动就退回原参数。 */
+function askKeyFrom(rewritten: string | undefined, original: unknown): AskKey {
+  if (!rewritten) return askKey(original);
+  try {
+    return askKey(JSON.parse(rewritten));
+  } catch {
+    return askKey(original);
   }
 }
 

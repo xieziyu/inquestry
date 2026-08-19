@@ -151,7 +151,23 @@ steps.push(
     status: 'confirmed',
     verdict: '建表语句里是 KEY `idx_cart_key`，不是 UNIQUE KEY——2026-03 那次迁移漏了这一行。',
     evidence: [],
-    calls: [],
+    // 一条人在回填卡上拒掉的查询。🔴 `gate` 写 `auto` 而不是 `null`：**每次调用都带着判决进库**
+    // （没人问到的就是 `auto`），编个 null 的话详情页那一格在预览里显示得出来、真数据上却永远没有
+    calls: [
+      {
+        id: 'tc-declined',
+        callNumber: 1,
+        toolName: 'mcp__inquestry__ask_operator',
+        origin: 'operator' as const,
+        status: 'denied',
+        gate: 'auto',
+        input: JSON.stringify({ engine: 'mysql', statement: 'SELECT * FROM t_order WHERE cart_key=?' }),
+        outputPreview: '(人工拒绝) 生产库我也没权限，得找 DBA 开工单',
+        outputLines: 1,
+        startedAt: now - 2 * min,
+        endedAt: now - 2 * min + 9_000,
+      },
+    ],
   },
 );
 

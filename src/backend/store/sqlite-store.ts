@@ -37,7 +37,13 @@ export type SessionContext = {
   now: () => number;
   newId: (prefix: string) => string;
   /** 人工回填的执行入口。UI 上是那个 pending 节点，spike 里是个假操作员。 */
-  runOperator: (args: AskOperatorArgs) => Promise<{ answer: string; statement: string; executedAt?: string }>;
+  runOperator: (args: AskOperatorArgs) => Promise<{
+    answer: string;
+    statement: string;
+    executedAt?: string;
+    /** 人拒绝执行这一条（`answer` 此时是拒绝理由，可为空）。 */
+    declined?: boolean;
+  }>;
 };
 
 /**

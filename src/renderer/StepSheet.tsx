@@ -205,7 +205,9 @@ function StepBody({
                 {c.toolName}
                 <span className={`origin ${c.origin}`}>{c.origin === 'operator' ? '人工' : 'agent'}</span>
                 {gateLabel(c.gate) && <span className="gated">{gateLabel(c.gate)}</span>}
-                {callStatusLabel(c.status) && <span className={`cs ${c.status}`}>{callStatusLabel(c.status)}</span>}
+                {callStatusLabel(c.status, c.gate) && (
+                  <span className={`cs ${c.status}`}>{callStatusLabel(c.status, c.gate)}</span>
+                )}
                 <span className="lines">{c.outputLines} 行</span>
               </div>
               <pre>{c.outputPreview}</pre>
@@ -223,10 +225,19 @@ function laneWord(laneId: string, lane: string | null) {
 }
 
 /**
- * 跑完的是多数，不标。其余三种都要写出来：一次查不到东西，原因常常是它压根没跑成，
+ * 跑完的是多数，不标。其余几种都要写出来：一次查不到东西，原因常常是它压根没跑成，
  * 而不是"这里确实没有数据"——这两件事在报告里的分量完全不同。
+ *
+ * `denied` 分两种出处，**同一个标签写两遍就成了同一件事的两个说法**：闸门拦下的那些
+ * `gateLabel` 已经写过了，这里只认另一种——人在回填卡上拒了这条查询。
+ *
+ * 🔴 让位的条件是**`gateLabel` 这次到底写没写**，不是"有没有闸门判决"：每次调用都带着
+ * 判决进库（没人问到的记 `auto`），按后者判的话这个标签在真实数据上一次都不会出现，
+ * 而那次调用在详情页里与跑成功的长得一模一样。两处各写一份 key 集合同样不行——
+ * 迟早对不上，且对不上时不报错。
  */
-function callStatusLabel(status: string) {
+export function callStatusLabel(status: string, gate: CallNode['gate']) {
+  if (status === 'denied') return gateLabel(gate) ? undefined : '你拒绝执行';
   return ({ pending: '进行中', failed: '失败', abandoned: '已放弃' } as Record<string, string>)[status];
 }
 

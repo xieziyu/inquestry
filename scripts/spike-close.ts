@@ -31,7 +31,10 @@ import {
   sweepZombies,
   type InvestigationSession,
 } from '../src/backend/store/sqlite-store.js';
+import { readBlobHead } from '../src/backend/db/blobs.js';
+import { TOOL_DEFS, type InvestigationStore } from '../src/backend/tools/definitions.js';
 import { CaseRunner, closingMessage } from '../src/main/case-runner.js';
+import { callStatusLabel } from '../src/renderer/StepSheet.js';
 import type { DeclarableShape, Snapshot, VerdictShape } from '../src/shared/ipc.js';
 
 const ASK = 'mcp__inquestry__ask_operator';
@@ -43,7 +46,7 @@ type Probe = {
   onToolEnd(input: unknown, toolUseID: string | undefined): unknown;
   onToolFailed(input: unknown, toolUseID: string | undefined): unknown;
   onPermissionDenied(input: unknown, toolUseID: string | undefined): unknown;
-  askOperator(args: { engine: string; statement: string; why: string; expect: string }): Promise<unknown>;
+  askOperator(args: { engine: string; statement: string; why: string; expect: string; env?: string }): Promise<unknown>;
   gate(
     toolName: string,
     input: Record<string, unknown>,
@@ -57,7 +60,11 @@ type Probe = {
   /** 回填卡 → 调用的连线只存在这里，验它只能直接读。 */
   pending: Map<string, { callId?: string; ask: { id: string; statement: string } }>;
   /** 记了账、还没被工具正文认领的 ask_operator 调用。 */
-  askCalls: { callId: string; statement: string }[];
+  askCalls: { callId: string; ask: { statement: string; env: string } }[];
+  /** 闸门赶在 PreToolUse 之前落定时判决先搁这儿。要验那个时序只能自己摆一个进去。 */
+  preGated: Map<string, { decision: string; input?: string; message?: string }>;
+  /** 落库失败那条路要靠注入故障才走得到——真把磁盘写坏了没法在 spike 里复原。 */
+  session: { recordToolEnd(input: unknown): void } | undefined;
   /** 断流 / 崩溃只有这一条路走得到——收尾漏没漏东西，只有喂一个真会断的流才验得出来。 */
   consume(q: unknown): Promise<void>;
 };
@@ -468,6 +475,209 @@ async function main() {
     '散场之后迟到的成功收尾不算数，abandoned 保持原样',
     callStatus('call_b') === 'abandoned',
     `call_b=${callStatus('call_b')}（不挡这一下会变成 done，轨道上多出一次没人回答过的"跑完了"）`,
+  );
+
+  // ── ⑥.5 人工拒绝：记成被拒，且说给 agent 的不是一句空结果 ─────────────────
+  //
+  // 人自己也没那个权限时，这张卡得有出口——否则只能干等到超时，十分钟里 agent 一动不动。
+  // 两处错法都是静默的：
+  //
+  //   1. **记成 `done`**：轨道上于是有一次"跑完了"的查询，而它一行数据都没有。
+  //      抢在 resolve 之前记才挡得住——工具正文一返回，PostToolUse 就来收这条的尾
+  //   2. **把拒绝理由当结果回给 agent**：理由是选填的，空理由原样回过去读起来就是
+  //      "查了，没数据"，而这两件事在后面的推理里分量正好相反
+  const cd = makeRunner('case_decline', '人工拒绝');
+  const pd = cd as unknown as Probe;
+  pd.beginSession();
+  pd.status = 'live';
+  pd.onToolStart({ tool_name: ASK, tool_input: { statement: 'SELECT n' } }, 'call_n');
+  const declined = pd.askOperator({
+    engine: 'mysql',
+    statement: 'SELECT n',
+    why: '看一眼',
+    expect: '预期一条',
+  }) as Promise<{ answer: string; statement: string; declined?: boolean }>;
+  const askN = cd.snapshot().pending[0]!.id;
+  check(
+    '拒绝也有回执，那条待办当场从快照上消失',
+    cd.answerOperator({ id: askN, action: 'decline', reason: '生产库我也没权限' }) === true &&
+      cd.snapshot().pending.length === 0,
+    `pending=${cd.snapshot().pending.length}`,
+  );
+  const declinedResult = await declined;
+  check(
+    '拒绝记成 denied——有人看过这一条并说了不行，不是跑完了',
+    callStatus('call_n') === 'denied',
+    `call_n=${callStatus('call_n')}（记成 done 的话轨道上多出一次一行数据都没有的"成功"查询）`,
+  );
+  // 拒绝也是"给工具那侧一个结果"，所以 PostToolUse 照样会来
+  pd.onToolEnd({ tool_name: ASK, tool_response: '⛔ 人没有执行这一条' }, 'call_n');
+  check(
+    '迟到的 PostToolUse 不能把 denied 盖回 done',
+    callStatus('call_n') === 'denied',
+    `call_n=${callStatus('call_n')}`,
+  );
+  check(
+    '拒绝理由落进那次调用的输出里，节点上看得见人当时说了什么',
+    (readBlobHead(
+      blobs,
+      (db.prepare(`SELECT output_sha256 s FROM tool_calls WHERE id='call_n'`).get() as { s: string }).s,
+      200,
+    ) ?? '').includes('生产库我也没权限'),
+    `输出=${readBlobHead(blobs, (db.prepare(`SELECT output_sha256 s FROM tool_calls WHERE id='call_n'`).get() as { s: string }).s, 200)}`,
+  );
+
+  // 详情页那一格要真的写得出来。**只验库里的 status 是验不到这一层的**：每次调用都带着
+  // 闸门判决进库（没人问到的记 `auto`），标签一旦按"有没有判决"让位，这条在真实数据上
+  // 就永远不显示——那次调用在详情页里与跑成功的长得一模一样。所以按快照里那份取，不自己编
+  const declinedNode = cd
+    .snapshot()
+    .steps.flatMap((st) => st.calls)
+    .find((c) => c.id === 'call_n');
+  check(
+    '详情页把人工拒绝写出来：这一格不能被「没人问到」的那个 auto 判决顶掉',
+    callStatusLabel(declinedNode!.status, declinedNode!.gate) === '你拒绝执行',
+    `status=${declinedNode?.status} · gate=${declinedNode?.gate} · 标签=${callStatusLabel(declinedNode!.status, declinedNode!.gate) ?? '(没有)'}`,
+  );
+
+  // 闸门先于 PreToolUse 落定、且判的是放行时，这条调用带着判决进 onToolStart。
+  // 按"有没有判决"入队的话它进不了 `askCalls`，卡上的拒绝就认不回这次调用，
+  // 最后被迟到的 PostToolUse 记成 done —— 与这一轮要挡的正是同一个错法
+  pd.preGated.set('call_m', { decision: 'allow' });
+  pd.onToolStart({ tool_name: ASK, tool_input: { statement: 'SELECT m' } }, 'call_m');
+  void pd.askOperator({ engine: 'mysql', statement: 'SELECT m', why: '看一眼', expect: '预期一条' });
+  check(
+    '闸门先落定且放行时，那次回填照样连得回它的调用',
+    cd.snapshot().pending[0] !== undefined && [...pd.pending.values()][0]?.callId === 'call_m',
+    `绑到了 ${[...pd.pending.values()][0]?.callId ?? '(没绑上)'}（按"有没有判决"排的话这里是空的）`,
+  );
+  // 改写过参数的那一档：正文收到的是改写后的语句，拿原参数去对必然对不上
+  pd.preGated.set('call_w', { decision: 'rewrite', input: JSON.stringify({ statement: 'SELECT w2' }) });
+  pd.onToolStart({ tool_name: ASK, tool_input: { statement: 'SELECT w1' } }, 'call_w');
+  void pd.askOperator({ engine: 'mysql', statement: 'SELECT w2', why: '看一眼', expect: '预期一条' });
+  check(
+    '参数被改写过时按改写后的语句认，不按 agent 原来写的那句',
+    [...pd.pending.values()][1]?.callId === 'call_w',
+    `绑到了 ${[...pd.pending.values()][1]?.callId ?? '(没绑上)'}`,
+  );
+  // 被拒那一档要排掉：工具正文压根不执行，也就没有卡，入队只会留个没人认领的条目
+  pd.preGated.set('call_v', { decision: 'deny', message: '这个库不许读' });
+  pd.onToolStart({ tool_name: ASK, tool_input: { statement: 'SELECT v' } }, 'call_v');
+  check(
+    '被闸门拒掉的那次不入队：它的工具正文不会跑，也就不会有卡来认它',
+    !pd.askCalls.some((c) => c.callId === 'call_v') && callStatus('call_v') === 'denied',
+    `call_v=${callStatus('call_v')} · 在待认领队列里=${pd.askCalls.some((c) => c.callId === 'call_v')}`,
+  );
+
+  // 留痕落不下时，这条 Promise 仍然要落地。**定时器已经清了、卡片也摘了**，
+  // resolve 跑不到的话 agent 永远等下去，而屏幕上卡片正常消失，一点异样都看不出来
+  const cx = makeRunner('case_declinefail', '留痕失败');
+  const px = cx as unknown as Probe;
+  px.beginSession();
+  px.status = 'live';
+  px.onToolStart({ tool_name: ASK, tool_input: { statement: 'SELECT boom' } }, 'call_boom');
+  const hanging = px.askOperator({
+    engine: 'mysql',
+    statement: 'SELECT boom',
+    why: '看一眼',
+    expect: '预期一条',
+  }) as Promise<{ answer: string; declined?: boolean }>;
+  const realEnd = px.session!.recordToolEnd.bind(px.session);
+  px.session!.recordToolEnd = () => {
+    throw new Error('磁盘满了');
+  };
+  const declineOk = cx.answerOperator({
+    id: cx.snapshot().pending[0]!.id,
+    action: 'decline',
+    reason: '我也没权限',
+  });
+  px.session!.recordToolEnd = realEnd;
+  const landed = await Promise.race([
+    hanging.then((r) => r.declined === true),
+    new Promise<false>((r) => setTimeout(() => r(false), 300)),
+  ]);
+  check(
+    '留痕落不下时那条回填照样落地，agent 不会永远等下去',
+    declineOk === true && landed === true && cx.snapshot().pending.length === 0,
+    `回执=${declineOk} · Promise 落地=${landed}（落不了地的话卡片照常消失，而这场调查就此挂死）`,
+  );
+
+  // ── ⑥.6 同一条语句同时问出好几次 ────────────────────────────────────────
+  //
+  // 一个查询问 prod 与 staging 两个环境是常事，语句一模一样、只有 `env` 不同。
+  // PreToolUse 与工具正文之间没有全局顺序保证，所以这里**故意让正文按相反的顺序跑**：
+  // 只按语句认的话两张卡会各自认到对方那次调用，随后拒其中一张，被记成 denied 的是另一次，
+  // 而真正被拒的那次由它自己的 PostToolUse 记成 done —— 轨道上与人的处置正好相反
+  const cc = makeRunner('case_concurrent', '同语句并发');
+  const pc = cc as unknown as Probe;
+  pc.beginSession();
+  pc.status = 'live';
+  const twoEnv = (env: string) => ({
+    engine: 'mysql',
+    statement: 'SELECT count(*) FROM t_order',
+    why: '两个环境对一下条数',
+    expect: '两边各一个数',
+    env,
+  });
+  pc.onToolStart({ tool_name: ASK, tool_input: twoEnv('prod') }, 'call_prod');
+  pc.onToolStart({ tool_name: ASK, tool_input: twoEnv('staging') }, 'call_stg');
+  void pc.askOperator(twoEnv('staging'));
+  void pc.askOperator(twoEnv('prod'));
+  const byEnv = (env: string) => cc.snapshot().pending.find((x) => x.env === env);
+  check(
+    '同语句不同 env 的两条并发，各自认到自己那次调用（正文顺序与记账相反也不错位）',
+    [...pc.pending.values()].find((x) => x.ask.statement === twoEnv('staging').statement) !== undefined &&
+      byEnv('staging') !== undefined &&
+      byEnv('prod') !== undefined &&
+      [...pc.pending.values()][0]?.callId === 'call_stg' &&
+      [...pc.pending.values()][1]?.callId === 'call_prod',
+    `staging→${[...pc.pending.values()][0]?.callId ?? '(没绑上)'} · prod→${[...pc.pending.values()][1]?.callId ?? '(没绑上)'}（只按语句认会绑反）`,
+  );
+  cc.answerOperator({ id: byEnv('staging')!.id, action: 'decline', reason: '预发这套我连不上' });
+  check(
+    '拒了 staging 那张卡，被记成被拒的就是 staging 那次调用，prod 那次纹丝不动',
+    callStatus('call_stg') === 'denied' && callStatus('call_prod') === 'pending',
+    `call_stg=${callStatus('call_stg')} · call_prod=${callStatus('call_prod')}`,
+  );
+
+  // 逐字相同的两条同时在飞：谁配谁没有事实可依。**宁可一条都不认**——认错的代价不是
+  // 少一条连线，是把另一次调用记成被拒，而真正被拒那次连人贴进去的东西都落不下
+  const twin = { engine: 'mysql', statement: 'SELECT 1 FROM dual', why: '探活', expect: '一个 1' };
+  pc.onToolStart({ tool_name: ASK, tool_input: twin }, 'call_t1');
+  pc.onToolStart({ tool_name: ASK, tool_input: twin }, 'call_t2');
+  void pc.askOperator(twin);
+  const twinAsk = cc.snapshot().pending.find((x) => x.statement === twin.statement)!;
+  check(
+    '两条入参逐字相同时一条都不认，不拿队首兜底',
+    [...pc.pending.values()].find((x) => x.ask.id === twinAsk.id)?.callId === undefined,
+    `绑到了 ${[...pc.pending.values()].find((x) => x.ask.id === twinAsk.id)?.callId ?? '(没绑，对的)'}`,
+  );
+  cc.answerOperator({ id: twinAsk.id, action: 'decline', reason: '这条不用跑了' });
+  check(
+    '认不到时拒绝就不留痕，绝不挑一个记成被拒',
+    callStatus('call_t1') === 'pending' && callStatus('call_t2') === 'pending',
+    `call_t1=${callStatus('call_t1')} · call_t2=${callStatus('call_t2')}（挑一个记的话，另一次调用替它背了这个拒绝）`,
+  );
+
+  const askDef = TOOL_DEFS.find((d) => d.name === 'ask_operator')!;
+  const declineText = await askDef.run(
+    { askOperator: async () => declinedResult } as unknown as InvestigationStore,
+    { engine: 'mysql', statement: 'SELECT n', why: '看一眼', expect: '预期一条' },
+  );
+  check(
+    'agent 收到的是「这条没人跑」，不是一份查询结果',
+    declinedResult.declined === true && !declineText.includes('结果：') && declineText.includes('生产库我也没权限'),
+    `回给 agent 的：${declineText.replace(/\n/g, ' / ')}`,
+  );
+  // 理由留空是常态（"我也没权限"这句话不值得每次都敲一遍），空理由更不能读成空结果
+  const mute = await askDef.run(
+    { askOperator: async () => ({ answer: '', statement: 'SELECT n', declined: true }) } as unknown as InvestigationStore,
+    { engine: 'mysql', statement: 'SELECT n', why: '看一眼', expect: '预期一条' },
+  );
+  check(
+    '不留理由时说的仍是「没执行」，而不是一份空结果',
+    !mute.includes('结果：') && mute.includes('没有执行'),
+    `回给 agent 的：${mute.replace(/\n/g, ' / ')}`,
   );
 
   // ── ⑦ 归档（第三档）：标记放弃，但一条证据都不销毁 ────────────────────────
