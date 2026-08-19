@@ -686,28 +686,41 @@ export class CaseRunner {
   }
 
   /**
-   * 一条支线跑完了：收口它那一步，并在对话带上说一声（ui.md §3.2）。
+   * 一条支线跑完了：收口它那一步（ui.md §3.2）。
    *
    * **收口的内容是支线自己的话**（`SubagentStop` 的最后一句，退回通知里的摘要）。
    * harness 不替它下结论——那一步没有命题，`confirmed` / `refuted` 都无从谈起，
    * 而借 `inconclusive` 会让每条跑完的支线在报告里变成一条「遗留问题」。
    *
    * 主线随后多半会把这条支线的结论写进自己那一步；这里收的只是"支线到此为止"。
+   *
+   * 🔴 **旁白只说轨道上看不见的事。** 收得到步时那句话已经是卡面上的结论（`verdict_text`），
+   * 再补一句「已跑完，已收口」是同一件事说两遍。**收不到步的那条才需要旁白托着**：
+   * 它一次调用都没打，轨道上没有它，而起它的那次 Task 调用在库里只有"已经起来了"那个回执
+   * ——支线的结论走的是 `task_notification`，不回到那次调用的输出上。不说就此丢掉。
    */
   private convergeLane(finished: LaneFinish) {
     const label = laneEndLabel(finished.status);
-    const summary =
-      finished.summary || `（这条支线${label}了，但没有留下可读的结论——它的调用都记在这一步下面。）`;
     const stepId = this.session?.convergeLane({
       lane: finished.lane,
       outcome: laneOutcome(finished.status),
-      summary: finished.summary ? `支线${label}：${finished.summary}` : summary,
+      summary: finished.summary
+        ? `支线${label}：${finished.summary}`
+        : `（这条支线${label}了，但没有留下可读的结论——它的调用都记在这一步下面。）`,
     });
-    // 一次工具调用都没打的支线没有步可收，但它跑完了这件事照旧要说一声
-    this.pushChat(
-      'system',
-      `支线 ${finished.lane.slice(-6)} 已${label}${stepId ? '，已收口。' : '（没有留下任何调用）。'}`,
-    );
+    if (!stepId) {
+      const lane = finished.lane.slice(-6);
+      if (finished.summary) {
+        this.pushChat('system', `支线 ${lane} ${label}，一次调用都没打，它说：${finished.summary}`);
+      } else if (laneOutcome(finished.status) !== 'completed') {
+        // 什么都没留下的一条，只在它不是正常跑完时说：人按过「停」要有回音，
+        // 失败收场则是主线那步结论上的一个洞。正常跑完又什么都没留下的没有可说的。
+        // **判的是归一化之后的 outcome**：认不出的 status 一律当跑完（`laneOutcome`／
+        // `laneEndLabel` 都这样），照原始值判的话 SDK 哪天多一个成功态，这里会一边说
+        // 「跑完」一边插一句异常旁白
+        this.pushChat('system', `支线 ${lane} ${label}，没有留下任何调用与结论。`);
+      }
+    }
     this.onChange();
   }
 

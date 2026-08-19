@@ -336,6 +336,64 @@ async function main() {
     `返回 ${nothing}`,
   );
 
+  // 旁白只说轨道上看不见的事。收得到步的那条，支线自己的话已经是那张卡的结论；
+  // 收不到步的那条一次调用都没打，轨道上根本没有它——那句话不落到旁白上就此丢掉
+  // （起它的那次 Task 调用在库里只有"已经起来了"的回执，支线的结论走的是 task_notification）
+  const chatCount = () =>
+    (db.prepare(`SELECT COUNT(*) c FROM chat_lines WHERE case_id='case_branch'`).get() as { c: number }).c;
+  const lastChat = () =>
+    (db
+      .prepare(`SELECT text FROM chat_lines WHERE case_id='case_branch' ORDER BY at DESC, rowid DESC`)
+      .get() as { text: string } | undefined)?.text ?? '';
+
+  probe.lanes.absorb(forwarded('task_said', 'inner_s1') as never);
+  start('inner_s1', 'ag_said');
+  const beforeSaid = chatCount();
+  probe.convergeLane({ lane: 'task_said', agentId: 'ag_said', status: 'completed', summary: '从库延迟 4s' });
+  check(
+    '21b. 收得到步的支线不在旁白上再说一遍（那句话已经是卡面上的结论）',
+    chatCount() === beforeSaid && !!stepRow(stepOf('inner_s1'))?.verdict_text?.includes('从库延迟 4s'),
+    `旁白 ${beforeSaid} → ${chatCount()} 句 / verdict = ${JSON.stringify(stepRow(stepOf('inner_s1'))?.verdict_text)}`,
+  );
+
+  const beforeMute = chatCount();
+  probe.convergeLane({
+    lane: 'task_mute',
+    agentId: 'ag_mute',
+    status: 'completed',
+    summary: '没查库，只读了代码：入口在 gateway',
+  });
+  check(
+    '21c. 一次调用都没打的支线，它自己那句话落到旁白上（不然它没有任何地方能落）',
+    chatCount() === beforeMute + 1 && lastChat().includes('入口在 gateway'),
+    `旁白 ${beforeMute} → ${chatCount()} 句，末句 ${JSON.stringify(lastChat())}`,
+  );
+
+  const beforeEmpty = chatCount();
+  probe.convergeLane({ lane: 'task_empty', agentId: 'ag_empty', status: 'completed', summary: '' });
+  check(
+    '21d. 既没调用也没留话、又是正常跑完的那条一个字都不说（说了也只是一句废话）',
+    chatCount() === beforeEmpty,
+    `旁白 ${beforeEmpty} → ${chatCount()} 句，末句 ${JSON.stringify(lastChat())}`,
+  );
+
+  probe.convergeLane({ lane: 'task_gone', agentId: 'ag_gone', status: 'stopped', summary: '' });
+  check(
+    '21e. 但被停下 / 失败收场的那条要说：人按过「停」得有回音，而它什么都没留下',
+    chatCount() === beforeEmpty + 1 && lastChat().includes('被停下'),
+    `旁白 ${beforeEmpty} → ${chatCount()} 句，末句 ${JSON.stringify(lastChat())}`,
+  );
+
+  // 认不出的 status 一律当跑完（`laneOutcome` / `laneEndLabel` 都这样）。**这一句也得按归一化后的
+  // 判**：照原始值判的话，SDK 哪天多一个成功态，界面会一边说「跑完」一边插一句异常旁白
+  const beforeNew = chatCount();
+  probe.convergeLane({ lane: 'task_new', agentId: 'ag_new', status: 'succeeded', summary: '' });
+  check(
+    '21f. SDK 新增的成功态按跑完处理，不被当成异常收场多说一句',
+    chatCount() === beforeNew,
+    `旁白 ${beforeNew} → ${chatCount()} 句，末句 ${JSON.stringify(lastChat())}`,
+  );
+
   // converged 是"这条支线到此为止"，不是一种结论。**借 inconclusive 的话每条跑完的支线
   // 都会变成报告里的一条「遗留问题」**（queries.ts 只看 status 不看 kind），而它谁都没落下
   const sections = reportSections(db, 'case_branch');
