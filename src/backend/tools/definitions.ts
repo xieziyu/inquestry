@@ -24,6 +24,11 @@ export interface InvestigationStore {
     /** 人执行前改过的语句。必须回传，否则 agent 学不到真实 schema（overview §5.1①）。 */
     statement: string;
     executedAt?: string;
+    /**
+     * 人拒绝执行这一条（他自己也没权限、或这条不该在生产上跑）。
+     * `answer` 此时是拒绝理由，**可为空**——理由是选填的。
+     */
+    declined?: boolean;
   }>;
 }
 
@@ -69,11 +74,21 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'ask_operator',
     description:
       '请人工执行一条你无权直连的查询（生产库 / Redis / 任何写操作）并回填结果。' +
-      '会阻塞到人回复为止，所以**把需要人跑的查询攒成一批再逐条发**，不要一条一条来回。',
+      '会阻塞到人回复为止，所以**把需要人跑的查询攒成一批再逐条发**，不要一条一条来回。' +
+      '人也可能拒绝执行（他自己也没权限、或这条不该在生产上跑），回复里会说清是拒绝还是结果。',
     shape: askOperatorShape,
     async run(store, args) {
       const a = args as unknown as AskOperatorArgs;
       const r = await store.askOperator(a);
+      // 拒绝要与「跑了但没数据」当场分开：混作一谈的话，下一步推理会把一次没发生的查询
+      // 当成一条阴性结论用。也要挡住原样再问一遍——人的拒绝不会因为再问一次而变
+      if (r.declined) {
+        const why = r.answer.trim();
+        return [
+          `⛔ 人没有执行这一条${why ? `：${why}` : '，也没说为什么（多半是他自己也没这个权限）'}`,
+          '这不是查询结果为空：换个你自己够得到的来源，或者换个方向，别把同一条再发一遍。',
+        ].join('\n');
+      }
       const changed = r.statement !== a.statement;
       return [
         changed ? `⚠️ 人把语句改成了：\n${r.statement}\n（按这个真实 schema 写后续查询）` : null,

@@ -477,6 +477,15 @@ button.primary:has(> .ic) { gap: 6px; }
 .pending .fill { display: grid; grid-template-columns: 1fr 220px; gap: 10px; align-items: end; }
 .pending .side { display: flex; flex-direction: column; gap: 8px; }
 .pending .side label { font-size: 12px; color: var(--dim); }
+.pending textarea.note { border-color: #45381f; }
+/* 拒绝是这张卡的出口，不是它的主路：与②档同一副描边钮，压在回填那一格之下 */
+.pending .acts { display: flex; justify-content: flex-end; margin-top: 10px; }
+.pending .ghost {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  padding: 8px 14px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
+}
+.pending .ghost.bad { border-color: var(--bad); color: var(--bad); }
+.pending .ghost small { opacity: .55; margin-left: 4px; }
 
 /* ── ②档闸门 ──
    与①档同色不同强度：实心标头是"永远等下去"，描边是"到点自己会走"。
@@ -736,6 +745,8 @@ button.primary:has(> .ic) { gap: 6px; }
 .sh-call .origin.operator { color: var(--warn); }
 .sh-call .gated { color: var(--warn); font-size: 11px; }
 .sh-call .cs.failed { color: var(--bad); }
+/* 人拒了不是失败：暖色是「需要人动手」那一族的颜色，这一条正是人动过手的痕迹 */
+.sh-call .cs.denied { color: var(--warn); }
 .sh-call .lines { margin-left: auto; }
 .sh-call pre {
   margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--dim);

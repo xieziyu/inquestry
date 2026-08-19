@@ -598,7 +598,16 @@ export type ExportResult =
  */
 export type ExportPayload = { input: ReportInput; generatedAt: string };
 
-export type OperatorReply = { id: string; statement: string; answer: string; executedAt?: string };
+/**
+ * 回填卡上的两个手势（①档）。
+ *
+ * **拒绝不强制留话，与②档闸门相反**：那一档不留话 agent 只知道被挡了、不知道该换什么，
+ * 而这一档里语句本来就是它自己写的，最常见的拒绝理由又是「我自己也没这个权限」——
+ * 逼人敲一遍只会换来一句空话。
+ */
+export type OperatorReply =
+  | { id: string; action: 'answer'; statement: string; answer: string; executedAt?: string }
+  | { id: string; action: 'decline'; reason?: string };
 
 export const EMPTY_SNAPSHOT: Snapshot = {
   case: null,
