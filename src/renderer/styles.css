@@ -1493,11 +1493,9 @@ button.primary:has(> .ic) { gap: 6px; }
   margin: 0 0 14px;
   padding-bottom: 8px; border-bottom: 1px solid var(--line); font-size: 15.5px; font-weight: 600;
 }
-/* 根因提级：它是整份报告的答案，不该和「影响面」长一个样 */
-.paper .rootblock { margin-top: 18px; padding: 2px 0 2px 22px; border-left: 3px solid var(--fill); }
-/* ⚠️ 不给它加窄的 `max-width`：真实根因是一整句判断（常有六七十字），
-   卡到二十几字宽会把它排成一条又高又窄的柱子，比正文还难读。它的宽度就是纸的宽度 */
-.paper .big { margin: 0; font-size: 27px; line-height: 1.36; font-weight: 600; letter-spacing: -.01em; }
+/* 根因就按正文排：它是一整段判断，不是标题也不是引文。提级过一版（大字号 + 主色竖线 +
+   自动断句），结论是那些都在替读者划重点，而重点划错的时候比不划更难读 */
+.paper .rootblock { margin-top: 16px; }
 .paper .conf {
   margin: 14px 0 0; display: flex; align-items: center; gap: 10px;
   font-family: var(--mono); font-size: 12px; color: var(--dim);

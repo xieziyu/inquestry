@@ -122,11 +122,11 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
   const b = section.body;
   switch (b.kind) {
     case 'verdict':
-      // 根因提级：它是整份报告的答案，不该和「影响面」长一个样。左边那条主色竖线是
-      // 全屏少数几处用填色的地方之一——竖线不是块，不会和语义色打架
+      // 原样一段印出来，不拆句也不提级：agent 写的是什么样就是什么样，
+      // 排版不替它划重点——划错的时候比不划更难读
       return (
         <div className="rootblock">
-          <p className="big">{b.text}</p>
+          <p>{b.text}</p>
           {b.confidence !== null && (
             <p className="conf">
               置信度 {b.confidence.toFixed(2)}
