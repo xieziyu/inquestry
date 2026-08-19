@@ -58,6 +58,8 @@ type Probe = {
   pending: Map<string, { callId?: string; ask: { id: string; statement: string } }>;
   /** 记了账、还没被工具正文认领的 ask_operator 调用。 */
   askCalls: { callId: string; statement: string }[];
+  /** 断流 / 崩溃只有这一条路走得到——收尾漏没漏东西，只有喂一个真会断的流才验得出来。 */
+  consume(q: unknown): Promise<void>;
 };
 
 const checks: [string, boolean, string][] = [];
@@ -1061,7 +1063,72 @@ async function main() {
     `证据 ${evidenceBefore}（定稿时）→ ${evidenceBeforeReplay}（重放前）→ ${(db.prepare(`SELECT COUNT(*) c FROM evidence_refs`).get() as { c: number }).c}`,
   );
 
-  console.log('\n===== Spike Close 结果 =====');
+    // ── ⑥ 断流 / 崩溃：收尾的漏斗只有一个 ─────────────────────────────────────
+  //
+  // `close()` 盖得住的只有"人主动收"那一条路。断流与崩溃走 `consume()` 的 try/catch，
+  // 之后 finally 立刻把 `q` 置空、`lanes.reset()`，再没有人收得了——**这两条路上漏掉的账
+  // 会一直挂到下次启动的 `sweepZombies()`**：轨道上一次永远「进行中」的调用，
+  // 报告里"跑过多少次"多几笔。所以这儿喂一个真会断的流，从外面验四样东西一起收干净。
+  for (const [kind, caseId, makeStream] of [
+    ['崩溃', 'case_crash', () => (async function* () {
+      throw new Error('消息流断了');
+    })()],
+    ['断流', 'case_eos', () => (async function* () {})()],
+  ] as const) {
+    const cr = makeRunner(caseId, `${kind}时还挂着东西`);
+    const pr = cr as unknown as Probe;
+    pr.beginSession();
+    pr.status = 'live';
+    pr.busy = true;
+    // 一次已经自动放行、正跑着的普通调用：库里只有 started，PostToolUse 再也不会来
+    pr.onToolStart({ tool_name: 'Bash', tool_input: { command: 'sleep 600' } }, `${caseId}_run`);
+    // 一张挂起的回填卡：它与那次调用是一对，**必须一起收**——只收调用的话，
+    // 卡片还钉在视口上等人答，而它对应的那次调用已经作废
+    pr.onToolStart({ tool_name: ASK, tool_input: { statement: 'SELECT 1' } }, `${caseId}_ask`);
+    void pr.askOperator({ engine: 'mysql', statement: 'SELECT 1', why: '看一眼', expect: '一条' });
+    // 一道挂起的闸门
+    pr.onToolStart({ tool_name: 'mcp__logs__query', tool_input: { q: 'x' } }, `${caseId}_gate`);
+    void pr.gate('mcp__logs__query', { q: 'x' }, {
+      toolUseID: `${caseId}_gate`,
+      signal: new AbortController().signal,
+    });
+
+    const before = {
+      run: callStatus(`${caseId}_run`),
+      ask: callStatus(`${caseId}_ask`),
+      gate: callStatus(`${caseId}_gate`),
+      cards: cr.snapshot().pending.length + cr.snapshot().gates.length,
+    };
+    const stream = makeStream();
+    pr.q = stream;
+    await pr.consume(stream);
+
+    const after = {
+      run: callStatus(`${caseId}_run`),
+      ask: callStatus(`${caseId}_ask`),
+      gate: callStatus(`${caseId}_gate`),
+      cards: cr.snapshot().pending.length + cr.snapshot().gates.length,
+    };
+    check(
+      `${kind}时那次还在跑的调用当场记成放弃，不等下次启动清扫`,
+      before.run === 'pending' && after.run === 'abandoned',
+      `${before.run} → ${after.run} —— 只挂在 close() 上的话它到这儿仍是 pending`,
+    );
+    check(
+      `${kind}时回填与闸门跟着一起散，卡片不留在视口上`,
+      after.ask === 'abandoned' && after.gate === 'abandoned' && before.cards === 2 && after.cards === 0,
+      `回填=${after.ask} · 闸门=${after.gate} · 卡片 ${before.cards} → ${after.cards}` +
+        ' —— 只收调用不收卡片的话，人还在答一个没有任何人在听的问题',
+    );
+    check(
+      `${kind}之后库里没有留下任何 pending 的调用`,
+      (db.prepare(`SELECT COUNT(*) c FROM tool_calls tc JOIN sessions se ON se.id=tc.session_id
+                   WHERE se.case_id=? AND tc.status='pending'`).get(caseId) as { c: number }).c === 0,
+      '这一条按库扫，不认具体是哪几次调用 —— 能挂住的不止上面列的那三种',
+    );
+  }
+
+console.log('\n===== Spike Close 结果 =====');
   for (const [name, ok, detail] of checks) {
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
     console.log(`      ${detail}`);

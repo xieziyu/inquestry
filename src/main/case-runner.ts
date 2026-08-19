@@ -622,17 +622,10 @@ export class CaseRunner {
 
   /** 关窗 / 换调查时收尾：不收的话库里会留一排永远 `live` 的僵尸 session。 */
   close(why = '调查已关闭。') {
-    this.discardPending(why);
-    // 闸门同理：它挂着的也是一个 agent 那侧在等的 Promise
-    for (const g of [...this.gates.values()]) g.abandon(why);
-    // 上面两轮只收「卡在人这儿」的那些。**正跑着的普通调用同样收不了尾**：
-    // 一次已经自动放行、还在跑的 Read / 日志查询，库里只有 started，
-    // 而 `close()` 之后 SDK 保证不再有任何消息（sdk.d.ts: "After calling close(),
-    // no further messages will be received."），PostToolUse 永远不会来。
+    // 挂起的回填 / 闸门 / 在跑的调用 / 没收口的支线，四样都在 `endOnce` 里收（见那儿的红字）。
+    // **这一条路不许自己再收一遍**：断流与崩溃到不了这儿，两处各收各的，漏的永远是那一边。
     // 忙着的时候归档是允许的动作，不收的话冻结后的报告里那条会永远显示「进行中」，
-    // 一直挂到下次启动清扫——而那时调查早就冻上、甚至已经导出了。
-    // 中断走的是另一条路：它不关查询，在跑的调用会由 PostToolUseFailure 带 is_interrupt 收尾
-    this.abandonInFlight(why);
+    // 一直挂到下次启动清扫——而那时调查早就冻上、甚至已经导出了
     this.endOnce('ended', why);
     this.q?.close();
     this.q = null;
@@ -741,14 +734,42 @@ export class CaseRunner {
     }
   }
 
+  /**
+   * 会话收尾的**唯一漏斗**。
+   *
+   * 🔴 **凡是"还挂着、且再也不会有结果"的东西都在这儿收，一样都不许只挂在 `close()` 上。**
+   * `close()` 盖得住的只有"人主动收"那一条路（关窗、换调查、`restart()`），而断流与崩溃
+   * 走的是 `consume()` 的 try/catch——它们之后 finally 立刻把 `q` 置空、`lanes.reset()`，
+   * 再没有任何人收得了。
+   *
+   * 要收的有四样，漏一样就在库里留下一笔永远不会有结果的账：
+   *
+   * 1. **挂起的回填**——卡片还钉在视口上等人答，而答案已经没有任何人在听
+   * 2. **挂起的闸门**——同上，它挂着的也是一个 agent 那侧在等的 Promise
+   * 3. **还在跑的普通调用**——一次已经自动放行、正跑着的 Read / 日志查询，库里只有 started。
+   *    这之后消息流已经没了，PostToolUse 永远不会来（`close()` 那条路上 SDK 也明写着
+   *    "After calling close(), no further messages will be received."）
+   * 4. **没收口的支线**——轨道上一条永远"还在查"的支线
+   *
+   * 前三样一度只有 `close()` 收：于是断流与崩溃之后，轨道上留着一次永远「进行中」的调用，
+   * 报告里数出来的"跑过多少次"也多几笔，一直挂到下次启动的 `sweepZombies()`。
+   *
+   * **顺序照 `close()` 原先那一版**：先逐条散掉认得出来的（回填、闸门各自还要 resolve
+   * 一个 agent 那侧在等的 Promise），最后才按库里的 `pending` 兜底扫一遍。
+   * 反过来的话，兜底那遍会先把回填那次调用记成放弃，`discardPending` 随后拿同一个 id
+   * 再收一次——`abandonCall` 会跳过，表面无事，但"这一条是被谁收的"就此说不清了。
+   *
+   * ⚠️ **中断（`interrupt`）不走这儿**：它不关查询，在跑的调用由 PostToolUseFailure
+   * 带 `is_interrupt` 自己收尾，回填与闸门则由 `interrupt()` 当场散掉。
+   */
   private endOnce(status: 'ended' | 'crashed', why = '会话已经结束了。') {
     // 会话没开过就没什么可收的：建完单没点「开始排查」就关窗是常态
     if (this.ended || !this.session) return;
     this.ended = true;
     this.status = status;
-    // **支线的收口必须与会话收尾在同一个漏斗里。** 挂在 `close()` 上只盖得住"人主动收"
-    // 那一条路：断流与崩溃只走这儿，而它们之后 `consume()` 的 finally 立刻 `lanes.reset()`，
-    // 那几步就再没有人收得了——轨道上一条永远"还在查"的支线，会一直挂到下次启动清扫
+    this.discardPending(why);
+    for (const g of [...this.gates.values()]) g.abandon(why);
+    this.abandonInFlight(why);
     this.session.convergeOpenLanes(`（这条支线没有收尾：${why}）`);
     this.session.endSession(status);
   }
