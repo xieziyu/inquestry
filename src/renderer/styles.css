@@ -264,6 +264,21 @@ button:hover > .ic { opacity: 1; }
 .lanehead.fork .tag { color: var(--accent); }
 /* 分隔点长在补充那一段身上：远景把补充整段收掉时，这个点得跟着一起走 */
 .lanehead .note::before { content: '·'; margin-right: 6px; }
+/* ── 心跳层 ②：这条支线在跑什么 ──
+   底部状态栏那枚「支线 N」说得出有几条、说不出是哪一条，而停一条的按钮长在卡上、
+   要先找到它那一列。裸字不描边，理由同 `.lanehead` 本身：它是标注，不是能点的东西 */
+.lanehead .lanelive {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--accent); font-family: var(--mono);
+}
+.lanehead .lanelive::before { content: '·'; color: var(--dim-2); }
+.lanehead .lanelive i {
+  width: 5px; height: 5px; border-radius: 50%; background: currentColor;
+  animation: breathe 2.4s ease-in-out infinite;
+}
+/* 远景只留那颗点：整幅图缩到一屏时要认的是"哪一列在动"，不是它在跑哪个工具 */
+.world[data-lod="far"] .lanehead .lanelive { font-size: 0; gap: 0; }
+.world[data-lod="far"] .lanehead .lanelive i { width: 14px; height: 14px; }
 
 /* 跨会话的断点：ordinal 每个会话都从 1 重来，不标一下轨道上会出现两个 #1 */
 .smark {
@@ -330,13 +345,23 @@ button.primary:has(> .ic) { gap: 6px; }
 /* 收口是"这条支线到此为止"，不是一种结论——所以给中性色，与已证实/已推翻分得开。
    收束卡的「已归档」同理：半程放弃也没有结论（`TailCard` 的 `stateLabel`） */
 .state.converged, .state.shut { color: var(--dim); }
-/* 进行中的状态呼吸，全屏仅有的两处动效之一（ui.md §5） */
+/* 进行中的状态呼吸。
+   **会自己动的东西只活在正在跑的那一轮**（ui.md §5）。这条线要防的是**已经落笔的记录乱动**：
+   收口的卡、报告、历史列表照旧一动不动。跑起来时另有一层心跳（`.cardstrip` /
+   `.lanelive` / `.lastupd`），它随收口整层消失，不在定稿的图上留任何痕迹。 */
 .state.open .pulse {
   display: inline-block; width: 6px; height: 6px; border-radius: 50%;
   background: currentColor; margin-right: 5px; animation: breathe 2.4s ease-in-out infinite;
 }
 @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-@media (prefers-reduced-motion: reduce) { .state.open .pulse { animation: none; } }
+/* 🔴 **关掉动效之后这一层必须照样成立**：工具名、秒数、计数照旧在变。
+   这正是"给会变的量、不给动画"的意义——呼吸点只是陪衬，扛事的是那几个数字 */
+@media (prefers-reduced-motion: reduce) {
+  .state.open .pulse,
+  .s-card .cardstrip .dot,
+  .lanehead .lanelive i,
+  .lastupd .dot { animation: none; }
+}
 
 /* 假设句是这张卡上唯一"要读"的内容，字号不能再往下压（ui.md §5） */
 .s-card .c-dir {
@@ -351,6 +376,29 @@ button.primary:has(> .ic) { gap: 6px; }
   border-left: 2px solid var(--line); padding-left: 8px;
   display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* ── 心跳层 ①：进行中那一步的底带 `⟳ Grep 40s · 4 调用 · 3 证据` ──
+   跑起来之后舞台上本来没有任何"此刻在干什么"的信号（`.state.open .pulse` 只说明这一步
+   没收口，不随调用变化），人据此判定它卡住了。
+
+   🔴 **绝对定位、写在 `.s-card` 底部那 20px 保留带里，一个像素都不许改变卡高**：
+   高度是 `track.ts` 算好写在 style 上的，占一格文档流就等于把它下面每一张都推走一截。
+   右边留出 hover 才出现的「详情 →」那块地方（它 `right: 11px` 靠右，底带靠左，不打架）。 */
+.s-card .cardstrip {
+  position: absolute; left: 12px; right: 72px; bottom: 4px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; line-height: 15px; color: var(--dim-2); white-space: nowrap; overflow: hidden;
+}
+.s-card .cardstrip .what { color: var(--dim); }
+/* 秒数用等宽：每秒变一次，比例字体下整条会跟着左右抖 */
+.s-card .cardstrip .el { font-family: var(--mono); }
+.s-card .cardstrip .n::before { content: '·'; margin-right: 6px; }
+/* 一次调用跑过 60s 会在秒数后面缀「未回」，**颜色照旧是灰**：
+   暖色是「需要人动手」的全局专属（ui.md §4），一次慢查询不该借它 */
+.s-card .cardstrip .dot {
+  flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
 /* 只停这一条支线：按钮长在那一行上，状态栏那枚「支线 N」说不出要停的是哪一条 */
 .s-card .stoplane {
   color: var(--dim); font-size: 11px; line-height: 1.6; gap: 3px;
@@ -386,6 +434,7 @@ button.primary:has(> .ic) { gap: 6px; }
 .world[data-lod="far"] .c-dir,
 .world[data-lod="far"] .kind,
 .world[data-lod="far"] .stoplane,
+.world[data-lod="far"] .cardstrip,
 .world[data-lod="far"] .s-say p,
 .world[data-lod="far"] .casecard .question,
 .world[data-lod="far"] .casecard .meta,
@@ -587,6 +636,27 @@ button.primary:has(> .ic) { gap: 6px; }
 
 /* ── 画布 HUD：缩放、跟随、导览图 ── */
 .s-hud { position: absolute; left: 14px; bottom: 14px; z-index: 12; display: flex; align-items: flex-end; gap: 10px; }
+.s-hud .hudcol { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+/* ── 心跳层 ③：最后更新 ──
+   与底带的秒表回答的**不是同一个问题**：底带的秒数一直在走（证明界面没死），
+   这一格说的是"这段时间里没有任何新东西"。一次九十秒的调用里，后者才是
+   "它是不是卡住了"的答案。跑完那一轮整格消失。 */
+.lastupd {
+  display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11.5px; color: var(--dim); white-space: nowrap;
+}
+/* 秒数用等宽，理由同底带那条：每秒变一次，比例字体下整条会跟着左右抖 */
+.lastupd .el { font-family: var(--mono); color: var(--text); }
+.lastupd .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.lastupd button {
+  background: none; border: 0; border-left: 1px solid var(--line); padding: 0 0 0 8px;
+  color: var(--accent); font-size: 11.5px; cursor: pointer;
+}
+.lastupd button:hover { text-decoration: underline; }
 .zoomer {
   display: flex; align-items: center; background: var(--panel);
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
@@ -709,12 +779,14 @@ button.primary:has(> .ic) { gap: 6px; }
 }
 .runbar .rb-state.s-busy { color: var(--accent); background: #1f3350; }
 .runbar .rb-state.s-crashed { color: var(--bad); }
-/* 进行中的呼吸点是全屏仅有的两处动效之一（ui.md §5） */
+/* 进行中的呼吸点：会自己动的东西只活在正在跑的那一轮（见 `.state.open .pulse` 那段） */
 .runbar .rb-state .pulse {
   width: 6px; height: 6px; border-radius: 50%; background: currentColor;
   animation: rb-pulse 2s infinite;
 }
 @keyframes rb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+/* 这一条一直漏着（全屏唯一没有关掉入口的动效），由 `spike:live` 那条"会动的都要有人关掉"补上 */
+@media (prefers-reduced-motion: reduce) { .runbar .rb-state .pulse { animation: none; } }
 /* 支线在后台查东西并不找人，所以它是中性色；「等你 N」才是暖色（ui.md §4） */
 .runbar .lanes { color: var(--accent); }
 .runbar .todo { color: var(--warn); font-weight: 600; }
@@ -998,8 +1070,8 @@ button.primary:has(> .ic) { gap: 6px; }
 .nd.live {
   width: 11px; height: 11px; background: var(--accent); border-color: var(--accent);
   box-shadow: 0 0 0 4px rgba(90, 158, 221, .14);
-  /* 自己会动的只有两样，这是其中一样：进行中的状态呼吸（ui.md §5）。
-     那条数的是「哪几样东西会动」，不是「在几个地方动」——两个列表共用的是同一样 */
+  /* 进行中的那一步照旧呼吸：会自己动的东西只活在正在跑的那一轮
+     （见 `.state.open .pulse` 那段）。已定稿 / 已归档的报告上一处都不动 */
   animation: breathe 2.4s ease-in-out infinite;
 }
 /* 已定稿：结论「成立」那个色，空心是因为它已经收口了。已归档没有结论，留中性。

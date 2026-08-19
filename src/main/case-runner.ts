@@ -335,6 +335,7 @@ export class CaseRunner {
         { caseId: this.caseId, blobDir: this.blobs, agent: this.init.agent },
         {
           busy: this.busy,
+          sessionId: this.sessionId,
           backgroundLanes: this.lanes.backgroundLanes,
           liveLanes: this.lanes.liveLanes,
           chat: this.chat,

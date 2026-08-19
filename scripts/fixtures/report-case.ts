@@ -24,6 +24,7 @@ export function step(p: Partial<StepNode> & { id: string }): StepNode {
     ordinal: ++seq,
     // 轨道织对话用它排位置；夹具里按到达顺序给一串递增值就够
     startedAt: seq * 1000,
+    endedAt: null,
     sessionId: 'se1',
     sessionIndex: 1,
     parentStepId: null,
@@ -48,16 +49,26 @@ export const ev = (
   callId = 'tc1',
 ) => ({ id, claim: `${id} 说的事`, anchor, occurredAtRaw: raw, actor, callId });
 
+/**
+ * 一次已经收回来的调用。**`status` 只能取库里 CHECK 允许的那五个之一**
+ * （`pending`/`done`/`failed`/`denied`/`abandoned`）——这儿一度写着 `'ok'`，
+ * 它在库里根本落不进去，而按它写的判断在真数据上一条都不成立。
+ *
+ * 舞台心跳层要的 `pending` 那一档不在这份夹具里：这里装的是一个**已经查完的**调查，
+ * 报告投影读的也只是证据。在跑的那几种形态由 `spike:live` 自己造。
+ */
 const call = (id: string, toolName: string): CallNode => ({
   id,
   callNumber: 1,
   toolName,
   origin: 'agent',
-  status: 'ok',
+  status: 'done',
   input: '{}',
   gate: null,
   outputPreview: '',
   outputLines: 12,
+  startedAt: 1000,
+  endedAt: 3000,
 });
 
 export const steps: StepNode[] = [

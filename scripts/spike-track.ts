@@ -31,6 +31,7 @@ function step(p: Partial<StepNode> & { id: string }): StepNode {
   return {
     ordinal: ++seq,
     startedAt: seq * 1000,
+    endedAt: null,
     sessionId: 'se1',
     sessionIndex: 1,
     parentStepId: null,

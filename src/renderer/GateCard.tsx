@@ -155,7 +155,8 @@ export function GateCard({
   );
 }
 
-/** 全屏只有两处动效，这是其中之一（ui.md §5）：剩余时间是唯一在动的量。 */
+/** 会自己动的东西只活在正在跑的那一轮（ui.md §5，见 `styles.css` 的 `.state.open .pulse`）：
+    这枚环里唯一在动的量是剩余时间，闸门一处置它就整个消失。 */
 function Ring({ left, total }: { left: number; total: number }) {
   const r = 7;
   const c = 2 * Math.PI * r;

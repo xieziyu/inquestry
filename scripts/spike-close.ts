@@ -134,7 +134,36 @@ async function main() {
   const c1 = makeRunner('case_close', '订单 502');
   const p1 = c1 as unknown as Probe;
   const s1 = p1.beginSession();
-  await work(s1, { direction: '网关重试放大了下游压力', callId: 'call_c1', occurredAt: '12:41:07' });
+  const first = await work(s1, { direction: '网关重试放大了下游压力', callId: 'call_c1', occurredAt: '12:41:07' });
+
+  // 收口那一刻与调用的起止**要真的投影到快照上**。舞台的心跳层全靠这三个数：
+  // `close_step` 是结构工具，不进 `tool_calls`（`case-runner.ts` 的三条 hook 挡着），
+  // 所以"刚收了一步"这件事只有 `steps.t_end` 说得出。写进库了却没投影出来不会有任何报错
+  {
+    const open = (await s1.store.openStep({ direction: '还没收的一步', kind: 'normal' })).stepId;
+    const snap = c1.snapshot();
+    const closed = snap.steps.find((x) => x.id === first.stepId);
+    const still = snap.steps.find((x) => x.id === open);
+    const call = closed?.calls[0];
+    check(
+      '收口时刻与调用起止都投影到了快照上（心跳层与「最后更新」全靠它们）',
+      typeof closed?.endedAt === 'number' &&
+        closed.endedAt >= closed.startedAt &&
+        still?.endedAt === null &&
+        typeof call?.startedAt === 'number' &&
+        typeof call.endedAt === 'number',
+      `收了的 endedAt=${closed?.endedAt}（t_start=${closed?.startedAt}）· 还开着的 endedAt=${still?.endedAt}` +
+        ` · 调用 ${call?.startedAt}→${call?.endedAt}`,
+    );
+    // 心跳层拿 `snap.sessionId` 与每一步的 `sessionId` 比，只认这一轮的那几步。
+    // 两边对不上的话它不会报错，只是**整层安静地一个字都不出**——而那与"这会儿真没事在跑"
+    // 在屏幕上长得一模一样，所以这条得由这儿盯着
+    check(
+      '快照报的 sessionId 与这一轮落下的步对得上',
+      !!snap.sessionId && snap.sessionId === still?.sessionId && snap.sessionId === closed?.sessionId,
+      `快照 ${snap.sessionId} · 步 ${still?.sessionId} —— 对不上的话舞台上的心跳层整层消失，且没有任何报错`,
+    );
+  }
 
   const gapsAtStart = c1.closingGaps;
   const refused = await c1.closeCase();

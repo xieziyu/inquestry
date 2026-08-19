@@ -12,6 +12,8 @@ import {
   type StageLayout,
 } from './track.js';
 import type { TailSummary } from '../shared/report.js';
+import { useSecond } from './clock.js';
+import { elapsedText, laneActivity, lastUpdate, stepActivity, thinkingStep, type LiveActivity } from './live.js';
 import { CaseCard } from './CaseCard.js';
 import { StepSheet } from './StepSheet.js';
 import { TailCard } from './TailCard.js';
@@ -64,6 +66,8 @@ export function Stage({
   meta,
   steps,
   chat,
+  busy,
+  sessionId,
   liveLanes,
   tail,
   pending,
@@ -77,6 +81,10 @@ export function Stage({
   meta: CaseMeta;
   steps: StepNode[];
   chat: ChatLine[];
+  /** 主线这一轮还没交回来。心跳层用它分「agent 在想」与「这一轮已经完了」（`live.ts`）。 */
+  busy: boolean;
+  /** runner 这会儿跑在哪个 session 上。心跳层靠它把上一次会话留下的旧步排除掉。 */
+  sessionId: string;
   liveLanes: string[];
   /**
    * 主干末端那张收束卡；null = 这次调查还没走到该有终点的时候。
@@ -111,13 +119,27 @@ export function Stage({
   /**
    * 哪几步正等着人。②档直接对得上（`PendingGate.id` 就是 `CallNode.id`），
    * ①档靠 `callId` 认——认不到就不标，**不猜**：标到一个猜出来的位置上比不标更糟。
+   *
+   * **调用与步骤两级都要**：卡上的标记按步走，而心跳层要按调用走——一次挂在闸门上的调用
+   * 在库里仍是 `pending`，只看这一个字段的话它会被说成"在跑"（见 `laneActivity`）。
    */
   const waiting = useMemo(() => {
-    const callIds = new Set([...gates.map((g) => g.id), ...pending.map((p) => p.callId).filter(Boolean)]);
-    const out = new Set<string>();
-    for (const s of steps) if (s.calls.some((c) => callIds.has(c.id))) out.add(s.id);
-    return out;
+    const calls = new Set(
+      [...gates.map((g) => g.id), ...pending.map((p) => p.callId)].filter((id): id is string => !!id),
+    );
+    const at = new Set<string>();
+    for (const s of steps) if (s.calls.some((c) => calls.has(c.id))) at.add(s.id);
+    return { calls, at };
   }, [steps, pending, gates]);
+
+  /**
+   * 心跳层的两个整体判断（`live.ts`）。**挂在 useMemo 上、按快照重算**：
+   * 每秒重算的只有秒数，而秒数由订阅时钟的那几个叶子自己现算（`clock.ts`）。
+   */
+  const thinkingId = useMemo(() => thinkingStep(steps, sessionId), [steps, sessionId]);
+  const liveSet = useMemo(() => new Set(liveLanes), [liveLanes]);
+  const lastAct = useMemo(() => lastUpdate(steps, chat), [steps, chat]);
+  const running = busy || liveLanes.length > 0;
 
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewBox>({ x: 40, y: 20, k: 1 });
@@ -344,6 +366,11 @@ export function Stage({
           <div key={l.id} className={`lanehead ${l.kind}`} style={{ left: l.x, top: l.y }}>
             <span className="tag">{l.label}</span>
             {l.note && <span className="note">{l.note}</span>}
+            {/* 哪一条支线在动。底部状态栏那枚「支线 N」只说得出有几条，
+                而停一条的按钮长在卡上、要先找到是哪一列 */}
+            {!!l.laneKey && liveSet.has(l.laneKey) && (
+              <LaneLive steps={steps} lane={l.laneKey} parked={waiting.calls} sessionId={sessionId} />
+            )}
           </div>
         ))}
         {layout.marks.map((m) => (
@@ -364,7 +391,14 @@ export function Stage({
               key={b.id}
               box={b}
               picked={picked === b.id}
-              waiting={waiting.has(b.id)}
+              waiting={waiting.at.has(b.id)}
+              activity={stepActivity(b.row.step, {
+                waiting: waiting.at.has(b.id),
+                busy,
+                liveLanes: liveSet,
+                sessionId,
+                thinkingStepId: thinkingId,
+              })}
               live={!!b.row.step.lane && liveLanes.includes(b.row.step.lane)}
               onPick={() => pick(b.id)}
               onStopLane={onStopLane}
@@ -381,26 +415,49 @@ export function Stage({
       <div className="todolayer">{todos}</div>
 
       <div className="s-hud">
-        <div className="zoomer">
-          <button title="缩小" onClick={() => zoomBy(freeSize().w / 2, freeSize().h / 2, 1 / 1.2)}>
-            −
-          </button>
-          <span className="k">{Math.round(view.k * 100)}%</span>
-          <button title="放大" onClick={() => zoomBy(freeSize().w / 2, freeSize().h / 2, 1.2)}>
-            +
-          </button>
-          <button className="txt" onClick={fit} title="整幅图缩到一屏（双击画布空处同样）">
-            适应
-          </button>
-          <button
-            className={`txt ${follow ? 'on' : ''}`}
-            onClick={() => setFollow(!follow)}
-            title={follow ? '新的一步钻出来时自动跟过去' : '不跟随：新步骤照旧钻出来，画布不动'}
-          >
-            跟随最新
-          </button>
-        </div>
-        <Minimap layout={layout} view={view} size={freeSize()} waiting={waiting} onGo={(x, y) => setView((v) => {
+        <div className="hudcol">
+          {/**
+           * 「最后更新」与底带的秒表回答的不是同一个问题：底带的秒数一直在走（证明界面没死），
+           * 这一格说的是"这段时间里没有任何新东西"——一次九十秒的调用里，后者才是
+           * "它是不是卡住了"的答案。跑完那一轮整格消失，定稿的图上不留痕迹。
+           */}
+          {running && lastAct.at > 0 && (
+            <div className="lastupd">
+              <i className="dot" />
+              最后更新{' '}
+              <span className="el">
+                <Elapsed from={lastAct.at} />
+              </span>{' '}
+              前
+              <button
+                title="跳到最近发生过事情的那一步"
+                onClick={() => centerOn(lastAct.stepId ?? layout.lastId, 0.8)}
+              >
+                跳过去
+              </button>
+            </div>
+          )}
+          <div className="zoomer">
+            <button title="缩小" onClick={() => zoomBy(freeSize().w / 2, freeSize().h / 2, 1 / 1.2)}>
+              −
+            </button>
+            <span className="k">{Math.round(view.k * 100)}%</span>
+            <button title="放大" onClick={() => zoomBy(freeSize().w / 2, freeSize().h / 2, 1.2)}>
+              +
+            </button>
+            <button className="txt" onClick={fit} title="整幅图缩到一屏（双击画布空处同样）">
+              适应
+            </button>
+            <button
+              className={`txt ${follow ? 'on' : ''}`}
+              onClick={() => setFollow(!follow)}
+              title={follow ? '新的一步钻出来时自动跟过去' : '不跟随：新步骤照旧钻出来，画布不动'}
+            >
+              跟随最新
+            </button>
+          </div>
+          </div>
+        <Minimap layout={layout} view={view} size={freeSize()} waiting={waiting.at} onGo={(x, y) => setView((v) => {
           const { w, h } = freeSize();
           return { ...v, x: w / 2 - x * v.k, y: h / 2 - y * v.k };
         })} />
@@ -527,13 +584,91 @@ function sayLabel(role: ChatLine['role']) {
 }
 
 /**
+ * 秒表。**整个 app 里只有它订阅时钟**（`clock.ts` 那段红字说了为什么不能往上提）。
+ *
+ * 秒数一律 `Date.now() - from` 现算：快照是事件驱动的，一次几十秒的调用期间一条都不推，
+ * 靠快照的话这个数根本不会变——而"数字在变"正是这一层唯一扛事的东西。
+ */
+function Elapsed({ from, markStale }: { from: number; markStale?: boolean }) {
+  useSecond();
+  return <>{elapsedText(Date.now() - from, markStale)}</>;
+}
+
+/**
+ * 进行中的步骤卡底部那一行：`⟳ Grep 40s · 4 调用 · 3 证据`。
+ *
+ * 🔴 **绝对定位在卡片底部那 20px 保留带里，一个像素都不许改变卡高**：位置是 `track.ts`
+ * 算好的，卡高一点就等于把它下面每一张都推走一截（D23）。
+ *
+ * **否决过一次：把它做成跟着卡走的浮层芯片（卡底下再拉一段流动虚线）。** 在一幅可拖拽
+ * 缩放的画布上，那种芯片要自己处理遮挡、缩放降级、与 `.todolayer` / `.stepsheet` 的层叠，
+ * 而它说的话与这一行完全重复。写在卡里就什么都不用管。
+ */
+function CardStrip({ act }: { act: Exclude<LiveActivity, null> }) {
+  return (
+    <div className="cardstrip">
+      <i className="dot" />
+      <span className="what">{act.kind === 'call' ? act.toolName : 'agent 在想'}</span>
+      {/* 「未回」只给还没回来的那次调用；agent 想久一点不是同一回事 */}
+      <span className="el">
+        <Elapsed from={act.since} markStale={act.kind === 'call'} />
+      </span>
+      <span className="n">{act.calls} 调用</span>
+      <span className="n">{act.evidence} 证据</span>
+    </div>
+  );
+}
+
+/**
+ * 列头上那枚芯片：这条支线在跑什么。说不出工具名时只留「在跑」——猜一个出来比不说更糟。
+ *
+ * 🔴 **整条支线挂在人身上时它一个字都不出**（`laneActivity` 的 `waiting`）：
+ * 这枚芯片答的是"哪一列在动"，一条卡在闸门 / 回填上的支线不是其中之一。说「在跑」的话，
+ * 人扫列头找活口时会正好跳过那一列，而它那张卡就在下面写着「等你处理」。
+ * 那一档由卡上的暖色徽标与钉在视口上的待办卡说——**有芯片就等于这条线真的在动**。
+ *
+ * **不缀「未回」**：一条线慢不慢由它那张卡的底带说。两处都说的话，同一件事在一屏上
+ * 以两种轻重出现，而这枚是主色的、看着更像一句警告。
+ */
+function LaneLive({
+  steps,
+  lane,
+  parked,
+  sessionId,
+}: {
+  steps: StepNode[];
+  lane: string;
+  parked: ReadonlySet<string>;
+  sessionId: string;
+}) {
+  const act = laneActivity(steps, lane, parked, sessionId);
+  if (act.kind === 'waiting') return null;
+  return (
+    <span className="lanelive">
+      <i />
+      {act.kind === 'call' ? (
+        <>
+          {act.toolName} <Elapsed from={act.since} />
+        </>
+      ) : (
+        '在跑'
+      )}
+    </span>
+  );
+}
+
+/**
  * 舞台上的一步。**卡面只留五样**：序号 · 类型 · 状态 · 假设句 · 结论。
  * 证据条数与调用次数都不在上面——要看那些就是要逐字读，而逐字读在浮层里。
+ *
+ * 例外是**正在跑**的那一步：底带上的工具名与三个数字是它这会儿唯一的运行信号，
+ * 收口即整条消失，定稿的卡面照旧只有五样。
  */
 function StepNodeCard({
   box,
   picked,
   waiting,
+  activity,
   live,
   onPick,
   onStopLane,
@@ -542,6 +677,8 @@ function StepNodeCard({
   picked: boolean;
   /** 这一步正卡在①档回填或②档闸门上。**暖色是「需要人动手」的全局专属**（ui.md §4）。 */
   waiting: boolean;
+  /** 这一步此刻在干什么；null = 没在动，底带整条不出现（判断在 `live.ts`）。 */
+  activity: LiveActivity;
   live: boolean;
   onPick: () => void;
   onStopLane: (lane: string) => void;
@@ -590,6 +727,7 @@ function StepNodeCard({
           {step.verdict}
         </p>
       )}
+      {activity && <CardStrip act={activity} />}
     </article>
   );
 }
