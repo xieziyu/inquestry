@@ -283,7 +283,6 @@ const APP_INFO: AppInfo = {
   chrome: navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] ?? '—',
   node: '—（浏览器预览）',
   sqlite: '—（浏览器预览）',
-  claudePath: '/opt/homebrew/bin/claude',
   claudeVersion: '2.0.0',
   dbPath: '~/Library/Application Support/inquestry/inquestry.db',
   dbBytes: 4_812_345,
@@ -330,7 +329,7 @@ export function installPreviewApi(): void {
   };
 
   const api: InquestryApi = {
-    envCheck: async () => ({ claude: '/opt/homebrew/bin/claude', hint: '' }),
+    envCheck: async () => ({ loggedIn: true, email: 'you@example.com' }),
     // `?noroots`：第一次用这个应用的那一版，没有最近用过的目录
     intakeOptions: async () =>
       params.has('noroots') ? { ...INTAKE_OPTIONS, recentRoots: [] } : INTAKE_OPTIONS,

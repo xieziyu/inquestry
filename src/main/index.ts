@@ -21,7 +21,8 @@ import {
 } from '../backend/store/sqlite-store.js';
 import { casePage } from '../backend/db/queries.js';
 import { exportStamp, localTzOffset, todayLocal } from '../shared/time.js';
-import { hydratePath, findClaudeExecutable } from '../backend/env/shell-path.js';
+import { hydratePath } from '../backend/env/shell-path.js';
+import { claudeAuthStatus, sdkClaudeExecutable } from '../backend/env/sdk-bin.js';
 import { proposeCaseFacts } from './case-namer.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
@@ -33,6 +34,7 @@ import {
   type CaseListPage,
   type CaseListQuery,
   type DeleteOutcome,
+  type EnvStatus,
   type ExportPayload,
   type ExportResult,
   type GateDecision,
@@ -697,6 +699,7 @@ function titleOf(question: string): string {
  *
  * `claude --version` 要 spawn 一次，所以结果缓存在模块里：设置屏每次打开都探一次的话，
  * 那一页的打开速度就跟着一个外部进程走。探不到就是 null，不编一个"未知版本"。
+ * **登录状态不许照这个样子缓存**（`env:check`）：那一项人可能刚在终端改过。
  */
 let claudeVersionCache: string | null | undefined;
 function claudeVersion(bin: string | null): string | null {
@@ -715,7 +718,7 @@ function claudeVersion(bin: string | null): string | null {
 
 function appInfo(): AppInfo {
   const dbPath = path.join(app.getPath('userData'), 'inquestry.db');
-  const bin = findClaudeExecutable();
+  const bin = sdkClaudeExecutable() ?? null;
   let dbBytes = 0;
   try {
     dbBytes = statSync(dbPath).size;
@@ -728,7 +731,6 @@ function appInfo(): AppInfo {
     chrome: process.versions.chrome,
     node: process.versions.node,
     sqlite: (db.prepare(`SELECT sqlite_version() AS v`).get() as { v: string }).v,
-    claudePath: bin,
     claudeVersion: claudeVersion(bin),
     dbPath,
     dbBytes,
@@ -823,10 +825,12 @@ app.whenReady().then(async () => {
   cases = new CaseRegistry<CaseRunner>({ db, create: loadCase });
   restoreLatestCase();
 
-  ipcMain.handle('env:check', () => ({
-    claude: findClaudeExecutable(),
-    hint: '“已装但未登录/凭据过期”只有真正发起会话才知道，届时会话会直接报 401。',
-  }));
+  // 不缓存：人看见横幅之后多半就去终端登录了，缓存住的话他回来还是那句「未登录」。
+  // 凭据过期这一档仍旧只有真发起会话才知道，届时会话直接报 401
+  ipcMain.handle('env:check', async (): Promise<EnvStatus> => {
+    const auth = await claudeAuthStatus();
+    return { loggedIn: auth?.loggedIn ?? null, email: auth?.email ?? null };
+  });
   ipcMain.handle('intake:options', () => intakeOptions());
   ipcMain.handle('intake:pickRoot', async () => {
     const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'], title: '选择工作区目录' });

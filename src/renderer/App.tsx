@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
   type CaseMeta,
+  type EnvStatus,
   type InquestryApi,
   type PendingAsk,
   type Snapshot,
@@ -58,7 +59,7 @@ export function App({
    * 而工作区在那种情况下是一屏什么都没有的空屏。
    */
   const [screen, setScreen] = useState<Screen>(initialScreen ?? 'home');
-  const [env, setEnv] = useState<{ claude: string | null; hint: string } | null>(null);
+  const [env, setEnv] = useState<EnvStatus | null>(null);
   const [excerpt, setExcerpt] = useState<{ title: string; body: string } | null>(null);
   /**
    * 待办处置没落地时的提示。
@@ -403,9 +404,13 @@ export function App({
       <div className="pagebody ws">
 
       {/* 环境不通的横幅只在工作区出：设置屏那一节把同一件事说得更细，
-          两处都挂的话人会以为是两个问题 */}
-      {env && !env.claude && (
-        <div className="banner">未找到 claude 可执行文件。请先安装 Claude Code 并在终端登录一次。</div>
+          两处都挂的话人会以为是两个问题。
+          **只认明确的"没登录"**：探不出来（null）时闭嘴——CLI 是自带的，
+          这一条唯一能拦住的就是没登录，而拿一次探测失败去吓人不值当 */}
+      {env?.loggedIn === false && (
+        <div className="banner">
+          Claude 还没登录。在终端里跑一次 <code>claude auth login</code>，再回来开始排查。
+        </div>
       )}
 
       {frozen && (

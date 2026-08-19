@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AppInfo, IntakeOptions } from '../shared/ipc.js';
+import type { AppInfo, EnvStatus, IntakeOptions } from '../shared/ipc.js';
 import type { UpdateStatus } from '../shared/update.js';
 import { LIMIT_BOUNDS, type UiSettings } from '../shared/settings.js';
 import { PROJECT_LINKS } from '../shared/links.js';
@@ -30,11 +30,13 @@ export function Settings() {
   const [s, setS] = useState<UiSettings | null>(null);
   const [opts, setOpts] = useState<IntakeOptions | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
+  const [env, setEnv] = useState<EnvStatus | null>(null);
 
   useEffect(() => {
     void window.inquestry.getSettings().then(setS);
     void window.inquestry.intakeOptions().then(setOpts);
     void window.inquestry.appInfo().then(setInfo);
+    void window.inquestry.envCheck().then(setEnv);
   }, []);
 
   const save = (next: UiSettings) => {
@@ -206,14 +208,19 @@ export function Settings() {
 
               <UpdateRow />
 
-              {/* 这两行的值就是路径本身，不是说明——所以它们占控件那一列，不做成第二行小字 */}
-              <Row label="claude 可执行文件" wide>
-                {info?.claudePath ? (
-                  <Path value={info.claudePath} />
+              {/* CLI 是 app 自带的（版本印在上面那行小字里），所以这儿只答登录这一件事。
+                  探不出来时既不说已登录也不说没登录 */}
+              <Row label="Claude 登录">
+                {env?.loggedIn ? (
+                  <span className="ro mono">{env.email ?? '已登录'}</span>
+                ) : env?.loggedIn === false ? (
+                  <span className="ro bad">未登录，终端里跑一次 claude auth login</span>
                 ) : (
-                  <span className="ro bad">未找到，装上 Claude Code 并在终端登录一次</span>
+                  <span className="ro">…</span>
                 )}
               </Row>
+
+              {/* 值就是路径本身，不是说明——所以它占控件那一列，不做成第二行小字 */}
 
               <Row label="数据库" wide>
                 {info && <Path value={info.dbPath} />}

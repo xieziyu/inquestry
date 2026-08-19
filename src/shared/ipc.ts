@@ -145,14 +145,21 @@ export type CaseListPage = {
 };
 
 /** 关于那一节。版本号一律由 main 现取，renderer 里写死的那份必然与打包出来的对不上。 */
+/**
+ * 环境状态。CLI 是自带的，所以这儿要答的只剩一件事：**登没登录**。
+ *
+ * `loggedIn` 的 `null` 是「问不出来」，不是「没登录」——界面据此闭嘴，
+ * 而不是把一次探测失败说成一句斩钉截铁的结论。
+ */
+export type EnvStatus = { loggedIn: boolean | null; email: string | null };
+
 export type AppInfo = {
   version: string;
   electron: string;
   chrome: string;
   node: string;
   sqlite: string;
-  /** claude 可执行文件路径；没找到是 null。版本号探测不到时为 null，不编一个。 */
-  claudePath: string | null;
+  /** 自带的那个 CLI 的版本。探不到就是 null，不编一个。 */
   claudeVersion: string | null;
   dbPath: string;
   dbBytes: number;
@@ -607,7 +614,7 @@ export const EMPTY_SNAPSHOT: Snapshot = {
 export type TakeoverResult = 'ok' | 'gone' | 'failed' | 'unsaved';
 
 export type InquestryApi = {
-  envCheck(): Promise<{ claude: string | null; hint: string }>;
+  envCheck(): Promise<EnvStatus>;
   intakeOptions(): Promise<IntakeOptions>;
   /** 打开系统目录选择器；用户取消返回 null。 */
   pickProjectRoot(): Promise<string | null>;
