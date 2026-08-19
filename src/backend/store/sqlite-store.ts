@@ -22,6 +22,7 @@ import {
   type ShapeSuggestion,
   type VerdictShape,
 } from '../../shared/ipc.js';
+import { isRealDate } from '../../shared/time.js';
 
 export type SessionContext = {
   caseId: string;
@@ -174,7 +175,10 @@ export function setCaseTimebase(
   source: 'agent' | 'operator',
 ): boolean {
   const next = incidentDate.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) return false;
+  // **这是落库前最后一道闸**：格式对不等于这一天存在，而不存在的那些会被
+  // `Date.parse` 静默挪到另一天（见 `isRealDate`）——挪走之后卡片与整条事故时间线
+  // 各按一天算，两边都不报错
+  if (!isRealDate(next)) return false;
   const row = db
     .prepare(`SELECT incident_date, incident_date_source FROM cases WHERE id=?`)
     .get(ctx.caseId) as { incident_date: string; incident_date_source: TimeBaseSource } | undefined;

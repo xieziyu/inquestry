@@ -19,6 +19,7 @@ import {
   missingClosingSteps,
   openCase,
   readCaseStatus,
+  readIntake,
   setCaseStatus,
   setVerdictShape,
   suggestVerdictShape,
@@ -145,6 +146,14 @@ export class CaseRunner {
   private ended = false;
   /** 最近一轮的失败原因。会话可能还「活着」但已经跑不动了，这是 UI 唯一的线索。 */
   private lastError: string | null = null;
+  /**
+   * 第一轮之前必须先落定的事（基准日期，见 `index.ts` 的 `openFirstTurn`）。
+   *
+   * **挂在 runner 上而不是只在自动那条路上等**：开会话的入口不止一个，人在这十几秒里
+   * 补一句话就会从 `case:start` 抢先把首轮开出去——开场白于是又按建单当天拼了一遍，
+   * 而那正是这一等要防的。
+   */
+  private preflight: Promise<unknown> | null = null;
   private status: Snapshot['sessionStatus'] = 'idle';
   private q: Query | null = null;
   private inbox = createInbox();
@@ -369,8 +378,34 @@ export class CaseRunner {
     // 定稿与归档都是冻结：再开一轮会往一个已下结论的调查里追加步骤，
     // 报告与它记录的过程就此对不上。要接着查就另建一次调查
     if (this.caseStatus !== 'open') return;
-    const opening = question?.trim() || openingMessage(this.intake);
-    if (this.q) return this.send(opening);
+    try {
+      await this.open(question);
+    } catch (err) {
+      // 第一轮没起来必须**落成一次看得见的失败**：吞掉的话屏幕上是一个永远"待开始"的
+      // 调查，而它再也不会自己开始，且没有任何地方说得出为什么（横幅读 `lastError`）
+      this.lastError = (err as Error).message || '会话没能起来，且 backend 没有给出原因。';
+      this.busy = false;
+      this.status = 'crashed';
+      this.endOnce('crashed', '会话没能起来。');
+      this.pushChat('system', `会话没起来：${this.lastError}`);
+      this.onChange();
+    }
+  }
+
+  private async open(question?: string) {
+    await this.ready();
+    // **开场白按库里那份建单信息拼，不用构造时捕获的那份**：基准日期是建单之后
+    // 才由 `case-namer` 定下来的（`index.ts` 的 `openFirstTurn`），捕获那份写的还是建单当天，
+    // 而这一句进了 agent 的上下文就改不动了
+    const asked = question?.trim();
+    const opening = asked || openingMessage(readIntake(this.db, this.caseId) ?? this.intake);
+    if (this.q) {
+      // 会话已经开着：**开场白不补第二遍**。等 `preflight` 的那几条路会一起醒过来，
+      // 补一遍的话 agent 把同一段建单信息读两次，多半会当成新指令从头再查一遍。
+      // 带着话进来的那种照旧送——那是人补的信息，不是开场白
+      if (asked) await this.send(asked);
+      return;
+    }
     const session = this.beginSession();
     this.lastError = null;
     // 新会话是新的上下文窗口：留着上一轮那个百分比的话，屏幕上是一个刚开的会话已经用掉了七成
@@ -538,14 +573,39 @@ export class CaseRunner {
     }
   }
 
-  /** 返回是否真的送进去了：冻结的调查没有会话接得住，送了只会静静排在一个没人消费的队列里。 */
+  /**
+   * 返回是否真的送进去了：没有会话接得住的时候，送了只会静静排在一个没人消费的队列里。
+   *
+   * 两种没人接：调查冻结了，以及**查询压根没起来**（`start()` 失败那条路，`q` 还是 null）。
+   * 后者一度只由 `start()` 报，而 renderer 的 `submit()` 是"先起一轮再发"——起不来照样发，
+   * 于是 `busy` 被置真、错误横幅让位给一个假的「运行中」、草稿也跟着被清掉，
+   * 而那句话谁都没收到。**这里回 false 是那条链上唯一拦得住的地方**（草稿留住、横幅露出来）。
+   */
   async send(text: string): Promise<boolean> {
-    if (this.caseStatus !== 'open') return false;
+    if (this.caseStatus !== 'open' || !this.q) return false;
     this.pushChat('user', text);
     this.busy = true;
     this.inbox.push(text);
     this.onChange();
     return true;
+  }
+
+  /**
+   * 建单之后、第一轮之前那十几秒的交代（`index.ts` 的 `openFirstTurn`）。
+   * 屏幕上没有这一句的话，这段等待与「它压根没起来」在界面上分不出来。
+   */
+  note(text: string) {
+    this.pushChat('system', text);
+  }
+
+  /** 首轮的准备工作。失败不该拦住开跑（基准日期沿用建单当天即可），所以就地吞掉。 */
+  prepare(job: Promise<unknown>) {
+    this.preflight = job.catch(() => undefined);
+  }
+
+  /** 准备好了没有。**调用方等完还要再确认这个 runner 仍算数**（见 `index.ts` 的 `startWhenReady`）。 */
+  async ready(): Promise<void> {
+    await this.preflight;
   }
 
   /**

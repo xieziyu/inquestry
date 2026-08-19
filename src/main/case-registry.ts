@@ -73,6 +73,17 @@ export class CaseRegistry<R extends LiveCase> {
     return this.current;
   }
 
+  /**
+   * 这次调查此刻载着的那个 runner，不管它是不是当前调查。
+   *
+   * 给**等了一会儿才动手的活**用（`index.ts` 的 `startWhenReady`）：等待期间这次调查
+   * 可能已经被删掉、或被限流收走，而手上那个 runner 引用照旧能用——拿它开会话，
+   * 会顺着 `openCase` 把删掉的调查连同一个这里不认识的会话一起长回来。
+   */
+  loaded(caseId: string): R | null {
+    return this.live.get(caseId) ?? null;
+  }
+
   get currentCaseId(): string | null {
     return this.currentId;
   }
@@ -190,8 +201,8 @@ export class CaseRegistry<R extends LiveCase> {
    * 活跃会话限流：超上限就把最久未交互的那个降级——关掉它的会话，调查本身照旧在库里，
    * 点回去是新起一轮（ui.md §8.3）。
    *
-   * **切换的时候查一次是不够的**：调查是在点「开始排查」那一刻才真的 spawn 出进程的，
-   * 只在 `select` 里查，四个调查各自跑起来就谁也没被拦住。所以推快照那条路上也要过一遍。
+   * **切换的时候查一次是不够的**：`select` 跑在会话真的起来之前（新建那一下就是这个顺序），
+   * 只在那儿查的话，几个调查各自跑起来就谁也没被拦住。所以推快照那条路上也要过一遍。
    *
    * 三种不能选：当前这个、正在跑的、以及**挂着待办的**。最后一条最容易漏：
    * 降级会把等着人回答的 pending 就地作废，等于替人做了「这条不查了」的决定，

@@ -203,8 +203,9 @@ export function buildSnapshot(
     ...extra,
     // **对话带按 case 取，不按会话取**（同两条时间线）：重开旧调查时按会话取只能看到空的，
     // 而人上一轮说过什么正是重开时最该看见的东西。`extra.chat` 是还没落库的那几句
-    // （会话没开时没有 session 可挂），接在后面
-    chat: [...chatLines(db, ctx.caseId), ...extra.chat],
+    // （会话没开时没有 session 可挂）——**接完要按时间排一遍**：它们说在开会话之前，
+    // 直接缀在后面的话，`weaveChat` 按数组顺序走，会把一句更早的话织到后面的步骤之后
+    chat: [...chatLines(db, ctx.caseId), ...extra.chat].sort((a, b) => a.at - b.at),
     steps: stepNodes,
     closingGaps: missingClosingSteps(db, ctx.caseId),
     shapeSuggestion: suggestVerdictShape(db, ctx.caseId),
