@@ -9,6 +9,7 @@
  *   3. canUseTool 的 `deny + message` **不中断 turn**，agent 就地换方向重调（D6，全设计最贵的一条）
  *   4. createSdkMcpServer 的进程内工具能被调到（ask_operator 的载体，§5）
  *   5. hook 事件能拿到 PreToolUse 及其 agent_id（tool call 自动归属 step 的兜底，§4.4）
+ *   6. 起标题那一趟（`case-namer`）手上一个工具都没有，且只有一个链接的描述也答得上来
  *
  * 跑：npm run spike:claude
  *
@@ -59,6 +60,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 
+import { namerOptions, proposeCaseFacts } from '../src/main/case-namer.js';
+import type { CaseFacts } from '../src/main/case-namer.js';
+import { todayLocal } from '../src/shared/time.js';
+
 const PROBE_TOOL = 'mcp__inquestry__echo_probe';
 const TIMEOUT_MS = 180_000;
 
@@ -71,7 +76,25 @@ const observed = {
   initPayload: null as Record<string, unknown> | null,
   resultText: '',
   isError: false,
+  namerFacts: null as CaseFacts | null,
+  namerTools: null as string[] | null,
 };
+
+/**
+ * 检查 6 的输入：**描述里除了一个链接什么都没有**。这是最容易把起标题那一趟带沟里的一种，
+ * 而它恰恰常见（从 Sentry / 监控页复制一条就来建单）。
+ *
+ * 这条检查有来历：`case_1baca6bb` 的标题一直停在建单兜底那句半截原文。当时那趟 spawn 用
+ * `disallowedTools` 黑名单挡工具，漏了 `ToolSearch`——模型看见链接就用它去找抓取工具，
+ * 一跳用光 `maxTurns: 1`，整趟被收成"问不出来"，界面上什么都没说。
+ *
+ * **所以 6a 断言的是「一个工具都没有」而不是「它这次没去调工具」**：调不调是模型的心情，
+ * 拿它当网的话，提示词换一句话就能让一份漏工具的选项照样 PASS（这条检查第一版就是这么假过的）。
+ * 6b 那条端到端的只补一件 6a 管不着的事：够不着链接时，标题里得留下那个认得出的编号。
+ * **它是条概率网**：退回旧提示词跑，有时回 `title: null`（`case_1baca6bb` 就是这么空着的），
+ * 有时又蒙对——所以它只断言编号在不在，不断言措辞，也别把它当成唯一的那道网。
+ */
+const NAMER_LINK_ONLY = '请分析下 Sentry 报的 issue: https://sentry.example.com/organizations/sentry/issues/1679';
 
 const probe = tool(
   'echo_probe',
@@ -172,6 +195,20 @@ async function run() {
     clearTimeout(timer);
   }
 
+  // 与上面那一趟无关，另起两次 spawn（起标题本来就是独立的一跳）。
+  // 这一趟同样要有超时与必定收尾：卡住的话 6a/6b 连 FAIL 都报不出来，只剩一个不吭声的进程
+  const namer = query({ prompt: '回复 OK 两个字。', options: namerOptions('haiku') });
+  const namerTimer = setTimeout(() => void namer.interrupt?.(), TIMEOUT_MS);
+  try {
+    for await (const msg of namer) {
+      if (msg.type === 'system' && msg.subtype === 'init') observed.namerTools = msg.tools;
+    }
+  } finally {
+    clearTimeout(namerTimer);
+    namer.close();
+  }
+  observed.namerFacts = await proposeCaseFacts(NAMER_LINK_ONLY, todayLocal(new Date()));
+
   return { hadApiKey };
 }
 
@@ -202,6 +239,16 @@ function report(hadApiKey: boolean) {
       '5. PreToolUse hook 可观测（带 agent_id 字段）',
       observed.hookPreToolUse.length > 0,
       `${observed.hookPreToolUse.length} 次: ${JSON.stringify(observed.hookPreToolUse)}`,
+    ],
+    [
+      '6a. 起标题那一趟手上一个工具都没有',
+      observed.namerTools?.length === 0,
+      `system/init 报的工具: ${JSON.stringify(observed.namerTools)}`,
+    ],
+    [
+      '6b. 只有一个链接的描述也起得出标题（含链接里的编号）',
+      Boolean(observed.namerFacts?.title?.includes('1679')),
+      `proposeCaseFacts 回: ${JSON.stringify(observed.namerFacts)}`,
     ],
   ];
 
