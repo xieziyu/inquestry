@@ -1430,7 +1430,7 @@ button.primary:has(> .ic) { gap: 6px; }
 /* 两行都不许折行：折了就成了参差不齐的一堵字，而那行读数本来就是"扫一眼"的东西。
    写不下就截——章节栏是索引，完整值在纸上 */
 .rtoc .t, .rtoc .s { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 说不出读数的那几节（影响面 / 修复建议是一段散文）不留一行空的：留着是一条看不见的
+/* 说不出读数的那几节（影响面 / 下一步怎么查是一段散文）不留一行空的：留着是一条看不见的
    空行，行高照占，读起来像那一节的读数没加载出来 */
 .rtoc .s:empty { display: none; }
 .rtoc .t { font-size: 13px; line-height: 1.45; }

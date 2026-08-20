@@ -68,8 +68,9 @@ export function TailCard({
         <span className={tail.gaps.includes('leftover') ? 'miss' : ''}>
           遗留问题 {tail.gaps.includes('leftover') ? '缺' : `${tail.leftovers} 条`}
         </span>
-        {/* 修复建议只提醒不阻挡（tools.md §6.1）：它不进定稿闸，所以缺了也不用暖色 */}
-        <span>修复建议 {tail.hasRemediation ? '有' : '无'}</span>
+        {/* 「下一步怎么查」只属于未决型报告（查出根因的报告不留修复建议），别的形态不印这一格；
+            照旧只提醒不阻挡：它不进定稿闸，缺了也不用暖色 */}
+        {tail.shape === 'open' && <span>下一步怎么查 {tail.hasRemediation ? '有' : '无'}</span>}
       </div>
 
       <button className="t-report" onClick={onReport}>

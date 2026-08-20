@@ -101,8 +101,9 @@ export type DomainEvents = {
     /** agent 对报告形态的声明。定稿那一下由 harness 取当前生效的那条（overview §6.1.1）。 */
     shape?: 'sequence' | 'state' | 'chain' | 'distribution' | 'open';
     /**
-     * 修复建议：报告四栏里唯一由 agent 生成的那一块（overview §6.1）。
+     * 未决型报告的「下一步怎么查」，报告里唯一由 agent 生成的那一块（overview §6.1）。
      * 与上面三项同为 patch 语义，且同样**挂在这一步上**——它是基于这一步的判断给的。
+     * 只有 leftover 步上的进报告（queries.effectiveRemediation），但事件只记账、不设限。
      */
     remediation?: string;
     at: number;

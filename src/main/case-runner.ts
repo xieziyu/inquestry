@@ -826,7 +826,12 @@ export class CaseRunner {
     if (!missing.length) return { missing, asked: false, suggestion };
     // 会话还活着就直接派给 agent：这两步的内容只有查过的人给得出来
     const asked = !!this.q;
-    if (asked) void this.send(closingMessage(missing, !effectiveRemediation(this.db, this.caseId)));
+    // 「下一步怎么查」只有未决型才要（查出根因的报告没有这一节）：suggestVerdictShape
+    // 没有根因才推 open，所以拿它当"这份会按未决型装"的判据
+    if (asked) {
+      const needNext = suggestion.shape === 'open' && !effectiveRemediation(this.db, this.caseId);
+      void this.send(closingMessage(missing, needNext));
+    }
     return { missing, asked, suggestion };
   }
 
@@ -1434,11 +1439,13 @@ export async function applyTakeover(
 /**
  * 派回去补的那几件事。
  *
- * **修复建议与那两步不是一档**：它不是强制 step（`missing` 空着照样结得了案），
+ * **「下一步怎么查」与那两步不是一档**：它不是强制 step（`missing` 空着照样结得了案），
  * 所以只在这条消息已经要发的时候顺带捎上——为它单发一条会在人已经按了定稿、
  * 确认条正要弹出来的时候插一句话进去。缺了它报告那一栏写「无」，是诚实的。
+ * 且只有未决型才捎（`needNext` 由调用方按「没有根因」判）：查出根因的报告没有这一节，
+ * 让 agent 补一段修复建议只会白花 token——方案由动手修的人评估。
  */
-export function closingMessage(missing: ClosingStepKind[], needFix: boolean): string {
+export function closingMessage(missing: ClosingStepKind[], needNext: boolean): string {
   const what: Record<ClosingStepKind, string> = {
     impact: '用 open_step(kind="impact") 量化影响面：影响了多少用户/请求、时间窗口多长，要有查询作证据',
     leftover: '用 open_step(kind="leftover") 汇总还没查清的问题；一条都没有也要开一步并写明"没有遗留"',
@@ -1446,11 +1453,11 @@ export function closingMessage(missing: ClosingStepKind[], needFix: boolean): st
   return [
     '准备定稿了。定稿前还差这几步，请依次补上，每一步都要 close_step 收口：',
     ...missing.map((k) => `- ${what[k]}`),
-    ...(needFix
+    ...(needNext
       ? [
-          '- 报告的「修复建议」还是空的（四栏里唯一由你生成的一块）：' +
-            '在给出根因的那一步重新 close_step 补上 remediation，只填这一项即可；' +
-            '没查出根因就填在汇总遗留问题那一步，写"下一步该怎么查"',
+          '- 报告会按未决型装，「下一步怎么查」那一栏还空着（报告里唯一由你生成的一块）：' +
+            '在汇总遗留问题那一步 close_step 补上 remediation，' +
+            '写「下一步该怎么查、先加哪些观测」，只填这一项即可',
         ]
       : []),
     // 不加这一句的话，回来的多半是一段"都收了、闸是通的"——那些状态 harness 自己就看得见，

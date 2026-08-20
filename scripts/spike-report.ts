@@ -166,10 +166,10 @@ check(
     return (
       plan.mainAssembled === false &&
       l[0] === 'verdict' &&
-      ['impact', 'path', 'leftover', 'fix'].every((k) => l.includes(k))
+      ['impact', 'path', 'leftover'].every((k) => l.includes(k))
     );
   })(),
-  '推断的终点档是 chain，而链要两环——那种调查本来就没有"重点"这一块，报告是根因加通用四块。别为了凑一个装得出来的去改推断',
+  '推断的终点档是 chain，而链要两环——那种调查本来就没有"重点"这一块，报告是根因加通用三块。别为了凑一个装得出来的去改推断',
 );
 
 check(
@@ -251,30 +251,37 @@ check(
 );
 
 check(
-  '通用四块在五种形态里都在',
+  '通用三块在五种形态里都在',
   VERDICT_SHAPES.every((s) => {
     const l = ids({ shape: s });
-    return ['impact', 'path', 'leftover', 'fix'].every((k) => l.includes(k));
+    return ['impact', 'path', 'leftover'].every((k) => l.includes(k));
   }),
-  '影响面 / 排查路径 / 遗留问题 / 修复建议不跟形态走（overview §6.1.1）',
+  '影响面 / 排查路径 / 遗留问题不跟形态走（overview §6.1.1）',
 );
 
 check(
-  '修复建议装的是 report.remediation，不是恒空',
-  VERDICT_SHAPES.every((sh) => {
-    const b = bodyOf({ shape: sh }, 'fix');
+  '「下一步怎么查」只进未决型，其余四种形态不装这一节',
+  ids({ shape: 'open' }).includes('fix') &&
+    VERDICT_SHAPES.filter((s) => s !== 'open').every((s) => !ids({ shape: s }).includes('fix')),
+  '查出根因的报告不留修复建议（方案由动手修的人评估）；砍反了的话，未决型会失去它唯一由 agent 生成的一块',
+);
+
+check(
+  '「下一步怎么查」装的是 report.remediation，不是恒空',
+  (() => {
+    const b = bodyOf({ shape: 'open' }, 'fix');
     return b?.kind === 'prose' && b.text === FIX_TEXT;
-  }),
-  '这一栏一度写死 text:null，于是五种形态下都印「无」——四栏缺一栏，而且没有任何检查会红',
+  })(),
+  '这一栏一度写死 text:null，于是印的恒是「无」——唯一由 agent 生成的一块缺了，而没有任何检查会红',
 );
 
 check(
-  '修复建议不跟着根因走：未决型与没有根因时照旧装得出来',
+  '归档的半程报告照样装「下一步怎么查」：没有根因它也在',
   (() => {
     const b = bodyOf({ shape: 'open', report: { ...report, rootCause: null } }, 'fix');
     return b?.kind === 'prose' && b.text === FIX_TEXT;
   })(),
-  '跟着根因取的话，归档的半程报告与整个未决型会永远少一栏——而"没查出来，下一步先加哪些观测"正是那种调查最该留下的',
+  '"没查出来，下一步先加哪些观测"正是那种调查最该留下的东西',
 );
 
 check(

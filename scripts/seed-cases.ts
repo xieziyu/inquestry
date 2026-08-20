@@ -827,7 +827,6 @@ function seedCrashCase() {
     payload: { stepId: st3, status: 'inconclusive', verdict: '内存被杀只占 0.3%，方向不对但也没完全排除（dump 只抓到了一部分）。', confidence: 0.35, at: T('2026-08-12T16:16:00') },
   });
 
-  // #4 挂着，但**修复建议在这儿**：没查出来时，"下一步先加哪些观测"才是该留下的东西
   const st4 = 'st_crash_4';
   emit(C, s1, {
     type: 'step.opened',
@@ -843,10 +842,6 @@ function seedCrashCase() {
       status: 'inconclusive',
       verdict: '查不动了：手上没有 26.1 的真机，堆栈符号化又缺 5.1.9 的 dSYM，只能到「时间上对得上」为止。',
       confidence: 0.3,
-      remediation:
-        '这次没定位到，下一轮先把观测补上：① 崩溃上报带上 os_ver 与 device 的组合维度（现在只能事后 group by，看不到趋势）；' +
-        '② 把 5.1.9 起每一版的 dSYM 归档到构建产物里，现在只留最近三版；③ 借两台 A11/A12 的真机装 26.1 复现；' +
-        '④ 给 URLSession 的后台回调加一圈埋点，先证伪或证实那条论坛说法。',
       at: T('2026-08-12T16:20:00'),
     },
   });
@@ -871,9 +866,20 @@ function seedCrashCase() {
     type: 'step.opened',
     payload: { stepId: st6, sessionId: s1, ordinal: 6, kind: 'leftover', direction: '这次停下来时还挂着的', at: T('2026-08-12T16:22:00') },
   });
+  // 「下一步怎么查」在 leftover 步上：没查出来时，"下一步先加哪些观测"才是该留下的东西
   emit(C, s1, {
     type: 'step.closed',
-    payload: { stepId: st6, status: 'inconclusive', verdict: '① iOS 26.1 到底改了什么没有定论，只有论坛的零散反馈；② 缺 5.1.9 的 dSYM，那一版的堆栈至今没符号化；③ Jetsam 那条只是占比低，没有真正排除。', confidence: 0.4, at: T('2026-08-12T16:23:00') },
+    payload: {
+      stepId: st6,
+      status: 'inconclusive',
+      verdict: '① iOS 26.1 到底改了什么没有定论，只有论坛的零散反馈；② 缺 5.1.9 的 dSYM，那一版的堆栈至今没符号化；③ Jetsam 那条只是占比低，没有真正排除。',
+      confidence: 0.4,
+      remediation:
+        '这次没定位到，下一轮先把观测补上：① 崩溃上报带上 os_ver 与 device 的组合维度（现在只能事后 group by，看不到趋势）；' +
+        '② 把 5.1.9 起每一版的 dSYM 归档到构建产物里，现在只留最近三版；③ 借两台 A11/A12 的真机装 26.1 复现；' +
+        '④ 给 URLSession 的后台回调加一圈埋点，先证伪或证实那条论坛说法。',
+      at: T('2026-08-12T16:23:00'),
+    },
   });
 
   chat(T('2026-08-12T16:24:00'), 'assistant', '目前只能说到「26.1 + 老机型」这一层，再往下要真机和 dSYM。要我继续找旁证吗？', s1);

@@ -90,7 +90,8 @@ const REPORT: Snapshot['report'] = {
     text: 'cart_key 缺唯一约束：2026-03 迁移漏建，重试写入不再被数据库挡住',
   },
   impact: '12:00–12:10 间重复订单 37 笔，涉及 29 个用户',
-  remediation: '给 `t_order.cart_key` 补 UNIQUE 索引并清理 37 笔重复；迁移脚本加一条索引一致性校验',
+  // 已决型不装「下一步怎么查」（report.ts 按形态砍节），这份夹具的报告是有根因的那种
+  remediation: null,
   expected: '唯一索引挡住同 cart_key 的第二次写入',
   actual: '普通索引放行，重试写入直接落库',
   leftovers: [{ stepId: 'st6', direction: '重试为什么没按幂等约定退避', text: '还没查清', supersededBy: null }],

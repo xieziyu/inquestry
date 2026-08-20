@@ -554,9 +554,9 @@ export type Snapshot = {
     rootCause: { stepId: string; text: string; confidence: number | null } | null;
     impact: string | null;
     /**
-     * 修复建议：四栏里唯一由 agent 生成、没有投影来源的那一块（overview §6.1）。
-     * 取的是**最新一条仍然成立的声明**，不跟着根因走——未决型与归档的半程报告没有根因，
-     * 而它们恰恰最该留下"下一步该怎么查"。选择器只有 `queries.effectiveRemediation` 一条。
+     * 未决型报告的「下一步怎么查」：报告里唯一由 agent 生成、没有投影来源的那一块（overview §6.1）。
+     * 取 leftover 步上**最新一条仍然成立的声明**（选择器只有 `queries.effectiveRemediation` 一条）；
+     * 查出根因的报告不装这一节——修复方案留给动手修的人评估，排查报告只交事实。
      */
     remediation: string | null;
     /**
