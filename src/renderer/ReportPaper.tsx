@@ -15,7 +15,6 @@ import type { CaseMeta, IncidentEntry, StepNode } from '../shared/ipc.js';
 import { HEAD_BLOCK } from '../shared/paging.js';
 import {
   SHAPE_COPY,
-  SHAPE_SOURCE_COPY,
   type ChainLink,
   type ReportPlan,
   type ReportSection,
@@ -64,18 +63,12 @@ export function ReportPaper({
             <dt>证据</dt>
             <dd>{plan.evidenceCount}</dd>
           </dl>
-          {/* 形态是谁定的要印出来：`inferred` 说的是"没人判断过，按现有数据兜的底"，
-              读的人凭它决定信到什么程度。人不再挑形态之后，这是这行字唯一的出处 */}
+          {/* 只盖形态这一枚戳，不在纸头上解释它：出处、主体装没装出来这些话下面每一节都在自陈，
+              摆在标题下面只会抢在正文前面被读一遍。「草稿」留着——长图会被转发到看不见
+              上下文的地方，一份还会变的报告不标出来就成了一句定论 */}
           <p className="stamp">
-            <span>
-              按{SHAPE_COPY[plan.shape].label}装
-              {/* 主体没装出来就别承诺它：紧接着那一节正在解释自己为什么不在 */}
-              {plan.mainAssembled
-                ? ` · 最前是${SHAPE_COPY[plan.shape].body}`
-                : ` · ${SHAPE_COPY[plan.shape].body}这次装不出来`}
-            </span>
-            <span>{SHAPE_SOURCE_COPY[plan.shapeSource]}</span>
-            {!plan.frozen && <span>这次调查还没收尾，报告会跟着它一起变</span>}
+            <span className="shape">{SHAPE_COPY[plan.shape].label}</span>
+            {!plan.frozen && <span className="draft">草稿</span>}
           </p>
           {/* 半程报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
           {plan.abortedAt !== null && (
