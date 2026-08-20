@@ -33,6 +33,7 @@ import {
   type AppInfo,
   type CaseListPage,
   type CaseListQuery,
+  type CaseMeta,
   type DeleteOutcome,
   type EnvStatus,
   type ExportPayload,
@@ -376,7 +377,7 @@ async function exportMarkdown(caseId: string, target?: string): Promise<ExportRe
   if (!file) {
     const r = await dialog.showSaveDialog(win!, {
       title: '导出 Markdown',
-      defaultPath: path.join(app.getPath('downloads'), `${fileStem(input.case.title, caseId)}.md`),
+      defaultPath: path.join(app.getPath('downloads'), `${fileStem(input.case)}.md`),
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     });
     if (r.canceled || !r.filePath) return { ok: false, reason: 'canceled' };
@@ -433,7 +434,7 @@ async function exportImage(caseId: string, target?: string): Promise<ExportResul
   if (!file) {
     const r = await dialog.showSaveDialog(win!, {
       title: '导出长图',
-      defaultPath: path.join(app.getPath('downloads'), `${fileStem(input.case.title, caseId)}.png`),
+      defaultPath: path.join(app.getPath('downloads'), `${fileStem(input.case)}.png`),
       filters: [{ name: 'PNG', extensions: ['png'] }],
     });
     if (r.canceled || !r.filePath) return { ok: false, reason: 'canceled' };
@@ -726,10 +727,15 @@ function exportProbe(button: string): string {
   })()`;
 }
 
-/** 文件名取标题，路径分隔符与控制字符一律换掉；带上 caseId 好让同名的两个调查分得开。 */
-function fileStem(title: string, caseId: string): string {
-  const safe = title.replace(/[/\\:*?"<>|\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
-  return `${safe.slice(0, 40) || 'inquestry'} ${caseId}`;
+/**
+ * 文件名 `case_xxxxxxxx_20260815`：caseId 认得出是哪一份，基准日期认得出是哪天的事。
+ *
+ * **不取标题**：标题是 agent 起的一句话，长、含路径分隔符与全角标点，且改标题会让
+ * 同一份调查的两次导出落成两个文件名。日期取 `incidentDate`（事故发生那天）而非导出时间。
+ */
+function fileStem(meta: CaseMeta): string {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(meta.incidentDate) ? meta.incidentDate.replace(/-/g, '') : null;
+  return day ? `${meta.id}_${day}` : meta.id;
 }
 
 /** 调查列表上的短标签：问题的第一行，长了截断。 */
