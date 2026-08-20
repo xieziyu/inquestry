@@ -20,7 +20,17 @@
  *   代价是项目 `hooks` 加载即执行 shell（ui.md §8.1 那段红字）。起个标题不值得付这个代价，
  *   而且人这时刚点完「新建」，屏幕上没有任何东西说明有进程在跑
  * - **不进那个工作区目录**：cwd 落在临时目录，连带把项目 CLAUDE.md 与 `.mcp.json` 也挡在外面
- * - **不给调查用的那套工具**：系统提示词是自备的一句话，不是 claude_code 预设
+ * - **一个工具都不给**（`tools: []`）：这一趟只读人写下的那段文字，链接背后是什么、
+ *   文件里写了什么都不该去够——够得着也不该，那是调查本身的事。
+ *   **必须关掉整个内置集，不能列黑名单**：黑名单里列全 WebFetch / Read 之类还剩一个
+ *   `ToolSearch`，模型看见链接就用它去找抓取工具，这一跳把 `maxTurns: 1` 用光，
+ *   SDK 报 `Reached maximum number of turns`，被下面那个 catch 收成"问不出来"——
+ *   于是标题静默停在兜底那句，界面上没有任何东西说这一趟挂过（case_1baca6bb 就是这么来的）。
+ *   顺带：内置工具的定义每趟约 15k token，关掉之后这一跳也便宜了
+ *
+ * **标题只在这一趟定，事后不自动改。** 查下去当然会知道得更准（第一步关掉时往往已经能写出
+ * 好得多的标题），但那条路只有两个走法：改一次就停——凭什么是那一次；或者一直跟着结论改——
+ * 那是让列表和顶栏上的名字在人正读着的时候变来变去。要改由人自己改（`case:rename`）。
  *
  * **问不出来（spawn 失败 / 超时 / 拒答 / 输出解析不了）一律回 `null`，与「答了，但两件都是 null」
  * 分开**：后者是一次真的确认（「问题里没说别的日子」），前者什么都不是。合成一个的话，调用方会把
@@ -28,6 +38,7 @@
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { tmpdir } from 'node:os';
 import { sdkClaudeExecutable } from '../backend/env/sdk-bin.js';
 import { dayNumber } from '../shared/time.js';
@@ -49,6 +60,9 @@ const SYSTEM =
   '你在读一段线上问题的排查请求，输出两件事。只输出一个 JSON 对象，不要代码块、不要任何解释。\n' +
   `字段 title：这次调查的标题，中文，${MAX_TITLE} 字以内，写清「哪个系统 / 什么现象」，` +
   '不要写「调查」「排查」「问题」「分析」这类没有信息量的词，也不要编造描述里没有的服务名或结论。\n' +
+  '**只用这段文字里已经有的东西**：链接你打不开、文件你读不到，不要去猜它们背后是什么。' +
+  '描述短到只剩一个链接或一句话时，就把里面认得出的那个标识写进标题' +
+  '（如 issue 编号、traceId、服务名、用户 ID）——它比一个笼统的名字有用得多。\n' +
   '字段 incidentDate：这次事故**发生在哪一天**，格式 YYYY-MM-DD。' +
   '只有描述里明确说了日子（含「昨天」「前天」「今早」这类相对说法，按给你的今天换算）才填，' +
   '**说不准就填 null**——不要从日志片段里的时间戳猜，也不要因为想填点什么就填今天。';
@@ -61,6 +75,23 @@ const SYSTEM =
  * 漏答不是。合成两态的话，模型少写一个字段就等于替它签了字。
  */
 export type CaseFacts = { title: string | null; incidentDate?: string | null };
+
+/**
+ * 这一趟的 spawn 选项，**导出是为了让 spike 验的就是这一份**：照抄一份去验的话，
+ * 两边分头改而检查照旧 PASS，而这里错了不报错——只是标题静默停在兜底。
+ */
+export function namerOptions(model: string): Options {
+  return {
+    model,
+    settingSources: [],
+    pathToClaudeCodeExecutable: sdkClaudeExecutable(),
+    cwd: tmpdir(),
+    systemPrompt: SYSTEM,
+    maxTurns: 1,
+    // 一个都不给，且必须是整个内置集（含 ToolSearch）——理由见文件头第三条纪律
+    tools: [],
+  };
+}
 
 /**
  * 读一遍问题，给出标题与基准日期。
@@ -78,16 +109,7 @@ export async function proposeCaseFacts(
   try {
     const q = query({
       prompt: `今天是 ${today}。读下面这段排查请求：\n\n${text}`,
-      options: {
-        model,
-        settingSources: [],
-        pathToClaudeCodeExecutable: sdkClaudeExecutable(),
-        cwd: tmpdir(),
-        systemPrompt: SYSTEM,
-        maxTurns: 1,
-        // 起标题不需要任何工具；留着的话模型会去读那段描述里提到的文件，一轮就用光了
-        disallowedTools: ['Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite'],
-      },
+      options: namerOptions(model),
     });
     const timer = setTimeout(() => void q.interrupt().catch(() => {}), TIMEOUT_MS);
     try {

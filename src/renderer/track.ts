@@ -235,8 +235,8 @@ export function weaveChat(rows: TrackRow[], chat: ChatLine[]): StageRow[] {
  *
  * - `verdict` 由 `close_step` 补上（同一步还能被再 close 一次改掉）→ **结论恒占两行的槽**，
  *   这会儿没有结论也照样留着。空着的那块读起来正是"结论还没出来"
- * - `cases.title` 由 `case.renamed` 改（agent 读完问题几秒后**必然**改一次）→ **标题恒占一行**，
- *   全文在详情浮层里
+ * - `cases.title` 由 `case.renamed` 改（建单兜底那句会被 agent 读完问题后换掉，人也随时能再改）
+ *   → **标题恒占一行**，全文在详情浮层里
  *
  * `direction`（只在 `step.opened` 写）与 `cases.question`（只在 `case.opened` 写）不会变，
  * 所以它们照旧按内容估。由 `spike:stage` 那两条"补上结论 / 改完标题坐标不动"兜着。
