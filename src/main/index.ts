@@ -1196,13 +1196,7 @@ app.whenReady().then(async () => {
         if (!runner) return;
         for (const gate of snapshot().gates) runner.decideGate({ id: gate.id, action: 'allow' });
         for (const ask of snapshot().pending) {
-          runner.answerOperator({
-            id: ask.id,
-            action: 'answer',
-            statement: ask.statement,
-            answer: '(操作员：这条没跑，换个写法)',
-            executedAt: '2026-08-09 12:41:07 +08:00',
-          });
+          runner.answerOperator({ id: ask.id, action: 'answer', answer: '(操作员：这条没跑，换个写法)' });
         }
       }, 4000);
     }

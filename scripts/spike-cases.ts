@@ -1223,9 +1223,9 @@ async function main() {
 
   check(
     '处置一条不在本次调查手里的待办，回 false 而不是静默丢掉',
-    disp.answerOperator({ id: 'ask_nope', action: 'answer', statement: 'x', answer: 'y' }) === false &&
+    disp.answerOperator({ id: 'ask_nope', action: 'answer', answer: 'y' }) === false &&
       disp.decideGate({ id: 'call_nope', action: 'deny', message: '不行' }) === false,
-    `回填=${disp.answerOperator({ id: 'ask_nope', action: 'answer', statement: 'x', answer: 'y' })} 闸门=${disp.decideGate({ id: 'call_nope', action: 'deny', message: '不行' })}`,
+    `回填=${disp.answerOperator({ id: 'ask_nope', action: 'answer', answer: 'y' })} 闸门=${disp.decideGate({ id: 'call_nope', action: 'deny', message: '不行' })}`,
   );
 
   void dispProbe.askOperator({
@@ -1242,7 +1242,7 @@ async function main() {
   );
   check(
     '真落地了的回 true，人的判决确实到账',
-    disp.answerOperator({ id: askId, action: 'answer', statement: 'SELECT 1', answer: '只有一条' }) === true &&
+    disp.answerOperator({ id: askId, action: 'answer', answer: '只有一条' }) === true &&
       disp.decideGate({ id: 'call_r1', action: 'deny', message: '这条会写库，改用 ask_operator' }) === true,
     `回填=${askId.slice(0, 10)} 已处置 · 闸门 call_r1 已处置`,
   );

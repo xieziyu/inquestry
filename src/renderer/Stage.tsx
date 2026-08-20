@@ -290,7 +290,7 @@ export function Stage({
     drag.current = null;
   };
 
-  // Esc 关浮层。J/K 是待办那一对，不在这儿抢
+  // Esc 关浮层。待办卡自己没有全局键，⌘↵ 由拿着焦点的那张卡收，不经过这儿
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && picked) setPicked(null);

@@ -21,9 +21,14 @@ export interface InvestigationStore {
   closeStep(args: CloseStepArgs): Promise<{ warnings: string[] }>;
   askOperator(args: AskOperatorArgs): Promise<{
     answer: string;
-    /** 人执行前改过的语句。必须回传，否则 agent 学不到真实 schema（overview §5.1①）。 */
-    statement: string;
-    executedAt?: string;
+    /**
+     * 人把结果贴回来的时刻，由 harness 自己盖（`localStamp`）。
+     * **不是语句真正执行的时刻**，也不问人要——那个数没有可验的来源，
+     * 而这个数至少是真的，够把这条证据排进时间线。
+     *
+     * 超时作废、被停止散掉这两条路径上没有人贴过任何东西，所以是选填的。
+     */
+    filledAt?: string;
     /**
      * 人拒绝执行这一条（他自己也没权限、或这条不该在生产上跑）。
      * `answer` 此时是拒绝理由，**可为空**——理由是选填的。
@@ -89,15 +94,9 @@ export const TOOL_DEFS: ToolDef[] = [
           '这不是查询结果为空：换个你自己够得到的来源，或者换个方向，别把同一条再发一遍。',
         ].join('\n');
       }
-      const changed = r.statement !== a.statement;
-      return [
-        changed ? `⚠️ 人把语句改成了：\n${r.statement}\n（按这个真实 schema 写后续查询）` : null,
-        r.executedAt ? `执行时间：${r.executedAt}` : null,
-        '结果：',
-        r.answer,
-      ]
-        .filter(Boolean)
-        .join('\n');
+      // 语句不回传：卡上是只读的，人要改是在自己的客户端里改（见 `PendingCard`）。
+      // 字段名写错这类事因此只能由人在结果里说一句，而结果是原样喂回去的。
+      return [r.filledAt ? `回填时间：${r.filledAt}` : null, '结果：', r.answer].filter(Boolean).join('\n');
     },
   },
 ];

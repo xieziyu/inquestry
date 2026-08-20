@@ -25,6 +25,7 @@ import { z } from 'zod';
 import { createInquestryMcpServer, toolName } from '../src/backend/tools/sdk-mcp-adapter.js';
 import type { InvestigationStore } from '../src/backend/tools/definitions.js';
 import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../src/backend/tools/schemas.js';
+import { isShowTables, queriesRealTable, queriesWrongTable } from './fixtures/sql-tables.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROMPT = readFileSync(path.join(HERE, '../src/backend/prompt/investigation.md'), 'utf8');
@@ -52,21 +53,30 @@ const LOGS: Record<string, string[]> = {
 };
 
 /**
- * 人工回填的模拟。表名 orders 会「被人改成 t_order」，用来验 §5.1① 的回传是否让 agent 学到真实 schema。
+ * 人工回填的模拟。表名写错时**照数据库那样报错**，不替 agent 把 orders 改成 t_order——
+ * 回填卡上的语句是只读的，人改不了它，改法也不回传（见 `PendingCard`）。真名靠 `SHOW TABLES` 查。
  *
  * 其余语句按形状粗略应答。**不能一律回 `(0 rows)`** —— 上一轮就是这么写的，
  * agent 当场识破「0 行与已确认事实矛盾」并把整个影响面判成回填失效，
  * 说明假数据自相矛盾时它不会将就，但那一轮的影响面 step 也就废了。
  */
-function operatorAnswer(a: AskOperatorArgs): { answer: string; statement: string; executedAt?: string } {
-  const statement = /\border(s)?\b/i.test(a.statement) && !/t_order/i.test(a.statement)
-    ? a.statement.replace(/\border(s)?\b/gi, 't_order')
-    : a.statement;
-  const s = statement.toLowerCase();
-  const at = '2026-08-09 12:41:07 +08:00';
-  const wrap = (answer: string) => ({ statement, answer, executedAt: at });
+function operatorAnswer(a: AskOperatorArgs): { answer: string; filledAt: string } {
+  const s = a.statement.toLowerCase();
+  const wrap = (answer: string) => ({ answer, filledAt: '2026-08-09 12:41:07 +08:00' });
 
-  if (/show\s+create\s+table/.test(s)) {
+  // 真名从这儿查得到——否则错表名是条死路，agent 只能一直撞 1146
+  if (isShowTables(s)) {
+    return wrap('Tables_in_shop\nt_order\nt_order_item\nt_cart\n(3 rows)');
+  }
+  // 🔴 **必须排在所有出数据的分支之前**：`SELECT count(*) FROM orders` 否则会先命中聚合那条，
+  // 错表名照样拿到数据，检查也就再验不出东西。
+  //
+  // 表名写错时人只会把数据库的报错原样贴回来——他改不了 agent 的语句（回填卡上是只读的），
+  // agent 得自己从这句里学到真名。原先这里替它把 orders 改成 t_order，那条路已经没有了。
+  if (queriesWrongTable(s)) {
+    return wrap("ERROR 1146 (42S02): Table 'shop.orders' doesn't exist");
+  }
+  if (queriesRealTable(s) && /show\s+create\s+table/.test(s)) {
     return wrap(
       [
         'CREATE TABLE `t_order` (',
@@ -94,7 +104,7 @@ function operatorAnswer(a: AskOperatorArgs): { answer: string; statement: string
       ].join('\n'),
     );
   }
-  if (/count\s*\(|group\s+by/.test(s)) {
+  if (queriesRealTable(s) && /count\s*\(|group\s+by/.test(s)) {
     return wrap(
       [
         'cart_key      | user  | n | first_at                | last_at',
@@ -105,7 +115,7 @@ function operatorAnswer(a: AskOperatorArgs): { answer: string; statement: string
       ].join('\n'),
     );
   }
-  if (/from\s+t_order/.test(s)) {
+  if (queriesRealTable(s)) {
     return wrap(
       [
         'id | user  | cart_key    | created_at',
@@ -301,7 +311,12 @@ function report(final: string) {
     .filter((s) => VAGUE.test(s.direction.trim()) || !FALSIFIABLE_MARK.test(s.direction));
   const needEvidence = closed.filter((s) => s.closed!.status !== 'inconclusive');
   const noEvidence = needEvidence.filter((s) => s.closed!.evidence.length === 0);
-  const learnedSchema = asks.slice(1).some((a) => /t_order/i.test(a.statement));
+  // 猜错过表名的话，后面必须有一条**只查真表**的语句——这是「人不再替它改语句」之后
+  // agent 唯一的学习路径。只要求"出现过 t_order"是不够的：`FROM t_order JOIN orders`
+  // 照样会撞 1146，一次成功查询都没有，却会被算成已经恢复。
+  // 从没猜错就没什么要学的，那也算过。
+  const wrongAt = asks.findIndex((a) => queriesWrongTable(a.statement));
+  const recovered = wrongAt < 0 || asks.slice(wrongAt + 1).some((a) => queriesRealTable(a.statement) && !queriesWrongTable(a.statement));
 
   const checks: [string, boolean, string][] = [
     ['1. 每个方向都先 open_step，且全部 close', real.length > 0 && closed.length === real.length, `${closed.length}/${real.length} 已关闭；未归类调用 ${steps.find((s) => s.ordinal === 0)?.calls.length ?? 0} 次`],
@@ -309,7 +324,7 @@ function report(final: string) {
     ['3. 非 inconclusive 的结论都挂了证据', noEvidence.length === 0, `共 ${allEvidence.length} 条证据；缺证据的 step ${noEvidence.length} 个`],
     ['4. callRef 指得回真实调用', badRefs.length === 0, badRefs.length ? `无效引用 ${badRefs.length} 条：${badRefs.map((e) => e.callRef).join(',')}` : '全部有效'],
     ['5. 有命中的日志类调用，证据都填了 occurredAt', logEvidence.length > 0 && withOccurred.length === logEvidence.length, `${withOccurred.length}/${logEvidence.length}`],
-    ['6. ask_operator 写了 expect，且学到了被改写的真实 schema', asks.length > 0 && asks.every((a) => a.expect?.length > 5) && (asks.length === 1 || learnedSchema), `调用 ${asks.length} 次；后续语句用 t_order：${learnedSchema}`],
+    ['6. ask_operator 写了 expect；表名撞了 1146 之后自己换到真名', asks.length > 0 && asks.every((a) => a.expect?.length > 5) && recovered, `调用 ${asks.length} 次；第 ${wrongAt < 0 ? '-' : wrongAt + 1} 条用了错表名，之后换回真名：${recovered}`],
     ['7. 定稿前出现 impact 与 leftover 两个固定 step', real.some((s) => s.kind === 'impact') && real.some((s) => s.kind === 'leftover'), `kind 分布：${JSON.stringify(real.reduce<Record<string, number>>((m, s) => ((m[s.kind] = (m[s.kind] ?? 0) + 1), m), {}))}`],
   ];
 

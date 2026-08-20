@@ -45,6 +45,17 @@ export function localTzOffset(at: Date = new Date()): string {
 }
 
 /**
+ * 一个**此刻**的本机时间戳，带偏移。回填时刻靠它盖（`case-runner` 的 `askOperator`）。
+ *
+ * 与 `exportStamp` 差在精度，不合并：那个是页脚水印，分钟就够；这个要进证据的时间线，
+ * 同一分钟里贴回来的两条得排得出先后。
+ */
+export function localStamp(ms: number): string {
+  const at = new Date(ms);
+  return `${todayLocal(at)} ${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())} ${localTzOffset(at)}`;
+}
+
+/**
  * 页脚水印上的生成时间。带偏移，否则跨时区转手之后没人知道这是谁的几点。
  *
  * **两种导出共用这一份**：同一次调查的 `.md` 与长图会被并排贴出来，

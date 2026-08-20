@@ -84,7 +84,7 @@ function sessionCtx(caseId: string, sessionId: string): SessionContext {
     isTimestampedSource: () => true,
     now: () => Date.now(),
     newId: (prefix) => `${prefix}_${sessionId}_${++n}`,
-    runOperator: async () => ({ answer: '', statement: '' }),
+    runOperator: async () => ({ answer: '' }),
   };
 }
 

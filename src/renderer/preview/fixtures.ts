@@ -277,6 +277,26 @@ const PENDING: PendingAsk[] = [
     callId: 'tc1',
     askedAt: now - 90_000,
   },
+  /**
+   * 🔴 **第二条是拿来压版面的，不是凑数**：engine 短、env 是 agent 写的一整句话、
+   * 语句多行且长。上面那条 `SHOW CREATE TABLE` / `prod-读库` 短得什么都触发不了——
+   * 只有这条能看出徽标会不会被挤到换行、语句块封没封住高度。删它等于把这两处的版面回归网撤了。
+   */
+  {
+    id: 'ask2',
+    engine: 'mongo',
+    statement: [
+      'db.userdevices.find(',
+      '  { users: ObjectId("6a8579973eea10374dd3179d") },',
+      '  { shumeiDeviceId: 1, nativeDeviceIds: 1, users: 1, deviceModel: 1, deviceName: 1, createdAt: 1, riskLevel: 1, selfRiskLevel: 1, status: 1 }',
+      ').sort({ createdAt: -1 })',
+    ].join('\n'),
+    why: '先取被举报账号名下的全部设备文档，看每台设备的 users 数组里除了他还有谁——这是设备指纹关联的第一跳。',
+    expect:
+      '预期返回 1 到几条设备文档。若每条的 users 长度都为 1（只有他自己），说明设备维度看不到马甲，本方向被推翻，要改走 IP / idfv；若出现 users 长度 >= 3 的设备，那些同设备账号就是第一批嫌疑小号。',
+    env: 'prod userProfile 库 (device-mongo service 的 userProfileMongoUrl, 只读从库即可)',
+    askedAt: now - 40_000,
+  },
 ];
 
 const GATES: PendingGate[] = [

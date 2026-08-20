@@ -265,11 +265,6 @@ code { font-family: var(--mono); font-size: .92em; }
 /* 正文在画布上按算好的行数裁（`-webkit-line-clamp` 由 JSX 内联给），这里让它自己排 */
 .lp-frag .c-dir, .lp-frag .c-vd, .lp-frag .question { -webkit-line-clamp: none; display: block; }
 .lp-frag .casecard h2 { -webkit-line-clamp: none; }
-/* 待办卡在应用里钉在视口右上、宽 372px；这儿窄一些，回填区照 `.todolayer` 那条改单列 */
-.lp-frag .pending .fill { grid-template-columns: minmax(0, 1fr); }
-.lp-frag .pending .side { flex-direction: row; align-items: flex-end; gap: 8px; }
-.lp-frag .pending .side label { flex: 1; }
-.lp-frag .pending .side input { margin-top: 4px; }
 /* 站点上的部件是给人看的，不是给人填的 */
 .lp-frag textarea, .lp-frag input, .lp-frag button { pointer-events: none; resize: none; }
 .lp-frag button:disabled { opacity: .75; }

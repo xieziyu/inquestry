@@ -1,27 +1,33 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.js';
 import type { OperatorReply, PendingAsk } from '../shared/ipc.js';
-import { isPlainKey, isTyping } from './keys.js';
 
 /**
- * 人工回填节点。三个设计要点都落在这张卡上（overview §5.1）：
- *   ① 语句可编辑再执行，改后的语句要回传给 agent —— 它才能学到真实 schema
- *   ② 执行时间必须能填：手工结果是唯一拿不到自动时间戳的来源
- *   ③ expect 先于结果呈现，挡住「看到数据再倒推解释」
+ * 人工回填节点。两个设计要点落在这张卡上：
+ *   ① `expect` 先于结果呈现，挡住「看到数据再倒推解释」
+ *   ② 语句只读，主路是**复制走人**——要改在自己的客户端里改，这张卡不当编辑器。
+ *      代价是改法不回传，agent 学不到真实 schema；那一档由人在结果框里写一句补上
+ *      （结果是原样喂回去的）。
  *
- * 第四个手势是**拒绝**：人自己也没那个权限、或这条不该在生产上跑的时候，这张卡得有出口。
+ * 第三个手势是**拒绝**：人自己也没那个权限、或这条不该在生产上跑的时候，这张卡得有出口。
  * 没有它的话唯一的走法是干等到超时——十分钟里 agent 一动不动，而人早就知道这条跑不成了。
  * 理由选填，见 `OperatorReply` 那儿写的为什么。
+ *
+ * 时间不在卡上：agent 拿到的是 `case-runner` 收到答案时自己盖的**回填时刻**，
+ * renderer 报上来的时间戳 main 没法验。
  */
 export function PendingCard({
   ask,
   focused,
+  grab,
   draft,
   onDraft,
   onSubmit,
 }: {
   ask: PendingAsk;
   focused: boolean;
+  /** 待办栏这会儿该不该拿着键盘（`App` 的 `handKeyboard`）。 */
+  grab: () => boolean;
   /**
    * 人已经敲进去的东西**存在 App 那边**，不放这张卡的局部 state。
    * 卡片是跟着快照渲染的，一换调查它就卸载——粘了半天的查询结果会随之蒸发。
@@ -30,139 +36,139 @@ export function PendingCard({
   onDraft: (patch: Record<string, string | undefined>) => void;
   onSubmit: (r: OperatorReply) => void;
 }) {
-  const statement = draft.statement ?? ask.statement;
   const answer = draft.answer ?? '';
-  const executedAt = draft.executedAt ?? '';
   /**
    * 键不在 = 拒绝那栏还没展开。**这里不能像别处那样用「内容非空」代替展开状态**：
-   * 理由本来就允许留空，那样写会让人一按「无法执行」栏就自己收回去。
+   * 理由本来就允许留空，那样写会让人一按「拒绝」栏就自己收回去。
    */
   const note = draft.note ?? null;
-  const setStatement = (v: string) => onDraft({ statement: v });
   const setAnswer = (v: string) => onDraft({ answer: v });
-  const setExecutedAt = (v: string) => onDraft({ executedAt: v });
   const setNote = (v: string | null) => onDraft({ note: v ?? undefined });
-  const changed = statement !== ask.statement;
+  const [copied, setCopied] = useState<'ok' | 'fail' | null>(null);
   const box = useRef<HTMLElement>(null);
   const result = useRef<HTMLTextAreaElement>(null);
   const message = useRef<HTMLTextAreaElement>(null);
 
-  const submit = () =>
-    answer.trim() &&
-    onSubmit({ id: ask.id, action: 'answer', statement, answer, executedAt: executedAt || undefined });
+  const submit = () => answer.trim() && onSubmit({ id: ask.id, action: 'answer', answer });
   const decline = () => onSubmit({ id: ask.id, action: 'decline', reason: note?.trim() || undefined });
   const openNote = () => {
     setNote(note ?? '');
     // 展开与聚焦不在同一帧：输入框这会儿还没挂上
     setTimeout(() => message.current?.focus(), 0);
   };
+  const copy = () =>
+    void navigator.clipboard.writeText(ask.statement).then(
+      () => setCopied('ok'),
+      () => setCopied('fail'),
+    );
 
-  // J/K 移到这张卡时直接把光标放进结果框：切窗口跑完 SQL 回来就是要粘贴
+  // 复制成功那一下退回原样，失败的留着——那句话人得看见
+  useEffect(() => {
+    if (copied !== 'ok') return;
+    const t = setTimeout(() => setCopied(null), 1600);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  /**
+   * 键盘走到这张卡时直接把光标放进结果框：切窗口跑完 SQL 回来就是要粘贴。
+   *
+   * 🔴 **`focused` 不等于该抢焦点**，两道闸各挡一种情形：
+   *   - `grab()`：待办从无到有时 App 的顺位 effect 会把 `focused` 落到第一条，那一刻人多半
+   *     正在底部输入框打字——只看 `focused` 的话，他接着敲的字会进到查询结果框里；
+   *   - 卡里已经有焦点：`focused` 正是跟着焦点走的，点一下「复制」也会让这张卡成为 focused，
+   *     不挡的话光标会被从按钮上拽进结果框。
+   */
   useEffect(() => {
     if (!focused) return;
     box.current?.scrollIntoView({ block: 'nearest' });
-    result.current?.focus();
-  }, [focused]);
+    if (grab() && !box.current?.contains(document.activeElement)) result.current?.focus();
+  }, [focused, grab]);
 
-  // 光标一进结果框单字母键就归它了，所以 `D` 只在人按过 Esc 交还键盘之后才轮得到——
-  // 与②档同一个键位，为的是两张卡在键盘上是同一套动作
-  useEffect(() => {
-    if (!focused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!isPlainKey(e) || isTyping(e.target) || e.key.toLowerCase() !== 'd') return;
-      e.preventDefault();
-      openNote();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
+  /**
+   * ⌘↵ 归这张卡自己，**不挂 window 监听**：焦点落在卡内哪个控件上都算数，落在卡外就按不到——
+   * 多张待办同时挂着时，"哪一张收到这一下"因此不必再去对账。
+   *
+   * 🔴 **按落点属于哪个动作分派，不能写成「不是留话栏就当回填」。** 拒绝区不止那一个
+   * textarea——「确认拒绝」钮上也印着 ⌘↵，从理由栏 Tab 过去再按，那一下会被当成回填，
+   * 把人明明要作废的结果交上去（②档同一处写错的话是反过来放行一次生产调用）。
+   * 拒绝区整块标 `data-deny`，将来往里加控件也不必回来改这儿。
+   */
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    if ((e.target as HTMLElement | null)?.closest?.('[data-deny]')) decline();
+    else submit();
+  };
 
   return (
-    <section className={`pending ${focused ? 'focus' : ''}`} ref={box}>
+    <section className={`pending ${focused ? 'focus' : ''}`} ref={box} data-todo={ask.id} onKeyDown={onKey}>
       <div className="head">
         <span className="tag">需要你执行</span>
         <span className="engine">{ask.engine}</span>
         {ask.env && <span className="env">{ask.env}</span>}
-        {changed && <span className="changed">语句已改，会连同结果一起回传</span>}
       </div>
 
-      <p className="why">
-        <b>为什么</b>
-        {ask.why}
-      </p>
-      <p className="expect">
-        <b>预期看到</b>
-        {ask.expect}
-      </p>
+      <dl className="brief">
+        <dt>为什么</dt>
+        <dd>{ask.why}</dd>
+        <dt>预期看到</dt>
+        <dd>{ask.expect}</dd>
+      </dl>
 
-      <textarea className="stmt" value={statement} onChange={(e) => setStatement(e.target.value)} rows={4} />
-
-      <div className="fill">
-        <textarea
-          ref={result}
-          placeholder="把执行结果粘贴到这里"
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          onKeyDown={(e) => {
-            // 结果框要能粘多行，`↵` 得留给换行，提交只认 ⌘↵（与底部输入带一致）
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
-            // 光标在这儿时单字母键归输入框所有，J/K 与 A/E/D 都失效——Esc 是交还键盘的那一下
-            if (e.key === 'Escape') e.currentTarget.blur();
-          }}
-          rows={5}
-        />
-        <div className="side">
-          <label>
-            执行时间
-            <input
-              placeholder="2026-08-09 12:41:07 +08:00"
-              value={executedAt}
-              onChange={(e) => setExecutedAt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') submit();
-              }}
-            />
-          </label>
-          <button className="primary" disabled={!answer.trim()} onClick={submit}>
-            <Icon name="send" />
-            回填 <small>⌘↵</small>
+      {/* 语句是拿去别处跑的，不是在这儿编辑的：只读 + 一键复制。
+          封了高度而不是让它长下去——超长语句会把结果框和回填钮顶出屏幕，
+          而那两个才是这张卡要人做的事 */}
+      <div className="stmt">
+        <div className="bar">
+          <span className="what">语句</span>
+          <button className={copied === 'ok' ? 'done' : ''} onClick={copy}>
+            <Icon name={copied === 'ok' ? 'check' : copied === 'fail' ? 'deny' : 'copy'} size={13} />
+            {copied === 'ok' ? '已复制' : copied === 'fail' ? '复制失败，手动选中吧' : '复制'}
           </button>
         </div>
+        <pre>{ask.statement}</pre>
       </div>
+
+      <textarea
+        className="answer"
+        ref={result}
+        placeholder="把执行结果粘贴到这里"
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        rows={5}
+      />
 
       {note !== null && (
         <textarea
           className="note"
+          data-deny
           ref={message}
           value={note}
           rows={2}
           placeholder="为什么跑不了——可以不写。写了会原样给它，好让它知道换哪个方向"
           onChange={(e) => setNote(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) decline();
-            // 收起留话栏顺带把键盘交还给待办栏，不然收起来了焦点还在原地
-            if (e.key === 'Escape') {
-              setNote(null);
-              e.currentTarget.blur();
-            }
-          }}
         />
       )}
 
       {/* 拒绝分两下：理由可以为空，一下就走的话一次误点就把这条查询判了死刑，
-          而它与放弃不同——agent 收到的是"别再问了"，不会再自己回来试 */}
+          而它与放弃不同——agent 收到的是"别再问了"，不会再自己回来试。
+          出口在左、主路在右：右下角是全 app 的主操作位，出口不该坐在那儿 */}
       <div className="acts">
         {note === null ? (
-          <button className="ghost" onClick={openNote}>
-            <Icon name="deny" />
-            这条我跑不了 <small>D</small>
+          <button className="out" onClick={openNote}>
+            <Icon name="deny" size={13} />
+            拒绝
           </button>
         ) : (
-          <button className="ghost bad" onClick={decline}>
-            <Icon name="deny" />
+          <button className="out armed" data-deny onClick={decline}>
+            <Icon name="deny" size={13} />
             确认拒绝{note.trim() ? '' : '（不留理由）'} <small>⌘↵</small>
           </button>
         )}
+        <button className="go" disabled={!answer.trim()} onClick={submit}>
+          <Icon name="send" size={13} />
+          回填 <small>⌘↵</small>
+        </button>
       </div>
     </section>
   );
