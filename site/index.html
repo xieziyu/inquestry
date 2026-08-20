@@ -135,7 +135,7 @@
           <ul class="lp-pts">
             <li class="hot"><b>琥珀是全屏唯一的暖色</b>：余光扫过屏幕，有没有事找你是一个颜色的有无</li>
             <li>它必须先写下<b>预期看到什么</b>才能看结果，挡住事后合理化</li>
-            <li>你贴回去的结果照样进库，和它自己跑出来的证据同一等级</li>
+            <li>语句<b>一键复制</b>拿去自己那边跑，贴回来的结果照样进库，和它自己跑出来的证据同一等级</li>
           </ul>
         </article>
         <div class="lp-fragwrap">
@@ -148,15 +148,32 @@
                 <span class="engine">mysql</span>
                 <span class="env">prod-读库</span>
               </div>
-              <p class="why"><b>为什么</b>要确认 cart_key 上是唯一索引还是普通索引——这决定第二次写入能不能被数据库自己挡住。</p>
-              <p class="expect"><b>预期看到</b>建表语句里 cart_key 那一行的索引类型</p>
-              <textarea class="stmt" rows="2" readonly>SHOW CREATE TABLE `t_order`;</textarea>
-              <div class="fill">
-                <textarea rows="3" readonly placeholder="把执行结果粘贴到这里"></textarea>
-                <div class="side">
-                  <label>执行时间<input value="2026-08-09 12:41:07 +08:00" readonly></label>
-                  <button class="primary" type="button" disabled>↑ 回填</button>
+              <dl class="brief">
+                <dt>为什么</dt>
+                <dd>要确认 cart_key 上是唯一索引还是普通索引——这决定第二次写入能不能被数据库自己挡住。</dd>
+                <dt>预期看到</dt>
+                <dd>建表语句里 cart_key 那一行的索引类型</dd>
+              </dl>
+              <div class="stmt">
+                <div class="bar">
+                  <span class="what">语句</span>
+                  <button type="button" disabled>
+                    <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2z"/><path d="M15.5 7.5v-1a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1"/></svg>
+                    复制
+                  </button>
                 </div>
+                <pre>SHOW CREATE TABLE `t_order`;</pre>
+              </div>
+              <textarea class="answer" rows="3" readonly placeholder="把执行结果粘贴到这里"></textarea>
+              <div class="acts">
+                <button class="out" type="button" disabled>
+                  <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                  拒绝
+                </button>
+                <button class="go" type="button" disabled>
+                  <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                  回填
+                </button>
               </div>
             </section>
           </div>
@@ -191,7 +208,7 @@
               <textarea class="stmt" rows="3" readonly>{ "command": "kubectl -n prod logs deploy/order-api --since=30m | grep u1001" }</textarea>
               <div class="acts">
                 <button class="ghost bad" type="button" disabled>✕ 拒绝并留话</button>
-                <button class="primary" type="button" disabled>✓ 放行 <small>A</small></button>
+                <button class="primary" type="button" disabled>✓ 放行 <small>⌘↵</small></button>
               </div>
             </section>
             <div class="lp-lane">

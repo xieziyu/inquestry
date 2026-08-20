@@ -31,6 +31,8 @@ type Probe = {
     opts: { toolUseID: string; agentID?: string; signal: AbortSignal; title?: string },
   ): Promise<GateOutcome>;
   onToolStart(input: unknown, toolUseID: string): unknown;
+  /** 落库那一步。验"留痕失败也要收口"时把它换成会抛的。 */
+  applyGate: (callId: string, outcome: GateOutcome) => void;
   onToolFailed(input: unknown, toolUseID: string): void;
   onPermissionDenied(input: unknown, toolUseID: string): void;
   gates: Map<
@@ -336,6 +338,39 @@ async function main() {
   );
   probe.gates.get('call_t3')?.finish({ decision: 'timeout' });
   await t3;
+  /**
+   * 🔴 **留痕失败不能拖着 agent 的 Promise 一起死。**
+   *
+   * `settle` 先清超时兜底、把闸门从 `gates` 上摘掉，之后才落库。落库抛错时若不接住，
+   * `resolve` 就跑不到——agent 那侧永远等下去，而屏幕上闸门卡正常消失、人重试只拿到 false、
+   * 停止也再找不到它。表现是整场调查静默挂住，日志里一个字都没有。
+   * 记不上的那次调用退回由 PostToolUse 收尾，错一个状态远好过挂死。
+   *
+   * ①档的 `answerOperator` 早就这么写了，这条是补②档漏掉的那一半。
+   */
+  const applyGate = probe.applyGate;
+  probe.applyGate = () => {
+    throw new Error('磁盘满了，这条留痕落不下去');
+  };
+  const noRecord = ask('call_boom', 'select 10');
+  started('call_boom', 'select 10');
+  try {
+    runner.decideGate({ id: 'call_boom', action: 'allow' });
+  } catch {
+    // 不接住的话这条 spike 整个崩掉，打出 0 PASS / 0 FAIL —— 看着像全过。
+    // 接住之后旧写法会干净地落到下面那条 FAIL 上（agent 拿到"挂死了"）
+  }
+  const boomOut = await Promise.race([
+    noRecord.then((o) => o.decision),
+    new Promise<string>((r) => setTimeout(() => r('挂死了'), 1500)),
+  ]);
+  probe.applyGate = applyGate;
+  check(
+    '留痕落不下去时闸门照样收口：agent 等到判决，闸门也不再挂着',
+    boomOut === 'allow' && !probe.gates.has('call_boom'),
+    `agent 拿到=${boomOut} · 闸门还挂着=${probe.gates.has('call_boom')}（"挂死了"就是整场调查静默卡住的那一幕）`,
+  );
+
   const snapBefore = runner.snapshot().takeover;
   await runner.setTakeover(true);
   check(

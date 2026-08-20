@@ -93,7 +93,7 @@ export const closeStepShape = {
 
 export const askOperatorShape = {
   engine: z.enum(['mysql', 'postgres', 'redis', 'mongo', 'other']),
-  statement: z.string().describe('要人工执行的语句。表名字段名不确定时照写，人会改。'),
+  statement: z.string().describe('要人工执行的语句。人不会替你改——表名字段名猜错了，回来的是数据库的报错。'),
   why: z.string().describe('为什么需要这条 —— 会直接成为节点的 direction。'),
   expect: z
     .string()

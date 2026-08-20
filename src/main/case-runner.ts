@@ -48,6 +48,7 @@ import {
   type VerdictShape,
 } from '../shared/ipc.js';
 import { DEFAULT_UI_SETTINGS, type UiSettings } from '../shared/settings.js';
+import { localStamp } from '../shared/time.js';
 
 /** 人工回填的超时兜底（D9）。到点自动作废，节点标注为超时，agent 不会干挂。 */
 const OPERATOR_TIMEOUT_MS = 15 * 60 * 1000;
@@ -86,7 +87,13 @@ type Pending = {
    * 永远挂在 `pending` 上——库里于是攒下一批"发起了但永远不会有结果"的调用。
    */
   callId?: string;
+  /** 人在卡上的处置。**只有这条路径会盖回填时刻**——它是唯一真有人贴过东西的那一下。 */
   resolve: (r: OperatorReply) => void;
+  /**
+   * 不经人手的收场（散场作废）。走 `resolve` 的话会被顺手盖上一个当下的回填时刻，
+   * 而那一刻没有任何人粘贴过任何东西——那是伪造进时间线的证据。
+   */
+  settle: (r: { answer: string; filledAt?: string; declined?: boolean }) => void;
   timer: NodeJS.Timeout;
 };
 type Gate = {
@@ -660,7 +667,7 @@ export class CaseRunner {
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       if (p.callId) this.abandonCall(p.callId, why);
-      p.resolve({ id: p.ask.id, action: 'answer', statement: p.ask.statement, answer: `(${why}这条回填作废)` });
+      p.settle({ answer: `(${why}这条回填作废)` });
     }
     this.pending.clear();
     // 还没认领的也要收：PreToolUse 记完账、工具正文还没跑到 askOperator 的那一小段里
@@ -968,7 +975,16 @@ export class CaseRunner {
         settled = true;
         clearTimeout(timer);
         this.gates.delete(id);
-        record();
+        try {
+          record();
+        } catch (err) {
+          // 🔴 **留痕失败不能拖着这条 Promise 一起死**（与 `answerOperator` 那段红字同一条）。
+          // 上面三行已经把超时兜底清了、闸门也从 `gates` 上摘了，`resolve` 再跑不到的话
+          // agent 那侧就永远等下去——而屏幕上闸门卡正常消失，人重试只会拿到 false，
+          // 连停止都找不到它。记不上的那次调用退回由 PostToolUse 收尾，
+          // 错一个状态远好过整场调查挂死。
+          console.error(`[case] ${this.caseId} 闸门处置的留痕没落下，那次调用的状态会退回按结果记`, err);
+        }
         this.onChange();
         resolve(outcome);
       };
@@ -1062,14 +1078,14 @@ export class CaseRunner {
     why: string;
     expect: string;
     env?: string;
-  }): Promise<{ answer: string; statement: string; executedAt?: string; declined?: boolean }> {
+  }): Promise<{ answer: string; filledAt?: string; declined?: boolean }> {
     const id = `ask_${randomUUID().slice(0, 8)}`;
     const callId = this.claimAskCall(askKey(args));
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         this.onChange();
-        resolve({ answer: '(超时未回填，请换个方向或稍后再问)', statement: args.statement });
+        resolve({ answer: '(超时未回填，请换个方向或稍后再问)' });
       }, OPERATOR_TIMEOUT_MS);
 
       this.pending.set(id, {
@@ -1077,12 +1093,17 @@ export class CaseRunner {
         callId,
         // 拒绝要**说成一句 agent 读得懂的话**：原样回一句空的理由，读起来就是"查了，没数据"，
         // 而这两件事在后面的推理里分量完全相反
+        //
+        // 回填时刻在**这里**盖，不由 renderer 报上来：那个数 main 没法验。
+        // 只盖在这一条路径上——超时（上面那个 timer）与散场（`settle`）都没有人贴过东西，
+        // 给它们编一个时刻等于把从未发生的粘贴写成时间线证据。
         resolve: (r) =>
           resolve(
             r.action === 'decline'
-              ? { answer: r.reason?.trim() ?? '', statement: args.statement, declined: true }
-              : { answer: r.answer, statement: r.statement, executedAt: r.executedAt },
+              ? { answer: r.reason?.trim() ?? '', declined: true }
+              : { answer: r.answer, filledAt: localStamp(Date.now()) },
           ),
+        settle: resolve,
         timer,
       });
       this.onChange();

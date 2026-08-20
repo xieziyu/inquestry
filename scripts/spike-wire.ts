@@ -25,6 +25,7 @@ import { rebuildProjections } from '../src/backend/db/projector.js';
 import { createInvestigationSession } from '../src/backend/store/sqlite-store.js';
 import { createInquestryMcpServer, toolName } from '../src/backend/tools/sdk-mcp-adapter.js';
 import type { AskOperatorArgs } from '../src/backend/tools/schemas.js';
+import { isShowTables, queriesRealTable, queriesWrongTable } from './fixtures/sql-tables.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROMPT = readFileSync(path.join(HERE, '../src/backend/prompt/investigation.md'), 'utf8');
@@ -53,15 +54,24 @@ const LOGS: Record<string, string[]> = {
 };
 
 function operatorAnswer(a: AskOperatorArgs) {
-  const statement = /\border(s)?\b/i.test(a.statement) && !/t_order/i.test(a.statement)
-    ? a.statement.replace(/\border(s)?\b/gi, 't_order')
-    : a.statement;
-  const s = statement.toLowerCase();
-  const wrap = (answer: string) => ({ statement, answer, executedAt: '2026-08-09 12:41:07 +08:00' });
-  if (/show\s+create\s+table/.test(s)) {
+  const s = a.statement.toLowerCase();
+  const wrap = (answer: string) => ({ answer, filledAt: '2026-08-09 12:41:07 +08:00' });
+  // 真名从这儿查得到——错表名那条否则是死路，agent 只能一直撞 1146
+  if (isShowTables(s)) {
+    return wrap('Tables_in_shop\nt_order\nt_order_item\nt_cart\n(3 rows)');
+  }
+  // 🔴 **必须排在所有出数据的分支之前**：`SELECT count(*) FROM orders` 否则会先命中聚合那条，
+  // 错表名照样拿到数据，检查也就再验不出东西。
+  //
+  // 表名写错时人只会把数据库的报错原样贴回来——他改不了 agent 的语句（回填卡上是只读的），
+  // agent 得自己从这句里学到真名。原先这里替它把 orders 改成 t_order，那条路已经没有了。
+  if (queriesWrongTable(s)) {
+    return wrap("ERROR 1146 (42S02): Table 'shop.orders' doesn't exist");
+  }
+  if (queriesRealTable(s) && /show\s+create\s+table/.test(s)) {
     return wrap('CREATE TABLE `t_order` (\n  `cart_key` varchar(64) NOT NULL,\n  KEY `idx_cart_key` (`cart_key`)  -- 普通索引，非 UNIQUE\n)');
   }
-  if (/count\s*\(|group\s+by/.test(s)) {
+  if (queriesRealTable(s) && /count\s*\(|group\s+by/.test(s)) {
     return wrap(
       [
         'cart_key    | user  | n | first_at                | last_at',
@@ -71,7 +81,7 @@ function operatorAnswer(a: AskOperatorArgs) {
       ].join('\n'),
     );
   }
-  if (/from\s+t_order/.test(s)) {
+  if (queriesRealTable(s)) {
     return wrap(
       [
         'id | user  | cart_key    | created_at',

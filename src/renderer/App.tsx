@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   EMPTY_SNAPSHOT,
   type CaseMeta,
@@ -17,7 +17,6 @@ import { Icon } from './Icon.js';
 import { History } from './History.js';
 import { Home } from './Home.js';
 import { LogoMark } from './LogoMark.js';
-import { isPlainKey, isTyping } from './keys.js';
 import { PendingCard } from './PendingCard.js';
 import { Rail, type Screen } from './Rail.js';
 import { Report } from './Report.js';
@@ -68,7 +67,7 @@ export function App({
    */
   const [notice, setNotice] = useState<string | null>(null);
   /**
-   * 待办卡里人已经敲进去的东西（改过的语句 / 粘贴的结果 / 执行时间 / 拒绝理由）。
+   * 待办卡里人已经敲进去的东西：①档是粘贴的结果与拒绝理由，②档是改写的参数与拒绝理由。
    *
    * **按「调查 + 条目 id」存在这一层**：卡片是跟着快照渲染的，一换调查旧卡片就卸载，
    * 局部 state 随之蒸发——切回来时它会按 ask/gate 的初值重新挂上，人贴的结果、
@@ -108,6 +107,17 @@ export function App({
    */
   const tail = useMemo(() => tailSummary(snap), [snap]);
   const [focus, setFocus] = useState<string | null>(null);
+  /**
+   * 待办栏这会儿该不该拿着键盘。卡片靠它决定 `focused` 落上来时要不要真去 `focus()`。
+   *
+   * 两个来源说的是同一件事——**键盘已经在待办卡里了**：焦点落进某张卡（点进去就算），
+   * 以及前一张被处置掉的那一下——焦点掉回 body 时 `focusin` 不再触发，这个值于是留着 true，
+   * 顺位接上来的那张才接得住键盘，否则连着处置一串待办的链子在第一张之后就断了。
+   *
+   * 而"待办从无到有、人正在底部输入框打字"那一幕里它是 false，卡片就不抢焦点。
+   * 🔴 **不能拿 `focused` 代替它**：那一幕里 `focused` 同样会落到第一张卡上。
+   */
+  const handKeyboard = useRef(false);
   /** 焦点那条消失后要接上它的**位置**，所以光记 id 不够——id 这时已经不在列表里了。 */
   const focusAt = useRef(0);
 
@@ -148,21 +158,39 @@ export function App({
     setCardDrafts((all) => pruneDrafts(all, id, alive));
   }, [snap.case?.id, snap.pending, snap.gates]);
 
+  /**
+   * 焦点每落到一处就记一次：在不在待办卡里、以及在哪一张。
+   *
+   * **选中跟着键盘走**，没有另一套只属于待办栏的光标——待办卡上没有键盘导航键，
+   * 「选中的是哪张」除了"键盘在哪张"之外没有别的可靠来源，各记一套只会对不上：
+   * 边框标着甲，而人正在乙里打字。
+   *
+   * **只听 `focusin`**：卡片被处置掉时焦点掉回 body 不触发它，上一次的值因此留得住，
+   * 正好是顺位交接需要的那一下（`handKeyboard` 仍是 true，`focus` 由下面那条顺位 effect 接手）。
+   */
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!isPlainKey(e) || isTyping(e.target)) return;
-      const dir = e.key === 'j' ? 1 : e.key === 'k' ? -1 : 0;
-      if (!dir || !todos.length) return;
-      e.preventDefault();
-      setFocus((f) => {
-        const next = todos.indexOf(f ?? '') + dir;
-        return todos[Math.max(0, Math.min(todos.length - 1, next))] ?? null;
-      });
+    const onFocusIn = (e: FocusEvent) => {
+      const card = (e.target as HTMLElement | null)?.closest?.('.pending,.gate') as HTMLElement | null;
+      handKeyboard.current = !!card;
+      const id = card?.dataset.todo;
+      if (id) setFocus(id);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [todos]);
+    document.addEventListener('focusin', onFocusIn);
+    return () => document.removeEventListener('focusin', onFocusIn);
+  }, []);
+  const grabKeyboard = useCallback(() => handKeyboard.current, []);
 
+  /**
+   * 处置**在途的那几条**，按待办 id 记。
+   *
+   * 🔴 **同一张卡不许发第二遍。** 卡片要等下一次快照才消失，这中间按钮和 ⌘↵ 都还按得动；
+   * 而 main 那侧第一发就把它从 `pending` 上摘了，第二发只会回一个 false——
+   * 于是屏幕上弹出"刚才那条没处置成功"，可它明明成了。双击一下「回填」就能撞上。
+   *
+   * 成功之后**故意一直占着**：卡片正在消失的路上，而 ask/gate 的 id 不会再出现第二次。
+   * 只有失败才放开，那时人确实要能再试一次。
+   */
+  const inFlight = useRef(new Set<string>());
 
   const showExcerpt = async (callId: string, anchor: string | null, title: string) => {
     setExcerpt({ title, body: await window.inquestry.excerpt(callId, anchor) });
@@ -325,19 +353,36 @@ export function App({
   };
 
   /**
-   * 待办与闸门的处置回执。落地了卡片自己会随下一次快照消失，草稿跟着清掉；
+   * 待办与闸门的处置。落地了卡片自己会随下一次快照消失，草稿跟着清掉；
    * 没落地才要说话——而且这时那张卡多半已经不在屏幕上了，所以提示挂在应用级。
    */
-  const disposed = (id: string) => (ok: boolean) => {
-    if (ok) {
-      setCardDrafts((all) => {
-        const next = { ...all };
-        delete next[keyFor(id)];
-        return next;
-      });
-      return;
-    }
-    setNotice('刚才那条没处置成功：可能调查已经切走了，也可能它已经到点自动放行。切回那次调查再看一眼，刚才填的还在。');
+  const dispose = (id: string, run: () => Promise<boolean>) => {
+    if (inFlight.current.has(id)) return;
+    inFlight.current.add(id);
+    /**
+     * 🔴 **失败与抛错走同一条收尾路径。** 只接 fulfilled 的话，IPC 一 reject 这个 id
+     * 就永远留在 `inFlight` 里：卡片还在屏幕上，按钮和 ⌘↵ 却从此被上面那行静默丢掉，
+     * 人连重试都做不到，而且屏幕上没有任何异样。
+     */
+    const failed = (err?: unknown) => {
+      if (err !== undefined) console.error('[app] 处置这条待办的 IPC 没成功', err);
+      inFlight.current.delete(id);
+      setNotice('刚才那条没处置成功：可能调查已经切走了，也可能它已经到点自动放行。切回那次调查再看一眼，刚才填的还在。');
+    };
+    // `Promise.resolve().then(run)` 而不是 `run()`：run 自己同步抛出来的也要落进 `failed`
+    void Promise.resolve()
+      .then(run)
+      .then((ok) => {
+        if (!ok) {
+          failed();
+          return;
+        }
+        setCardDrafts((all) => {
+          const next = { ...all };
+          delete next[keyFor(id)];
+          return next;
+        });
+      }, failed);
   };
 
   /**
@@ -458,7 +503,8 @@ export function App({
                 focused={focus === p.id}
                 draft={cardDraft(p.id)}
                 onDraft={(patch) => patchDraft(p.id, patch)}
-                onSubmit={(r) => void window.inquestry.answerOperator(openCase, r).then(disposed(p.id))}
+                grab={grabKeyboard}
+                onSubmit={(r) => dispose(p.id, () => window.inquestry.answerOperator(openCase, r))}
               />
             ))}
             {snap.gates.map((g) => (
@@ -466,9 +512,10 @@ export function App({
                 key={g.id}
                 gate={g}
                 focused={focus === g.id}
+                grab={grabKeyboard}
                 draft={cardDraft(g.id)}
                 onDraft={(patch) => patchDraft(g.id, patch)}
-                onDecide={(d) => void window.inquestry.decideGate(openCase, d).then(disposed(g.id))}
+                onDecide={(d) => dispose(g.id, () => window.inquestry.decideGate(openCase, d))}
               />
             ))}
           </>

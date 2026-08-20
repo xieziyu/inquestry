@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.js';
 import type { GateDecision, PendingGate } from '../shared/ipc.js';
-import { isPlainKey, isTyping } from './keys.js';
 
 /**
  * ②档闸门卡（ui.md §4）。
@@ -15,12 +14,15 @@ import { isPlainKey, isTyping } from './keys.js';
 export function GateCard({
   gate,
   focused,
+  grab,
   draft,
   onDraft,
   onDecide,
 }: {
   gate: PendingGate;
   focused: boolean;
+  /** 待办栏这会儿该不该拿着键盘（`App` 的 `handKeyboard`）。 */
+  grab: () => boolean;
   /**
    * 改过的参数与写好的拒绝理由**存在 App 那边**，不放这张卡的局部 state。
    * 一换调查这张卡就卸载，写好的理由会跟着没——而它正是拒绝这个动作的全部内容。
@@ -57,32 +59,41 @@ export function GateCard({
     return () => clearInterval(t);
   }, [gate.deadline]);
 
-  useEffect(() => {
-    if (focused) box.current?.scrollIntoView({ block: 'nearest' });
-  }, [focused]);
-
+  /**
+   * 聚焦的是卡本身（`tabIndex={-1}`），不是里面某个输入框——为的是接着能直接 ⌘↵ 放行。
+   *
+   * 🔴 **`focused` 不等于该抢焦点**，两道闸各挡一种情形：
+   *   - `grab()`：`focused` 也会由 App 的顺位 effect 自动落上来（待办从无到有时指向第一条），
+   *     那一下人可能正在底部输入框打字：跟着它聚焦的话光标被夺走，
+   *     而他接着按的 ⌘↵ 会把这道闸门放行掉；
+   *   - 卡里已经有焦点：`focused` 正是跟着焦点走的，点进参数框也会让它成为 focused，
+   *     不挡的话光标会被从参数框拽到卡本身上。
+   */
   useEffect(() => {
     if (!focused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!isPlainKey(e) || isTyping(e.target)) return;
-      const k = e.key.toLowerCase();
-      if (k === 'a') allow();
-      else if (k === 'e') params.current?.focus();
-      else if (k === 'd') {
-        setNote(note ?? '');
-        // 展开与聚焦不在同一帧：输入框这会儿还没挂上
-        setTimeout(() => message.current?.focus(), 0);
-      } else return;
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // 有意每次渲染都重挂：`A` 要放行的是**此刻**输入框里的参数，冻住闭包就会放行旧值
-  });
+    box.current?.scrollIntoView({ block: 'nearest' });
+    if (grab() && !box.current?.contains(document.activeElement)) box.current?.focus({ preventScroll: true });
+  }, [focused, grab]);
+
+  /**
+   * ⌘↵ 归这张卡自己，**不挂 window 监听**：焦点在卡内哪儿都算数，在卡外就按不到——
+   * 多张待办同时挂着时不必再对账"这一下是谁的"。闭包每次渲染都是新的，
+   * 也就没有了「放行的是上一次渲染时的参数」那个坑。
+   *
+   * 🔴 **按落点属于哪个动作分派，不能写成「不是留话栏就当放行」。** 拒绝区不止那一个
+   * textarea——「确认拒绝」钮上也印着 ⌘↵，从理由栏 Tab 过去再按，那一下会**反过来放行**
+   * 这次调用，而它多半正是一条要动生产的写操作。拒绝区整块标 `data-deny`。
+   */
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    if ((e.target as HTMLElement | null)?.closest?.('[data-deny]')) deny();
+    else allow();
+  };
 
   const total = Math.max(1, (gate.deadline ?? gate.askedAt) - gate.askedAt);
   return (
-    <section className={`gate ${focused ? 'focus' : ''}`} ref={box}>
+    <section className={`gate ${focused ? 'focus' : ''}`} ref={box} tabIndex={-1} data-todo={gate.id} onKeyDown={onKey}>
       <div className="head">
         <span className="tag">要不要放行</span>
         <span className="tool">{gate.toolName}</span>
@@ -107,30 +118,18 @@ export function GateCard({
         value={text}
         rows={Math.min(10, text.split('\n').length + 1)}
         onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) allow();
-          // 光标在这儿时单字母键归输入框所有：Esc 把键盘交还给待办栏
-          if (e.key === 'Escape') e.currentTarget.blur();
-        }}
       />
       {invalid && <p className="err">参数不是合法的 JSON 对象，改回去或修好才能放行。</p>}
 
       {note !== null && (
         <textarea
           className="note"
+          data-deny
           ref={message}
           value={note}
           rows={2}
           placeholder="告诉它为什么不行、该换成什么——这句会原样进 turn，不中断当前轮"
           onChange={(e) => setNote(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) deny();
-            // 收起留话栏顺带把键盘交还给待办栏，不然收起来了焦点还在原地
-            if (e.key === 'Escape') {
-              setNote(null);
-              e.currentTarget.blur();
-            }
-          }}
         />
       )}
 
@@ -138,17 +137,17 @@ export function GateCard({
         {note === null ? (
           <button className="ghost" onClick={() => { setNote(''); setTimeout(() => message.current?.focus(), 0); }}>
             <Icon name="deny" />
-            拒绝并留话 <small>D</small>
+            拒绝并留话
           </button>
         ) : (
-          <button className="ghost bad" disabled={!note.trim()} onClick={deny}>
+          <button className="ghost bad" data-deny disabled={!note.trim()} onClick={deny}>
             <Icon name="deny" />
             确认拒绝 <small>⌘↵</small>
           </button>
         )}
         <button className="primary" disabled={invalid} onClick={allow}>
           <Icon name={changed ? 'pencil' : 'check'} />
-          {changed ? '改写并放行' : '放行'} <small>A</small>
+          {changed ? '改写并放行' : '放行'} <small>⌘↵</small>
         </button>
       </div>
     </section>

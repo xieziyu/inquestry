@@ -606,7 +606,7 @@ export type ExportPayload = { input: ReportInput; generatedAt: string };
  * 逼人敲一遍只会换来一句空话。
  */
 export type OperatorReply =
-  | { id: string; action: 'answer'; statement: string; answer: string; executedAt?: string }
+  | { id: string; action: 'answer'; answer: string }
   | { id: string; action: 'decline'; reason?: string };
 
 export const EMPTY_SNAPSHOT: Snapshot = {
