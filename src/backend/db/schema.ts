@@ -110,9 +110,9 @@ CREATE TABLE IF NOT EXISTS steps (
   shape              TEXT CHECK (shape IN ('sequence','state','chain','distribution','open')),
   verdict_text       TEXT,
   verdict_confidence REAL CHECK (verdict_confidence BETWEEN 0 AND 1),
-  -- 报告四栏里唯一由 agent 生成的那一块（overview §6.1）。**挂 step 不挂 case**：
+  -- 报告里唯一由 agent 生成的那一块：未决型的「下一步怎么查」（overview §6.1）。**挂 step 不挂 case**：
   -- 建议是基于这一步的判断给的，判断被推翻时它得跟着失效，否则报告里会留下一条
-  -- 没有出处的修复建议。报告取哪一条见 queries.ts 的 remediation 选择器
+  -- 没有出处的建议。只有 leftover 步上的进报告，见 queries.ts 的 remediation 选择器
   remediation        TEXT,
   -- \`converged\` 只给子 agent 泳道的兜底步：它没有命题，所以不可能有结论，
   -- 而报告那几栏（根因 / 遗留问题 / 被推翻）都按具体 status 取，它因此哪一栏都不进。

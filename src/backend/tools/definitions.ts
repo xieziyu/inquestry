@@ -58,10 +58,10 @@ export const TOOL_DEFS: ToolDef[] = [
     description:
       '给当前方向下结论并收口。结论必须挂上证据：证据的原文已经在库里了，' +
       '你只要指出「在第几次调用的哪几行」以及「它描述的事件何时发生」。' +
-      '这一步若给出了整个调查的根因，顺手填 shape（报告按它装块）与 remediation（该怎么修）；' +
+      '这一步若给出了整个调查的根因，顺手填 shape（报告按它装块）；' +
       '若根因是「某个东西一直就是错的」，再补上 expected / actual 这一对。' +
-      '同一步再 close 一次（比如按提示补证据、或只补 remediation）时，' +
-      '这四项不重填就保持原样，要改就重新填。',
+      '同一步再 close 一次（比如按提示补证据）时，' +
+      'shape / expected / actual / remediation 不重填就保持原样，要改就重新填。',
     shape: closeStepShape,
     async run(store, args) {
       const a = args as unknown as CloseStepArgs;

@@ -56,8 +56,8 @@ const bareBars = (row: string) => [...row.matchAll(/(\\*)\|/g)].filter((m) => m[
 
 const detailsOf = (text: string) => /<details>[\s\S]*?<\/details>/.exec(text)?.[0] ?? '';
 /**
- * 取某一节的正文。**必须按节取**：整篇里搜「无。」的话，另一个空着的节
- * （修复建议一直是空的）会替这一条作答，于是"整节留白"这个错法照旧通过。
+ * 取某一节的正文。**必须按节取**：整篇里搜「无。」的话，随便哪个别的空着的节
+ * 都会替这一条作答，于是"整节留白"这个错法照旧通过。
  */
 const sectionOf = (text: string, title: string) =>
   text.split(`## ${title}`)[1]?.split(/\n## |\n---/)[0] ?? '';
@@ -428,25 +428,31 @@ check(
 );
 
 check(
-  '修复建议那一节印的是内容，不是恒为「无」',
-  sectionOf(md(), '修复建议').includes(FIX_TEXT.replace(/([*[\]])/g, '\\$1')),
+  '已决型不装「下一步怎么查」这一节',
+  !md().includes('## 下一步怎么查') && !md().includes('修复建议'),
+  '查出根因的报告不留修复建议——方案由动手修的人评估；这一节漏砍的话，报告里会躺一段排查 agent 没有语境写的方案',
+);
+
+check(
+  '未决型的「下一步怎么查」印的是内容，不是恒为「无」',
+  sectionOf(md({ shape: 'open' }), '下一步怎么查').includes(FIX_TEXT.replace(/([*[\]])/g, '\\$1')),
   '这一栏一度没有写入方，于是"整节留白"这个错法在整篇里搜「无。」的检查下照旧通过',
 );
 
 check(
-  '空的修复建议写「无」，整节照旧在',
+  '空的「下一步怎么查」写「无」，整节照旧在',
   (() => {
-    const out = md({ report: { ...report, remediation: null } });
-    return out.includes('## 修复建议') && sectionOf(out, '修复建议').includes('无。');
+    const out = md({ shape: 'open', report: { ...report, remediation: null } });
+    return out.includes('## 下一步怎么查') && sectionOf(out, '下一步怎么查').includes('无。');
   })(),
   '与遗留问题同一条理由：整节消失读起来像"没这回事"',
 );
 
 check(
-  '修复建议同样过转义那道门',
+  '「下一步怎么查」同样过转义那道门',
   (() => {
-    const out = md({ report: { ...report, remediation: EVIL } });
-    const body = sectionOf(out, '修复建议')
+    const out = md({ shape: 'open', report: { ...report, remediation: EVIL } });
+    const body = sectionOf(out, '下一步怎么查')
       .split('\n')
       .filter((l) => l.trim())
       .join('\n')

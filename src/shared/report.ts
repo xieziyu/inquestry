@@ -111,7 +111,7 @@ export type ReportPlan = {
    *
    * 这不是异常路径：一次只有一条已证实结论的调查，`suggestVerdictShape()` 会推 `chain`，
    * 而五种形态的主体这时一个都装不出来（时间线不足两条、没有应然实然、链不足两环）。
-   * 那样的报告仍旧是完整的——根因加通用四块，只是没有"重点"这一块。
+   * 那样的报告仍旧是完整的——根因加通用三块，只是没有"重点"这一块。
    */
   mainAssembled: boolean;
   frozen: boolean;
@@ -147,7 +147,7 @@ const TITLES: Record<string, string> = {
   impact: '影响面',
   path: '排查路径',
   leftover: '遗留问题',
-  fix: '修复建议',
+  fix: '下一步怎么查',
 };
 
 /**
@@ -206,15 +206,19 @@ export function reportPlan(input: ReportInput): ReportPlan {
 
   const body = mainBody(input);
   sections.push(...body);
-  // 四块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留问题提成了主体，
+  // 通用三块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留问题提成了主体，
   // 于是它在这儿会撞上——**同一节不装两遍**，位置以先出现的那次为准
   sections.push(
     sec('impact', { kind: 'prose', text: report.impact }),
     sec('path', { kind: 'path', rows: input.steps }),
     sec('leftover', { kind: 'notes', rows: report.leftovers }),
-    // 四栏里唯一没有投影来源的一块：`close_step` 的 `remediation`，取最新一条仍然成立的声明
-    sec('fix', { kind: 'prose', text: report.remediation }),
   );
+  // 「下一步怎么查」只进未决型（归档强制未决，一并覆盖）：查出根因的报告不留修复建议——
+  // 排查 agent 没有修复语境，一条自信但偏了的方案会锚定动手修的人，方案该由修的人自己评估。
+  // 它是报告里唯一由 agent 生成的一块，来源是 leftover 步的 remediation（queries.effectiveRemediation）
+  if (input.shape === 'open') {
+    sections.push(sec('fix', { kind: 'prose', text: report.remediation }));
+  }
 
   return {
     shape: input.shape,
@@ -232,7 +236,7 @@ export function reportPlan(input: ReportInput): ReportPlan {
 }
 
 /**
- * 主体块的 id：形态挑的就是这几个之一。`leftover` 不在其中——它是通用四块之一，
+ * 主体块的 id：形态挑的就是这几个之一。`leftover` 不在其中——它是通用三块之一，
  * 未决型只是把它提前，不需要门槛。
  */
 type BodyId = 'timeline' | 'contrast' | 'chain' | 'split' | 'matrix';
@@ -288,7 +292,7 @@ const ABSENT_WHY: Record<BodyId, string> = {
 function mainBody(input: ReportInput): ReportSection[] {
   const main = MAIN_BLOCKS[input.shape];
   const out: ReportSection[] = main.map((id) => block(id, input) ?? absent(id));
-  // 未决型把遗留问题一起提成主体；它没有门槛，通用四块里那一份由 `dedupe` 收掉
+  // 未决型把遗留问题一起提成主体；它没有门槛，通用三块里那一份由 `dedupe` 收掉
   if (input.shape === 'open') out.push(leftoverSection(input));
   for (const id of BODY_ORDER) {
     // 已经在主体里的那几块由 `dedupe` 收掉，不必在这儿再判一次
@@ -459,6 +463,7 @@ export type TailSummary = {
   /** 定稿闸还差哪几步。分母恒为二，是 §6.2 定死的那两个固定动作，不是"调查进度"。 */
   gaps: ClosingStepKind[];
   leftovers: number;
+  /** 未决型才有的「下一步怎么查」栏有没有内容；别的形态没有这一栏，卡上也不印这一格。 */
   hasRemediation: boolean;
 };
 
@@ -517,7 +522,7 @@ function whyNoRootCause(input: ReportInput): string {
   return `没有一条已证实的结论能当根因，根因那一栏整个不印；报告其余部分照旧按${SHAPE_COPY[input.shape].label}装。`;
 }
 
-/** 先出现的那次为准：主体块的位置是形态定的，通用四块只是兜底补齐。 */
+/** 先出现的那次为准：主体块的位置是形态定的，通用三块只是兜底补齐。 */
 function dedupe(sections: ReportSection[]): ReportSection[] {
   const seen = new Set<string>();
   return sections.filter((s) => !seen.has(s.id) && (seen.add(s.id), true));

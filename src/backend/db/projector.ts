@@ -118,7 +118,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       const p = ev.payload;
       // 四个可选字段走 COALESCE：**同一步会被 close 第二次**——我们自己的 warning 就写着
       // "请补 evidence 后重新 close"，而那一次多半只补证据。把"没再填"解释成"清空"的话，
-      // 第一次填好的形态、应然实然与修复建议会被静默抹掉，报告主体随之空掉，重放还会一模一样地复现。
+      // 第一次填好的形态、应然实然与 remediation 会被静默抹掉，报告主体随之空掉，重放还会一模一样地复现。
       // 要改就再填一次（填了照旧覆盖）。与 `toolcall.gated` 的 `input_json` 同一个语义。
       //
       // 绑值仍一律 `?? null`：better-sqlite3 对 undefined 的处理不能指望，而 COALESCE

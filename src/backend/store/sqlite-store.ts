@@ -270,7 +270,7 @@ export const isVerdictShape = (v: unknown): v is VerdictShape =>
  * 🔴 **兜底兜的是形态，不是"这份报告一定有主体"。** 一次只有一条已证实结论的调查
  * （没时间戳、没应然实然）会推到 `chain`，而链要两环才成立（`shared/report.ts` 的 `block()`）——
  * 五种主体这时一个都装不出来。**这不是缺陷，是那种调查本来就没有"重点"这一块**：
- * 报告仍旧是根因加通用四块。所以别在这儿为了"凑一个装得出来的"去改推断，
+ * 报告仍旧是根因加通用三块。所以别在这儿为了"凑一个装得出来的"去改推断，
  * 那只会让形态说一件数据不支持的事；报告那侧靠 `mainAssembled` 照实说，纸头不会承诺一块不在的东西。
  */
 export function suggestVerdictShape(db: Db, caseId: string): ShapeSuggestion {
@@ -814,15 +814,27 @@ export function createInvestigationSession(
               `（置信度 ${root.confidence}），所以这一条目前不生效。`,
           );
         }
-        // 修复建议是**报告四栏里唯一没有投影来源的那一栏**，不填就永远是「无」。
-        // 只在这一步真的成了根因、而全案一条建议都还没有时说一次：说早了（还没根因）
-        // 建议无从谈起，逐条都说则会变成每次 close 都挨一句的噪声。
-        // 只提醒不阻挡——它不是强制 step（那要动 kind 的 CHECK），归档的半程报告
-        // 少这一栏也是诚实的
-        if (root?.step_id === args.stepId && !sections.remediation) {
+      }
+      // 「下一步怎么查」只认 leftover 步（queries.effectiveRemediation）：填错地方不报错的话，
+      // 这段文字会安静地消失——所以在这儿当场说一句。查出根因的报告压根没有这一节，
+      // 修复方案由动手修的人评估，排查 agent 不该替他写。
+      if (blankToUndefined(args.remediation) !== undefined && step.kind !== 'leftover') {
+        warnings.push(
+          'remediation 只进未决型报告的「下一步怎么查」，且只认汇总遗留问题（kind="leftover"）' +
+            '那一步——这一步不是，这段文字不会出现在报告里。查出了根因就不用写修复建议，' +
+            '方案由动手修的人评估。',
+        );
+      }
+      // 未决型的「下一步怎么查」是报告里唯一由 agent 生成的一块。只在收 leftover 步、
+      // 而全案既没有根因也没有建议时说一次：那正是这一栏存在的场景，也是最该补的时刻。
+      // 只提醒不阻挡——它不进定稿闸，归档的半程报告少这一栏也是诚实的
+      if (step.kind === 'leftover') {
+        const sections = reportSections(db, ctx.caseId);
+        if (!sections.rootCause && !sections.remediation) {
           warnings.push(
-            '报告的「修复建议」那一栏目前是空的，而它是四栏里唯一没有投影来源的一块。' +
-              '这一步已经是报告认定的根因，重新 close 它并补上 remediation 即可（只填这一项也行）。',
+            '一条已证实的根因都没有，报告会按未决型装，而「下一步怎么查」那一栏还空着——' +
+              '它是报告里唯一由你生成的一块。重新 close 这一步补上 remediation' +
+              '（只填这一项也行），写「下一步该怎么查、先加哪些观测」。',
           );
         }
       }

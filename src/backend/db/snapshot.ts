@@ -241,8 +241,8 @@ export function buildSnapshot(
           }
         : null,
       impact: rep.impact?.verdict_text ?? null,
-      // 修复建议**不跟着根因走**（选择器见 queries.effectiveRemediation）：未决型与归档的
-      // 半程报告都没有根因，而它们恰恰最该留下"下一步该怎么查"
+      // 「下一步怎么查」：只从 leftover 步取（选择器见 queries.effectiveRemediation），
+      // 且只有未决型报告装这一节——查出根因的报告不留修复建议，方案由动手修的人评估
       remediation: rep.remediation?.text.trim() || null,
       // 应然实然跟着根因那一步走：根因换人了，这对也跟着换，不会留下一段没有出处的对照
       // 纯空白按没有算，否则报告里那一栏是视觉上的空白，而不是"没有这一栏"

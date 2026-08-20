@@ -1,6 +1,6 @@
 /**
  * 两条时间线与报告章节的投影查询。
- * 报告的每一栏都对应下面某一条 SQL——agent 只写「修复建议」，其余是投影（D17）。
+ * 报告的每一栏都对应下面某一条 SQL——agent 只写未决型的「下一步怎么查」，其余是投影（D17）。
  */
 
 import type { Db } from './database.js';
@@ -180,7 +180,7 @@ export type ReportSections = {
       }
     | undefined;
   impact: { verdict_text: string } | undefined;
-  /** 修复建议那一栏，见 `effectiveRemediation`。 */
+  /** 「下一步怎么查」那一栏，见 `effectiveRemediation`。 */
   remediation: { step_id: string; text: string } | undefined;
   leftovers: { step_id: string; direction: string | null; verdict_text: string }[];
   refuted: { step_id: string; direction: string | null; verdict_text: string; superseded_by: string | null }[];
@@ -230,23 +230,24 @@ export function timestampedEvidenceCount(db: Db, caseId: string): number {
 }
 
 /**
- * 报告的修复建议那一栏（overview §6.1）：**最新一条仍然成立的声明**。
+ * 报告「下一步怎么查」那一栏（overview §6.1）：**leftover 步上最新一条仍然成立的声明**。
  *
- * 它是四栏里唯一由 agent 生成的内容，所以只能从 step 上取——`close_step` 的 `remediation`
- * 挂在给出判断的那一步，建议是基于那个判断给的。
+ * 它是报告里唯一由 agent 生成的内容，所以只能从 step 上取——`close_step` 的 `remediation`
+ * 挂在汇总遗留问题的那一步上，建议是基于「还有什么没查清」给的。
  *
- * **与根因不共用一条选择器，是有意的**（那条纪律说的是"形态必须与根因取自同一步"，
- * 因为形态描述的正是那条根因）。这一栏不能跟着根因走：未决型报告压根没有根因，
- * 而"没查出来，下一步先加这几个观测"恰恰是那种调查最该留下的东西——跟着根因走的话，
- * 归档的半程报告与整个未决型都会永远少一栏，正是这次要修的那个空。
+ * **只认 kind='leftover'，且这一节只进未决型报告**（装不装在 shared/report.ts 判）：
+ * 查出根因的调查不再留修复建议——排查 agent 没有修复语境，一条自信但偏了的方案会锚定
+ * 动手修的人；而「没查出来，下一步先加哪些观测」只有排查过的它给得出来。不限 kind 的话，
+ * 根因步上残留的修复方案会顶掉 leftover 步上的续查方向（case_1baca6bb 真发生过）。
  *
  * 排除 `superseded` 与 `refuted`：前者的判断被后来的 step 顶掉了，后者的假设自己被否掉了，
- * 两种情况下那条建议都失去了出处。留着它报告里会躺一条基于作废判断的修复方案，且毫无报错。
+ * 两种情况下那条建议都失去了出处。留着它报告里会躺一条基于作废判断的建议，且毫无报错。
  */
 export function effectiveRemediation(db: Db, caseId: string): { step_id: string; text: string } | undefined {
   const row = db
     .prepare(
       `SELECT s.id AS step_id, s.remediation AS text ${STEP_BASE}
+         AND s.kind='leftover'
          AND s.remediation IS NOT NULL AND TRIM(s.remediation) <> ''
          AND s.status NOT IN ('superseded','refuted')
        ORDER BY ${CHRONO_DESC} LIMIT 1`,

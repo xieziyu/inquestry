@@ -7,7 +7,7 @@ import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
 /**
  * 7：`cases.incident_date_source` —— 基准日期是建单猜的还是被确认过的。
  *    默认 `'intake'` 就是老库的真实情况：那时还没有 `case.timebase_set` 这条事件。
- * 6：`steps.remediation` —— 修复建议的写入方（报告四栏最后补齐的那一栏）。
+ * 6：`steps.remediation` —— 修复建议的写入方（后来收窄成未决型的「下一步怎么查」，只认 leftover 步）。
  *    **第一级真正走重放迁移的升级**：只加一个 nullable 列，老事件形状没动过。
  * 5：`tool_calls.gate_decision` 多一档 `auto_deny`（分类器/规则拒的，人没被问到）
  *    + `chat_lines` 表与事件 `chat.appended` —— 对话带落库，它是唯一重建不出来的东西。
