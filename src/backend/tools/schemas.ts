@@ -8,12 +8,50 @@
 import { z } from 'zod';
 import { DECLARABLE_SHAPES, METRIC_BOUNDS, METRICS_MAX, ROSTER_MAX } from '../../shared/ipc.js';
 
+/**
+ * `callRef` 认的几种写法，序号从 1 起：`[call #2]` / `call #2` / `#2` / `2`（大小写与空白宽容）。
+ *
+ * **`[call #2]` 必须收**：工具正文的行内前缀就是这个格式（`case-runner.ts` 的 PostToolUse），
+ * 而提示词让 agent 照抄它——只收 `#2` 的话，一条完全合规的引用会在 zod 那层就被打回去。
+ *
+ * 方括号配不配对不较真（`2]` 也放行）：那一档没有第二种读法，为它退回一整批不值得。
+ * 真正要挡住的是**歧义与越界**，见 `parseCallRef`。
+ */
+export const CALL_REF_RE = /^\[?\s*(?:call\s*)?#?\s*([1-9]\d*)\s*\]?$/i;
+
+/**
+ * `callRef` → 序号；认不出来回 null（调用方据此整批退回这次 close）。
+ *
+ * 🔴 **必须整串匹配，不能"从串里抽个数字出来"。** 抽数字的写法（`/\d+/`）把 `#0` 读成 0、
+ * 把 `#-1` 读成 1——**一个无效引用被解析成一次真实调用**，证据于是挂到了它根本没查过的地方，
+ * 而"有坏 ref 就整批退回"那道闸对它完全不响。序号从 1 起也是同一件事：0 不是编号。
+ *
+ * 🔴 **`isSafeInteger` 不能省。** 一串足够长的数字过得了正则，`Number` 之后是 Infinity 或一个
+ * 精度已经丢掉的数，绑给 SQLite 的 OFFSET 会**抛 datatype mismatch**——于是一个坏引用不再是
+ * 一次"整批退回"，而是一个异常，agent 拿到的是崩溃而不是那句"改好 callRef 再重发"。
+ *
+ * 上界不在这儿判（这里不知道那一步有几次调用），由调用方按自己的记录兜住。
+ */
+export function parseCallRef(ref: string): number | null {
+  const m = CALL_REF_RE.exec(String(ref).trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isSafeInteger(n) && n >= 1 ? n : null;
+}
+
 /** 证据引用。`callRef` 用 step 内的调用序号而非 toolUseId —— 让 agent 抄 uuid 不可靠。 */
 export const evidenceItemShape = {
   callRef: z
     .string()
+    // 第一道闸而已：**store 那侧的严格校验不能省**——schema 绕得过去（假 store、重放、别的调用方），
+    // 而落库那一步是最后一道
+    .regex(
+      CALL_REF_RE,
+      'callRef 是本 step 内第几次工具调用（序号从 1 起）：照抄正文开头的 "[call #2]"，或只写 "#2"',
+    )
     .describe(
-      '这条证据来自本 step 内的第几次工具调用，写 "#1" / "#2"。工具返回的正文开头会标出它自己的编号。',
+      '这条证据来自本 step 内的第几次工具调用。工具返回的正文开头会标出它自己的编号，' +
+        '照抄那个 "[call #2]" 或只写 "#2" 都行（序号从 1 起）。',
     ),
   anchor: z
     .string()
@@ -205,7 +243,14 @@ export const closeStepShape = {
     ),
   evidence: z
     .array(z.object(evidenceItemShape))
-    .describe('结论所依据的证据。status 非 inconclusive 时必须至少一条，否则这个结论无法被复核。'),
+    .describe(
+      '结论所依据的证据。status 非 inconclusive 时必须至少一条，否则这个结论无法被复核。' +
+        '**这是这一步证据的全量，不是增量**：同一步再 close 一次时，这份数组会把上一批整个换掉，' +
+        '上次那些还要留下的必须一并重发（`callRef` 是 step 内的调用序号，原样再发一次就落得回去）。' +
+        '只补别的字段（比如 remediation）那一次给 `[]`，上一批照旧留着。' +
+        '**有一条 callRef 认不出来，这次 close 就整个退回**：一条都不落、这一步原样不动，' +
+        '改好之后整批重发（落一半等于把上一批换成半批）。',
+    ),
 };
 
 export const askOperatorShape = {

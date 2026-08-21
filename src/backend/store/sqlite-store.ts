@@ -14,12 +14,13 @@ import { effectiveRoster, effectiveStep, reportSections, timestampedEvidenceCoun
 import { locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
 import { isTimeOnly, parseOccurredAt, type TimeBase, type TimeBaseSource } from '../db/timebase.js';
 import type { InvestigationStore } from '../tools/definitions.js';
-import type {
-  AskOperatorArgs,
-  CloseStepArgs,
-  MetricArg,
-  OpenStepArgs,
-  RosterArg,
+import {
+  parseCallRef,
+  type AskOperatorArgs,
+  type CloseStepArgs,
+  type MetricArg,
+  type OpenStepArgs,
+  type RosterArg,
 } from '../tools/schemas.js';
 import {
   capRoster,
@@ -547,11 +548,18 @@ export function sweepZombies(
 }
 
 function emitTo(db: Db, ctx: CaseContext, sessionId: string | null, ev: DomainEvent) {
-  const deps: ProjectorDeps = { blobDir: ctx.blobDir, caseId: ctx.caseId };
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`,
-    ).run(ctx.caseId, sessionId, ev.type, JSON.stringify(ev.payload), ctx.now());
+    const { lastInsertRowid } = db
+      .prepare(`INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`)
+      .run(ctx.caseId, sessionId, ev.type, JSON.stringify(ev.payload), ctx.now());
+    // `events.seq` 是 INTEGER PRIMARY KEY，所以这就是刚落下那条的 seq。**投影要认它**：
+    // 证据分批全靠 seq（projector 的 `replaceEvidenceBatch`），而重放那侧读的是同一列——
+    // 这儿另算一个数的话，写入与重放会投出两种结果，且只有重投时才看得出来
+    const deps: ProjectorDeps = {
+      blobDir: ctx.blobDir,
+      caseId: ctx.caseId,
+      seq: Number(lastInsertRowid),
+    };
     applyEvent(db, ev, deps);
   })();
 }
@@ -639,10 +647,16 @@ export function createInvestigationSession(
     ((db.prepare(`SELECT MAX(ordinal) m FROM steps WHERE session_id=?`).get(ctx.sessionId) as { m: number | null })
       .m ?? 0) + 1;
 
-  /** `#N` → callId：按 step 内 started_at 顺序取第 N 个，不依赖内存状态，重启后照样解析。 */
+  /**
+   * `#N` → callId：按 step 内 started_at 顺序取第 N 个，不依赖内存状态，重启后照样解析。
+   *
+   * 格式由 `parseCallRef` 定死（写入侧与 spike 的假 store 共用那一个），上界由这条查询自己兜住：
+   * 取不到行就是 undefined，调用方据此整批退回。**认不出来一律 undefined，不猜**——
+   * 猜出来的那次调用是 agent 没查过的，证据挂过去之后没有任何东西看得出来。
+   */
   function resolveCallRef(stepId: string, ref: string) {
-    const n = Number(String(ref).match(/\d+/)?.[0] ?? NaN);
-    if (!Number.isFinite(n)) return undefined;
+    const n = parseCallRef(ref);
+    if (n === null) return undefined;
     return db
       .prepare(
         `SELECT tc.id, tc.tool_name, tc.output_sha256, b.line_count
@@ -695,7 +709,7 @@ export function createInvestigationSession(
     async closeStep(args: CloseStepArgs) {
       const warnings: string[] = [];
       const step = db
-        .prepare(`SELECT id, kind, expected, actual, shape, remediation FROM steps WHERE id=?`)
+        .prepare(`SELECT id, kind, expected, actual, shape, remediation, closed_seq FROM steps WHERE id=?`)
         .get(args.stepId) as
         | {
             id: string;
@@ -704,9 +718,22 @@ export function createInvestigationSession(
             actual: string | null;
             shape: string | null;
             remediation: string | null;
+            closed_seq: number | null;
           }
         | undefined;
-      if (!step) return { warnings: [`未知 stepId ${args.stepId}`] };
+      if (!step) return { rejected: true, warnings: [`未知 stepId ${args.stepId}`] };
+
+      // 这一步现在躺着哪些证据，**在这一批落进去之前**读：`evidence` 是全量，投影那侧会按
+      // `closed_seq` 这条边界把上一批删掉，读晚了就什么都看不见了。
+      // 下面两处都要它：一处判"这个结论到底有没有证据"，一处报"这次替换掉了哪几条"
+      const priorEvidence = db
+        .prepare(`SELECT claim, seq FROM evidence_refs WHERE step_id=?`)
+        .all(args.stepId) as { claim: string; seq: number | null }[];
+      const closedSeq = step.closed_seq;
+      const prevClaims =
+        closedSeq === null
+          ? []
+          : priorEvidence.filter((r) => r.seq !== null && r.seq < closedSeq).map((r) => r.claim);
 
       // 产出物归一**只做一次，就在这儿**：事件里落的是归一后的串，重放不再算一遍
       // （见 events.ts 那段）。算法哪天改了，老事件不该跟着变形
@@ -726,7 +753,10 @@ export function createInvestigationSession(
         remediation: blankToUndefined(args.remediation) ?? step.remediation ?? undefined,
       };
 
-      if (args.status !== 'inconclusive' && args.evidence.length === 0) {
+      // **按合成之后的最终值判**（同上一段）：只补 remediation 那一次传的是 `evidence: []`，
+      // 而那一步的证据上次就落好了、这次一条不删——照本次入参判的话，
+      // 我们会对着一个证据齐全的结论说它"没有任何证据"，而 agent 唯一的出路是把整批再发一遍
+      if (args.status !== 'inconclusive' && args.evidence.length === 0 && priorEvidence.length === 0) {
         warnings.push('这个结论没有任何证据，无法被复核。请补 evidence 后重新 close。');
       }
       warnings.push(...shapeWarnings(final, args.status, step.kind));
@@ -740,91 +770,145 @@ export function createInvestigationSession(
       // 一步里可能有好几条纯时分秒的证据，提醒只发一次：同一句话重复几遍，
       // 剩下那几条真正要 agent 动手的 warning 就被顶下去了
       let guessedBase = false;
-      for (const e of args.evidence) {
-        const call = resolveCallRef(args.stepId, e.callRef);
-        if (!call) {
-          warnings.push(`callRef ${e.callRef} 在本 step 内不存在。`);
-          continue;
+      const attached: string[] = [];
+
+      /**
+       * 🔴 **整批先解析，有一条 callRef 认不出来就整次 close 什么都不落。**
+       *
+       * 一度是「跳过这一条、其余照落」——那在追加语义下只丢一条，而 `evidence` 改成全量替换之后，
+       * 落一半等于**把上一批换成这次恰好验证通过的那个子集**：一个 callRef 手误就把旧证据抹了。
+       * 事件确实还在 `events` 里，但 agent 手上没有它，恢复不出来。所以这一批要么全进要么全不进。
+       *
+       * 坏的**一次列全**：只报第一条的话，五条的批要来回改五次。
+       */
+      const resolved = args.evidence.map((e) => ({ e, call: resolveCallRef(args.stepId, e.callRef) }));
+      const badRefs = resolved.filter((r) => !r.call).map((r) => r.e.callRef);
+      if (badRefs.length) {
+        const calls = (
+          db.prepare(`SELECT COUNT(*) c FROM tool_calls WHERE step_id=?`).get(args.stepId) as { c: number }
+        ).c;
+        return {
+          rejected: true,
+          warnings: [
+            `callRef ${badRefs.join(' / ')} 在本 step 内不存在` +
+              `（${calls ? `本步共 ${calls} 次调用，写 #1 到 #${calls}` : '本步一次工具调用都还没有'}）。` +
+              `evidence 是全量，落一半等于把上一批证据换成这次通过的那半批——所以整次退回，` +
+              `这一步原有的证据与结论原样留着。改好 callRef 之后把整批证据重发一次。`,
+          ],
+        };
+      }
+      // 上面已经把带坏 ref 的整批退回了，所以到这里每一条都解析得出调用
+      const batch = resolved as { e: (typeof resolved)[number]['e']; call: NonNullable<(typeof resolved)[number]['call']> }[];
+
+      /**
+       * 🔴 **这一批的每一条事件必须同进同出。**一条一条各提交各的话，中途任何一次失败
+       * （磁盘、约束、进程被掐）都会留下**半批已落库、`closed_seq` 还停在上一批**的局面——
+       * 而重试时 `replaceEvidenceBatch` 只删 `seq < 上次 closed_seq` 的行，那半批 `seq` 更大，
+       * 于是它们**永远删不掉**，与后来完整重发的那一批并排躺着。全量替换的契约就此破在一次偶发上，
+       * 且没有任何东西看得出来。
+       *
+       * `emitTo` 内层那个事务照旧（better-sqlite3 的嵌套事务走 savepoint）。
+       * **回调必须是同步的**：blob 读取与锚点校正本来就是同步的，一起放进来没问题，
+       * 但这里面一个 await 都不能有。事务外只留纯计算与那几条读。
+       */
+      db.transaction(() => {
+        for (const { e, call } of batch) {
+          const occurred = parseOccurredAt(e.occurredAt, base);
+          // 纯时分秒的串把整个基准都用掉了，而基准还只是建单那一刻按本机当天猜的。
+          // 猜错了不会有任何报错，只让这条证据整体挪几天——所以要在**落进去的这一刻**说，
+          // 事后没有任何东西看得出来。给的出路是写全日期：那一档压根不经过基准
+          if (isTimeOnly(e.occurredAt) && base.source === 'intake') guessedBase = true;
+          // 只有「自带时间戳的数据源 + 本次确实有命中」才强制 occurredAt：
+          // 一刀切会逼 agent 拿查询执行时间凑数，假时间直接进报告主体（tools.md §3）
+          const hasHits = (call.line_count ?? 0) > 1;
+          if (ctx.isTimestampedSource(call.tool_name) && hasHits && !occurred.ms) {
+            warnings.push(
+              e.occurredAt
+                ? `证据「${e.claim.slice(0, 16)}…」的 occurredAt "${e.occurredAt}" 解析不了。`
+                : `证据「${e.claim.slice(0, 16)}…」来自 ${call.tool_name} 却缺 occurredAt，系统时间线会断在这里。`,
+            );
+          }
+          // 行号只是提示：工具输出常自带另一套编号，直接按物理行高亮会悄悄指错行（blobs.ts）
+          const blobText = call.output_sha256 ? readBlobText(ctx.blobDir, call.output_sha256) : null;
+          const located = blobText ? locateEvidence(blobText, e.anchor, e.occurredAt) : null;
+          if (located?.corrected) {
+            warnings.push(`证据「${e.claim.slice(0, 16)}…」的行号已按内容校正为 ${located.anchor}。`);
+          }
+
+          emit({
+            type: 'evidence.attached',
+            payload: {
+              evidenceId: ctx.newId('ev'),
+              stepId: args.stepId,
+              callId: call.id,
+              anchorKind: anchorKind(e.anchor),
+              anchor: e.anchor ?? null,
+              anchorResolved: located?.anchor ?? e.anchor ?? null,
+              claim: e.claim,
+              observedAt: ctx.now(),
+              occurredAtMs: occurred.ms,
+              occurredAtRaw: e.occurredAt ?? null,
+              occurredSource: call.tool_name.includes('ask_operator') ? 'operator' : 'agent',
+              actor: e.actor ?? null,
+            },
+          });
+          attached.push(e.claim);
         }
-        const occurred = parseOccurredAt(e.occurredAt, base);
-        // 纯时分秒的串把整个基准都用掉了，而基准还只是建单那一刻按本机当天猜的。
-        // 猜错了不会有任何报错，只让这条证据整体挪几天——所以要在**落进去的这一刻**说，
-        // 事后没有任何东西看得出来。给的出路是写全日期：那一档压根不经过基准
-        if (isTimeOnly(e.occurredAt) && base.source === 'intake') guessedBase = true;
-        // 只有「自带时间戳的数据源 + 本次确实有命中」才强制 occurredAt：
-        // 一刀切会逼 agent 拿查询执行时间凑数，假时间直接进报告主体（tools.md §3）
-        const hasHits = (call.line_count ?? 0) > 1;
-        if (ctx.isTimestampedSource(call.tool_name) && hasHits && !occurred.ms) {
+
+        // 替换语义得自己出声：**静默的错法必须当场说**，同名单那条"现在生效的是 st_xxx"。
+        // 真想增量补发的 agent，这一句是它唯一能当场发现自己丢了证据的地方
+        if (closedSeq !== null && attached.length > 0) {
+          const kept = new Set(attached);
+          const dropped = prevClaims.filter((c) => !kept.has(c));
+          if (dropped.length) {
+            warnings.push(
+              `这一次 close 带的 ${attached.length} 条证据整份替换了上一批的 ${prevClaims.length} 条，` +
+                `其中 ${dropped.length} 条没再出现，已从报告里去掉：` +
+                `${dropped.slice(0, 3).map((c) => `「${c.slice(0, 16)}…」`).join('、')}` +
+                `${dropped.length > 3 ? ' 等' : ''}。要保留就把它们一并写进 evidence。`,
+            );
+          }
+        }
+
+        if (guessedBase) {
           warnings.push(
-            e.occurredAt
-              ? `证据「${e.claim.slice(0, 16)}…」的 occurredAt "${e.occurredAt}" 解析不了。`
-              : `证据「${e.claim.slice(0, 16)}…」来自 ${call.tool_name} 却缺 occurredAt，系统时间线会断在这里。`,
+            `本步有只写了时分秒的 occurredAt，正按基准日期 ${base.incidentDate} 理解——` +
+              `那是建单当天，还没被确认过。这批日志不是那天的，就把 occurredAt 写成完整日期` +
+              `（如 2026-08-14 23:47:01），带日期的串不经过基准。`,
           );
-        }
-        // 行号只是提示：工具输出常自带另一套编号，直接按物理行高亮会悄悄指错行（blobs.ts）
-        const blobText = call.output_sha256 ? readBlobText(ctx.blobDir, call.output_sha256) : null;
-        const located = blobText ? locateEvidence(blobText, e.anchor, e.occurredAt) : null;
-        if (located?.corrected) {
-          warnings.push(`证据「${e.claim.slice(0, 16)}…」的行号已按内容校正为 ${located.anchor}。`);
         }
 
         emit({
-          type: 'evidence.attached',
+          type: 'step.closed',
           payload: {
-            evidenceId: ctx.newId('ev'),
             stepId: args.stepId,
-            callId: call.id,
-            anchorKind: anchorKind(e.anchor),
-            anchor: e.anchor ?? null,
-            anchorResolved: located?.anchor ?? e.anchor ?? null,
-            claim: e.claim,
-            observedAt: ctx.now(),
-            occurredAtMs: occurred.ms,
-            occurredAtRaw: e.occurredAt ?? null,
-            occurredSource: call.tool_name.includes('ask_operator') ? 'operator' : 'agent',
-            actor: e.actor ?? null,
+            status: args.status,
+            verdict: args.verdict,
+            confidence: args.confidence,
+            // 空白已归一成 undefined；三项都保持"缺省=不动"，由投影的 COALESCE 承接
+            expected: blankToUndefined(args.expected),
+            actual: blankToUndefined(args.actual),
+            shape: args.shape,
+            remediation: blankToUndefined(args.remediation),
+            // 🔴 **「缺省=不动」认的是"这个键没给"，不是"给出来是空的"**（events.ts 那段）。
+            // 两者在这儿分开处理，而且**两个字段的答案不一样**：
+            //
+            // - `metrics: []` 是一句合法的话——"这一步现在没有指标"。影响面那一节少了几个数
+            //   照样成立（还有那段话），所以显式给空就落 `[]`，把上一次那几个数清掉。
+            //   按 `value.length` 判的话，重算之后写 `[]` 会被当成没给，旧指标留在报告里且不出声
+            // - `roster: { items: [] }` 不是"空名单"，是**根本不成其为名单**（存储那侧的
+            //   `items` 就是 `.min(1)`）。落一个空的进去，读侧会把它判成坏列并喊一声——
+            //   而那不是坏数据，是 agent 的意图。所以这一支保持"不动"，并当场说清
+            //   （`deliverableWarnings`）：真要撤掉一份名单，是把那一步推翻或改成非 confirmed
+            roster: roster?.value ? JSON.stringify(roster.value) : undefined,
+            metrics: metrics ? JSON.stringify(metrics.value) : undefined,
+            at: ctx.now(),
           },
         });
-      }
-
-      if (guessedBase) {
-        warnings.push(
-          `本步有只写了时分秒的 occurredAt，正按基准日期 ${base.incidentDate} 理解——` +
-            `那是建单当天，还没被确认过。这批日志不是那天的，就把 occurredAt 写成完整日期` +
-            `（如 2026-08-14 23:47:01），带日期的串不经过基准。`,
-        );
-      }
-
-      emit({
-        type: 'step.closed',
-        payload: {
-          stepId: args.stepId,
-          status: args.status,
-          verdict: args.verdict,
-          confidence: args.confidence,
-          // 空白已归一成 undefined；三项都保持"缺省=不动"，由投影的 COALESCE 承接
-          expected: blankToUndefined(args.expected),
-          actual: blankToUndefined(args.actual),
-          shape: args.shape,
-          remediation: blankToUndefined(args.remediation),
-          // 🔴 **「缺省=不动」认的是"这个键没给"，不是"给出来是空的"**（events.ts 那段）。
-          // 两者在这儿分开处理，而且**两个字段的答案不一样**：
-          //
-          // - `metrics: []` 是一句合法的话——"这一步现在没有指标"。影响面那一节少了几个数
-          //   照样成立（还有那段话），所以显式给空就落 `[]`，把上一次那几个数清掉。
-          //   按 `value.length` 判的话，重算之后写 `[]` 会被当成没给，旧指标留在报告里且不出声
-          // - `roster: { items: [] }` 不是"空名单"，是**根本不成其为名单**（存储那侧的
-          //   `items` 就是 `.min(1)`）。落一个空的进去，读侧会把它判成坏列并喊一声——
-          //   而那不是坏数据，是 agent 的意图。所以这一支保持"不动"，并当场说清
-          //   （`deliverableWarnings`）：真要撤掉一份名单，是把那一步推翻或改成非 confirmed
-          roster: roster?.value ? JSON.stringify(roster.value) : undefined,
-          metrics: metrics ? JSON.stringify(metrics.value) : undefined,
-          at: ctx.now(),
-        },
-      });
-      for (const sid of args.supersedes ?? []) {
-        emit({ type: 'step.superseded', payload: { stepId: sid, by: args.stepId } });
-      }
+        for (const sid of args.supersedes ?? []) {
+          emit({ type: 'step.superseded', payload: { stepId: sid, by: args.stepId } });
+        }
+      })();
       // 这一条只有落库之后才判得了：形态取的是**报告认定的那条根因**的声明，
       // 而谁是根因要等这一步的置信度也进了库才比得出来。
       //

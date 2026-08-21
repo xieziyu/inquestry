@@ -5,6 +5,10 @@ import { checkEventShapes, rebuildProjections } from './projector.js';
 import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
 
 /**
+ * 9：`evidence_refs.seq` / `steps.closed_seq` —— evidence 全量替换的批次边界（projector.ts 的
+ *    `replaceEvidenceBatch`）。两个 nullable 列，值由重放从 `events.seq` 填回来；
+ *    **老事件形状没动过**，边界用的是它们天生就有的 seq，所以存量与新数据认的是同一条规则。
+ *    这一级顺带把老库里按旧规则（无条件 append）投出来的重复证据重投掉。
  * 8：`steps.roster` / `steps.metrics` —— 产出物（名单与指标，overview.md 的「产出物」）。
  *    两个 nullable 的 JSON 列，老事件里压根没有这两项，重放后照旧是 NULL——additive 的标准形状。
  * 7：`cases.incident_date_source` —— 基准日期是建单猜的还是被确认过的。
@@ -16,7 +20,7 @@ import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
  * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（data-model.md 的 `converged` 一节）。
  * 3：`steps.shape` —— agent 声明的报告形态（v2 只有 `cases.verdict_shape` 这个终态）。
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export type Db = Database.Database;
 
@@ -77,6 +81,13 @@ export const MIGRATIONS: MigrationStep[] = [
     adds: [
       { table: 'steps', column: 'roster', ddl: 'TEXT' },
       { table: 'steps', column: 'metrics', ddl: 'TEXT' },
+    ],
+  },
+  {
+    to: 9,
+    adds: [
+      { table: 'evidence_refs', column: 'seq', ddl: 'INTEGER' },
+      { table: 'steps', column: 'closed_seq', ddl: 'INTEGER' },
     ],
   },
 ];

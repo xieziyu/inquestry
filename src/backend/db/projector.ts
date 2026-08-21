@@ -14,6 +14,14 @@ export type ProjectorDeps = {
   /** FTS 需要 blob 正文，而正文不在库里（只存 sha256）——从 blob 目录读回来。 */
   blobDir: string;
   caseId: string;
+  /**
+   * 这条事件在 `events` 里的 `seq`。**它是唯一一个逐条变的 dep**，摆在这儿是因为
+   * 两条路径必须从同一个入口拿到它：写入侧取 `INSERT` 的 `lastInsertRowid`，
+   * 重放侧从 `SELECT seq` 读回——两边给出的是同一个数，投影因此重放得出来。
+   *
+   * 有了它，"这条证据属于哪一批"就不必再问时钟（见 `replaceEvidenceBatch`）。
+   */
+  seq: number;
 };
 
 export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
@@ -116,18 +124,24 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
     }
     case 'step.closed': {
       const p = ev.payload;
-      // 六个可选字段走 COALESCE：**同一步会被 close 第二次**——我们自己的 warning 就写着
-      // "请补 evidence 后重新 close"，而那一次多半只补证据。把"没再填"解释成"清空"的话，
-      // 第一次填好的形态、应然实然与 remediation 会被静默抹掉，报告主体随之空掉，重放还会一模一样地复现。
-      // 要改就再填一次（填了照旧覆盖）。与 `toolcall.gated` 的 `input_json` 同一个语义。
+      // **同一步会被 close 第二次**——我们自己的 warning 就写着"请补 evidence 后重新 close"。
+      // 两类字段在这一下的语义正好相反：
+      //
+      // - 六个可选字段走 COALESCE（缺省=不动）：那一次多半只补证据，把"没再填"解释成"清空"的话，
+      //   第一次填好的形态、应然实然与 remediation 会被静默抹掉，报告主体随之空掉，重放还会一模一样地
+      //   复现。要改就再填一次（填了照旧覆盖）。与 `toolcall.gated` 的 `input_json` 同一个语义
+      // - `evidence` 是**全量**：带了证据就整份替换上一批（`replaceEvidenceBatch`，边界是
+      //   下面落的 `closed_seq`）。当成追加的话，一次重发就在库里躺出两份，
+      //   系统时间线把它们并排印出来
       //
       // 绑值仍一律 `?? null`：better-sqlite3 对 undefined 的处理不能指望，而 COALESCE
       // 认的是 NULL——漏了这一手，缺字段的老事件会在重放时报错而不是走保留分支
+      replaceEvidenceBatch(db, p.stepId);
       db.prepare(
         `UPDATE steps SET status=?, verdict_text=?, verdict_confidence=?,
                 expected=COALESCE(?,expected), actual=COALESCE(?,actual), shape=COALESCE(?,shape),
                 remediation=COALESCE(?,remediation),
-                roster=COALESCE(?,roster), metrics=COALESCE(?,metrics), t_end=?
+                roster=COALESCE(?,roster), metrics=COALESCE(?,metrics), t_end=?, closed_seq=?
          WHERE id=?`,
       ).run(
         p.status,
@@ -141,6 +155,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
         p.roster ?? null,
         p.metrics ?? null,
         p.at,
+        deps.seq,
         p.stepId,
       );
       insertNarrative(db, deps.caseId, p.stepId, 'verdict', p.verdict);
@@ -237,8 +252,8 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       const p = ev.payload;
       db.prepare(
         `INSERT INTO evidence_refs (id,step_id,tool_call_id,anchor_kind,anchor,anchor_resolved,claim,
-                                    observed_at,occurred_at_ms,occurred_at_raw,occurred_source,actor)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+                                    observed_at,seq,occurred_at_ms,occurred_at_raw,occurred_source,actor)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ).run(
         p.evidenceId,
         p.stepId,
@@ -248,6 +263,7 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
         p.anchorResolved,
         p.claim,
         p.observedAt,
+        deps.seq,
         p.occurredAtMs,
         p.occurredAtRaw,
         p.occurredSource,
@@ -262,6 +278,40 @@ function project(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
       throw new Error(`未处理的事件: ${(never as { type: EventName }).type}`);
     }
   }
+}
+
+/**
+ * 再 close 一次时，把上一批证据整份换掉——`evidence` 是全量，不是增量（契约写在 `tools/schemas.ts`
+ * 的 evidence 描述里，写入侧还会当场报「这次替换掉了几条」）。
+ *
+ * 批次边界是**上一次那条 `step.closed` 的 `events.seq`**（落在 `steps.closed_seq`）：本批的
+ * `evidence.attached` 全排在它后面，上一批全排在它前面。`seq` 是事件天生就有的，老事件也不例外，
+ * 所以存量重投与新写入认的是同一条规则。
+ *
+ * 🔴 **不拿时间戳当边界。** 投影器读不得时钟，而 `observed_at` / `t_end` 都是写入那一刻的毫秒数：
+ * 两次 close 落进同一毫秒（自动跑批、或重放得快）时两批就分不开了，而那时它不报错，只是安静地
+ * 少删或多删一批。
+ *
+ * 🔴 **「本批到底带没带证据」这个存在性判断不能省。** `evidence` 是必填字段，只补 remediation 的
+ * 那次传的是 `[]`（prompt/investigation.md 里明写着这条路），漏了这一手会把那一步的证据整批抹掉。
+ */
+function replaceEvidenceBatch(db: Db, stepId: string): void {
+  const prev =
+    (db.prepare(`SELECT closed_seq FROM steps WHERE id=?`).get(stepId) as
+      | { closed_seq: number | null }
+      | undefined)?.closed_seq ?? null;
+  // NULL = 这是第一次 close，没有上一批
+  if (prev === null) return;
+  const stale = db
+    .prepare(`SELECT id FROM evidence_refs WHERE step_id=? AND seq<?`)
+    .all(stepId, prev) as { id: string }[];
+  if (!stale.length) return;
+  if (!db.prepare(`SELECT 1 FROM evidence_refs WHERE step_id=? AND seq>? LIMIT 1`).get(stepId, prev))
+    return;
+  // 检索索引跟着一起删。漏删是静默的：时间线看着干净了，跨案检索照旧翻得出已被改写掉的旧说法
+  const dropNarrative = db.prepare(`DELETE FROM narrative_fts WHERE ref_kind='evidence' AND ref_id=?`);
+  for (const s of stale) dropNarrative.run(s.id);
+  db.prepare(`DELETE FROM evidence_refs WHERE step_id=? AND seq<?`).run(stepId, prev);
 }
 
 /**
@@ -419,9 +469,10 @@ export function checkEventShapes(db: Db): { checked: number } {
  * caseId 取每条事件自己的，不由调用方给——重放是全库的事，用单个 caseId 会把
  * 别的调查的 FTS 行全标成同一个 case，检索时静默串台。
  */
-export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>): number {
+export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId' | 'seq'>): number {
   checkEventShapes(db);
-  const rows = db.prepare(`SELECT case_id,type,payload FROM events ORDER BY seq`).all() as {
+  const rows = db.prepare(`SELECT seq,case_id,type,payload FROM events ORDER BY seq`).all() as {
+    seq: number;
     case_id: string;
     type: string;
     payload: string;
@@ -447,6 +498,7 @@ export function rebuildProjections(db: Db, deps: Omit<ProjectorDeps, 'caseId'>):
       applyEvent(db, { type: r.type, payload: JSON.parse(r.payload) } as DomainEvent, {
         ...deps,
         caseId: r.case_id,
+        seq: r.seq,
       });
     }
     const put = db.prepare(

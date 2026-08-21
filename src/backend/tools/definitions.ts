@@ -21,6 +21,15 @@ export interface InvestigationStore {
   closeStep(args: CloseStepArgs): Promise<{
     warnings: string[];
     /**
+     * **这次 close 被整个退回了：一条都没落下，step 原样不动。**
+     * 只有硬拒绝那几条路带它（stepId 认不出来、证据里有解析不了的 callRef），正常收尾不带。
+     *
+     * 回话的头一句按它分派（下面 `close_step` 的 `run`）：不分派的话，agent 读到的是
+     * "已关闭、收到 N 条证据" 后面跟一句 "什么都没落下"——两句矛盾时它多半按前一句往下走，
+     * 而这一步其实还开着、上一批证据还等着它重发。
+     */
+    rejected?: true;
+    /**
      * 这一步落下的名单**去重之后**有几条；没给名单时不返回。
      *
      * 由 store 回而不是让调用方数 `args.roster.items`：那是归一前的数组，
@@ -79,11 +88,19 @@ export const TOOL_DEFS: ToolDef[] = [
       '报告会把它印成能整列复制的一列——别再把 id 抄进 verdict 那段散文里。' +
       '量化影响面那一步把数填进 metrics。' +
       '同一步再 close 一次（比如按提示补证据）时，' +
-      'shape / expected / actual / remediation / roster / metrics 不重填就保持原样，要改就重新填。',
+      'shape / expected / actual / remediation / roster / metrics 不重填就保持原样，要改就重新填；' +
+      '**evidence 不在这张单子里，它的语义正相反**：带上证据就整份替换上一批，' +
+      '上次那些还要留的一并重发，给 `[]` 才是"这次不动证据"；' +
+      '有一条 callRef 认不出来则整次 close 退回，一条都不落，改好后整批重发。',
     shape: closeStepShape,
     async run(store, args) {
       const a = args as unknown as CloseStepArgs;
-      const { warnings, rosterCount } = await store.closeStep(a);
+      const { warnings, rosterCount, rejected } = await store.closeStep(a);
+      // 退回那条路**换一句头**：这一步没关上、证据一条没落，说成"已关闭、收到 N 条证据"
+      // 就是把 agent 引去干别的，而它手里那批证据再也发不出去了
+      if (rejected) {
+        return `⛔ step ${a.stepId} 没有关闭，这一次一条都没落下。\n原因：\n- ${warnings.join('\n- ')}`;
+      }
       // 名单的条数**回给它自己看**：去重之后的那个数才是报告要印的，
       // 而 agent 刚在 verdict 里写过一个按去重前算的条数——两个数对不上时，
       // 这一句是它唯一能当场发现的地方（warning 里另有一条专门说去掉了几条）
