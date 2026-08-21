@@ -92,7 +92,7 @@ export type DomainEvents = {
     verdict: string;
     confidence: number;
     /**
-     * 下面四项**缺省表示「不动」，不是「清空」**：同一步会被 close 第二次（补证据那一次
+     * 下面六项**缺省表示「不动」，不是「清空」**：同一步会被 close 第二次（补证据那一次
      * 多半只带 evidence），当成清空的话第一次填好的形态与主体会被静默抹掉。投影用 COALESCE。
      */
     /** 状态型故障的报告主体：应然与实然的一对，成对才有意义（D25）。 */
@@ -106,6 +106,19 @@ export type DomainEvents = {
      * 只有 leftover 步上的进报告（queries.effectiveRemediation），但事件只记账、不设限。
      */
     remediation?: string;
+    /**
+     * 产出物（`shared/ipc.ts` 的 `Roster` / `Metric[]`），**已序列化成 JSON 串**。
+     *
+     * 载荷里放串而不是对象，是为了让"缺省=不动"这件事在整条链路上只有一种写法：
+     * 投影那句 `COALESCE(?,roster)` 收的是 `TEXT`，而事件里放对象的话，
+     * 投影侧要在 apply 里再 `JSON.stringify` 一次——**重放与首次写入于是各走一条路**，
+     * 而两条路产出的串（键序、空白）不一定一致，`events` 也就不再是能一模一样重建投影的真相。
+     *
+     * 归一（去空白、去重、丢空条目）在写入侧一次做完（`sqlite-store.closeStep`）：
+     * 事件里落的已经是最终形态，重放不再算一遍——算法哪天改了，老事件不该跟着变形。
+     */
+    roster?: string;
+    metrics?: string;
     at: number;
   };
   'step.superseded': { stepId: string; by: string };

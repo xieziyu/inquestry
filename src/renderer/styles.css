@@ -1590,6 +1590,42 @@ button.primary:has(> .ic) { gap: 6px; }
 .paper .matrix td { padding: 11px 24px 11px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .paper .matrix td em { font-style: normal; color: var(--bad); font-size: 12.5px; margin-left: 8px; }
 
+/* ── 名单（overview.md 的「产出物」）────────────────────────────
+   🔴 **id 那一列是要被整列复制走的**，所以它单独一列、等宽、不掺任何装饰。
+   条数、口径、全不全一律摆在列表**外面**那两行里：并排印在 id 旁边看着更紧凑，
+   实际是把复制出来的东西变成了需要再清洗一遍的文本。 */
+.paper .roster { margin-top: 16px; }
+.paper .roster .rmeta { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; margin: 0; max-width: none; }
+.paper .roster .rmeta b { font-weight: 600; }
+.paper .roster .rmeta .n { font-family: var(--mono); color: var(--accent); font-size: 13px; }
+.paper .roster .rmeta .tag { font-size: 11px; border: 1px solid var(--line); color: var(--dim); padding: 1px 8px; border-radius: 4px; }
+/* 「不是全集」用绯色：它决定读者敢不敢直接照这份去处置，与"被推翻"同一档要紧 */
+.paper .roster .rmeta .tag.partial { border-color: var(--bad); color: var(--bad); }
+.paper .roster .rmeta .from { font-family: var(--mono); font-size: 11.5px; color: var(--dim); margin-left: auto; }
+.paper .roster .basis { margin: 8px 0 0; color: var(--dim); font-size: 13.5px; }
+.paper .rlist { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14.5px; }
+.paper .rlist th {
+  text-align: left; padding: 0 24px 8px 0; border-bottom: 1px solid var(--line);
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); font-weight: 600;
+}
+.paper .rlist td { padding: 7px 24px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* 等宽 + 可选中：这一列的用途就是被选中复制 */
+.paper .rlist td.id { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; user-select: all; }
+/* id 那一列不许被撑走：备注长了缩备注，不缩 id */
+.paper .rlist td.id, .paper .rlist th:first-child { width: 1%; }
+
+/* 指标住在影响面那一节里（不单开一节：几个数与解释它们的那段话要同屏） */
+.paper .metrics { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 14.5px; }
+.paper .metrics th {
+  text-align: left; padding: 0 24px 8px 0; border-bottom: 1px solid var(--line);
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); font-weight: 600;
+}
+.paper .metrics td { padding: 10px 24px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.paper .metrics td.v { font-family: var(--mono); white-space: nowrap; }
+/* 带界的值标出来：一个下界被当成准数拿去汇报，是这一节最贵的一种读错 */
+.paper .metrics td.v.bounded { color: var(--bad); }
+.paper .metrics td.basis { color: var(--dim); font-size: 13.5px; }
+
 /* 走错的分支强制留在排查路径里，划掉 + 标注——删掉它就成了假历史 */
 .paper .path { list-style: none; margin: 16px 0 0; padding: 0; }
 .paper .path li { display: flex; gap: 14px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line); }

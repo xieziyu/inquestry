@@ -13,7 +13,16 @@
  * 不一致，也就没法拿检查兜住"页脚水印到底印了没有"。
  */
 
-import type { CallNode, EvidenceNode, IncidentEntry, ReportStepRef, StepNode } from './ipc.js';
+import {
+  BOUND_MARK,
+  type CallNode,
+  type EvidenceNode,
+  type IncidentEntry,
+  type Metric,
+  type ReportStepRef,
+  type Roster,
+  type StepNode,
+} from './ipc.js';
 import { exportStamp } from './time.js';
 import {
   SHAPE_COPY,
@@ -93,6 +102,18 @@ function lede(input: ReportInput, ctx: Ctx): string {
     lines.push('**未决**：这次调查没有得出根因。以下是查过的方向与留下的问题。');
   }
 
+  // 名单进置顶块，但**只报它是什么、多少条、全不全**，不在这儿铺开（§7.1 那条"第一屏必须是
+  // 结论"对它同样成立——很多平台的预览只显示前几行）。一份 16 行的表格铺在这里，
+  // 会把下面那两条限定整个挤出第一屏，而那两条正是不能与结论分开的
+  const roster = ctx.plan.sections.find((s) => s.id === 'roster');
+  if (roster && roster.body.kind === 'roster') {
+    const r = roster.body.roster;
+    lines.push(
+      `**${inline(r.label)}**：${r.items.length} 个 ${inline(r.idKind)}` +
+        `${r.complete ? '' : '（下界，不是全集）'}，完整一列见下方「名单」`,
+    );
+  }
+
   // 这两条是对整份结论的限定，必须与结论同屏——挪到正文里就等于让人先读完再知道它不算数
   if (ctx.plan.abortedAt !== null) {
     lines.push(`⚠️ 调查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
@@ -147,6 +168,15 @@ function body(section: ReportSection, ctx: Ctx): string {
     case 'matrix':
       return matrixMd(b.rows, ctx);
 
+    case 'roster':
+      return rosterMd(b.roster, ctx.label(b.stepId));
+
+    case 'impact':
+      // 一段话在前、几个数在后，同一节里。空的一栏照旧写「无」，理由同 `prose`
+      return [b.text ? inline(b.text) : b.metrics.length ? '' : '无。', metricsMd(b.metrics)]
+        .filter((x) => x.length > 0)
+        .join('\n\n');
+
     case 'path':
       return pathMd(b.rows, ctx);
 
@@ -160,6 +190,55 @@ function body(section: ReportSection, ctx: Ctx): string {
     case 'absent':
       return inline(b.why);
   }
+}
+
+/**
+ * 名单：**一列 id 的表格**，口径与条数在表格之前的一行里。
+ *
+ * 🔴 **id 走 `valueCell` 而不是 `inline`。** 它们是读者要整列复制去做处置的值，
+ * 一个字符都不能改——而 `inline()` 会折空白、给 markdown 元字符加反斜杠，
+ * 复制出来的 `6a04\*f4af…` 拿去查库就是查不到，且看不出是导出这一步改的
+ * （同 `timelineMd` 里时间戳那一格的理由）。
+ *
+ * 备注只在真有的时候才开那一列：整列空着的表格会让人以为是没填，而不是没有这回事。
+ */
+function rosterMd(roster: Roster, from: string): string {
+  const noted = roster.items.some((i) => i.note);
+  const head = [
+    [
+      `**${inline(roster.label)}**`,
+      `${roster.items.length} 个 ${inline(roster.idKind)}`,
+      roster.complete ? '全集' : '**下界，不是全集**',
+      // 被工具截过要单独标出来，理由见 `ReportPaper` 里同一处
+      roster.truncated ? `**已截掉 ${roster.truncated} 条**` : null,
+      `出自 ${from}`,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    // 口径空着照实说，不留白（同 `ReportPaper`）
+    roster.basis ? inline(roster.basis) : '口径没填。这份名单是怎么圈出来的、边界在哪，报告里没有。',
+  ].join('\n\n');
+  const table = [
+    noted ? `| ${cell(roster.idKind)} | 备注 |` : `| ${cell(roster.idKind)} |`,
+    noted ? '| --- | --- |' : '| --- |',
+    ...roster.items.map((it) =>
+      noted ? `| ${valueCell(it.id)} | ${cell(it.note ?? '')} |` : `| ${valueCell(it.id)} |`,
+    ),
+  ].join('\n');
+  return [head, table].join('\n\n');
+}
+
+/** 影响面里的那几个数。口径单独一列，理由见 `ReportPaper` 里的 `Metrics`。 */
+function metricsMd(rows: Metric[]): string {
+  if (!rows.length) return '';
+  return [
+    '| 指标 | 值 | 口径 |',
+    '| --- | --- | --- |',
+    // 值走 `valueCell`：`13 / 16` 这种带斜杠与空格的串要一字不差；界的记号是我们自己排的
+    ...rows.map(
+      (m) => `| ${cell(m.label)} | ${BOUND_MARK[m.bound]}${valueCell(m.value)} | ${cell(m.basis || '口径没填')} |`,
+    ),
+  ].join('\n');
 }
 
 /**

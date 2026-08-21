@@ -250,6 +250,10 @@ export function buildSnapshot(
       actual: rep.rootCause?.actual?.trim() || null,
       leftovers: rep.leftovers.map(stepRef),
       refuted: rep.refuted.map(stepRef),
+      // 产出物（overview.md 的「产出物」）。两条各有自己的选择器，与形态无关：
+      // 名单跟着声明它的那一步走，指标跟着影响面那一步走
+      roster: rep.roster ? { stepId: rep.roster.step_id, roster: rep.roster.roster } : null,
+      metrics: rep.metrics,
     },
   };
 }

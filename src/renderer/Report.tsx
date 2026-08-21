@@ -439,6 +439,12 @@ function sectionSum(id: string, plan: ReportPlan): string {
       return b.groups.length ? `切成 ${b.groups.length} 组` : '切不出分组';
     case 'matrix':
       return b.rows.length ? `排除 ${b.rows.length} 个方向` : '一个都没排除';
+    case 'roster':
+      // 条数就是这一节的读数：它正是读者要拿走的那个数
+      return `${b.roster.items.length} 个 ${b.roster.idKind}${b.roster.complete ? '' : '（下界）'}`;
+    case 'impact':
+      // 一行只说一个数：有指标就报几条指标，没有就退回"这一栏空不空"
+      return b.metrics.length ? `${b.metrics.length} 个指标` : b.text ? '' : '无';
     case 'path':
       return `${b.rows.length} 步`;
     case 'notes':

@@ -18,7 +18,17 @@ import {
 export interface InvestigationStore {
   openStep(args: OpenStepArgs): Promise<{ stepId: string; ordinal: number; warnings: string[] }>;
   /** warnings 会原样回给 agent —— 缺证据、缺 occurredAt 这类问题要当场说，事后补不回来。 */
-  closeStep(args: CloseStepArgs): Promise<{ warnings: string[] }>;
+  closeStep(args: CloseStepArgs): Promise<{
+    warnings: string[];
+    /**
+     * 这一步落下的名单**去重之后**有几条；没给名单时不返回。
+     *
+     * 由 store 回而不是让调用方数 `args.roster.items`：那是归一前的数组，
+     * 而报告印的是归一后的那个数。照 args 数的话，回执上那句话会与报告差几条，
+     * 且差的正是"抄重了几条"——这一句存在的全部理由就是让 agent 当场发现它。
+     */
+    rosterCount?: number;
+  }>;
   askOperator(args: AskOperatorArgs): Promise<{
     answer: string;
     /**
@@ -65,13 +75,20 @@ export const TOOL_DEFS: ToolDef[] = [
       '你只要指出「在第几次调用的哪几行」以及「它描述的事件何时发生」。' +
       '这一步若给出了整个调查的根因，顺手填 shape（报告按它装块）；' +
       '若根因是「某个东西一直就是错的」，再补上 expected / actual 这一对。' +
+      '**问的那个问题答案本身是一组东西时（哪些用户 / 哪些订单 / 哪次变更），填 roster**，' +
+      '报告会把它印成能整列复制的一列——别再把 id 抄进 verdict 那段散文里。' +
+      '量化影响面那一步把数填进 metrics。' +
       '同一步再 close 一次（比如按提示补证据）时，' +
-      'shape / expected / actual / remediation 不重填就保持原样，要改就重新填。',
+      'shape / expected / actual / remediation / roster / metrics 不重填就保持原样，要改就重新填。',
     shape: closeStepShape,
     async run(store, args) {
       const a = args as unknown as CloseStepArgs;
-      const { warnings } = await store.closeStep(a);
-      const head = `step ${a.stepId} 已关闭（${a.status}），收到 ${a.evidence.length} 条证据。`;
+      const { warnings, rosterCount } = await store.closeStep(a);
+      // 名单的条数**回给它自己看**：去重之后的那个数才是报告要印的，
+      // 而 agent 刚在 verdict 里写过一个按去重前算的条数——两个数对不上时，
+      // 这一句是它唯一能当场发现的地方（warning 里另有一条专门说去掉了几条）
+      const roster = rosterCount === undefined ? '' : `，名单 ${rosterCount} 条`;
+      const head = `step ${a.stepId} 已关闭（${a.status}），收到 ${a.evidence.length} 条证据${roster}。`;
       return warnings.length ? `${head}\n注意：\n- ${warnings.join('\n- ')}` : head;
     },
   },

@@ -5,6 +5,8 @@ import { checkEventShapes, rebuildProjections } from './projector.js';
 import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
 
 /**
+ * 8：`steps.roster` / `steps.metrics` —— 产出物（名单与指标，overview.md 的「产出物」）。
+ *    两个 nullable 的 JSON 列，老事件里压根没有这两项，重放后照旧是 NULL——additive 的标准形状。
  * 7：`cases.incident_date_source` —— 基准日期是建单猜的还是被确认过的。
  *    默认 `'intake'` 就是老库的真实情况：那时还没有 `case.timebase_set` 这条事件。
  * 6：`steps.remediation` —— 修复建议的写入方（后来收窄成未决型的「下一步怎么查」，只认 leftover 步）。
@@ -14,7 +16,7 @@ import { PRAGMA_SQL, SCHEMA_SQL } from './schema.js';
  * 4：`steps.status` 多一档 `converged` + 事件 `lane.converged` —— 支线跑完由 harness 收口（data-model.md 的 `converged` 一节）。
  * 3：`steps.shape` —— agent 声明的报告形态（v2 只有 `cases.verdict_shape` 这个终态）。
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export type Db = Database.Database;
 
@@ -68,6 +70,13 @@ export const MIGRATIONS: MigrationStep[] = [
         column: 'incident_date_source',
         ddl: `TEXT NOT NULL DEFAULT 'intake' CHECK (incident_date_source IN ('intake','agent','operator'))`,
       },
+    ],
+  },
+  {
+    to: 8,
+    adds: [
+      { table: 'steps', column: 'roster', ddl: 'TEXT' },
+      { table: 'steps', column: 'metrics', ddl: 'TEXT' },
     ],
   },
 ];

@@ -103,6 +103,31 @@ const REPORT: Snapshot['report'] = {
       supersededBy: 'st4',
     },
   ],
+  // 名单与指标换成与这份夹具同一个故事的真值：这一屏是拿来看版面的，
+  // 抽象夹具那两条（带元字符的 id、`3 / 1` 这种值）验的是转义，摆在这儿只会看着像坏数据。
+  // 条数给足，好看出一列 id 长起来之后这一节的密度对不对
+  roster: {
+    stepId: 'st4',
+    roster: {
+      label: '重复落库的订单',
+      idKind: 'orderId',
+      complete: false,
+      basis: '按 cart_key 在 12:00–12:10 窗口内聚合；窗口外的重复不在此列',
+      items: [
+        { id: 'ord_8f21c04a', note: '首单' },
+        { id: 'ord_8f21c04b', note: '重试写入' },
+        { id: 'ord_9012ab77' },
+        { id: 'ord_9012ab78' },
+        { id: 'ord_a4d3e109' },
+        { id: 'ord_a4d3e10a' },
+      ],
+    },
+  },
+  metrics: [
+    { label: '重复订单', value: '37 笔', bound: 'lower', basis: '仅 12:00–12:10，窗口外未核' },
+    { label: '涉及用户', value: '29', bound: 'lower', basis: '同上' },
+    { label: '影响时长', value: '10 分钟', bound: 'exact', basis: '从首笔重复到限流生效' },
+  ],
 };
 
 /**
@@ -371,7 +396,17 @@ const EMPTY_LIKE: Snapshot = {
   gates: [],
   chat: [],
   closingGaps: ['impact', 'leftover'],
-  report: { rootCause: null, impact: null, remediation: null, expected: null, actual: null, leftovers: [], refuted: [] },
+  report: {
+    rootCause: null,
+    impact: null,
+    remediation: null,
+    expected: null,
+    actual: null,
+    leftovers: [],
+    refuted: [],
+    roster: null,
+    metrics: [],
+  },
 };
 
 const INTAKE_OPTIONS: IntakeOptions = {

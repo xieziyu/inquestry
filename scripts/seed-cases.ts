@@ -575,7 +575,44 @@ function seedPaymentCase() {
   evidence(C, { incidentDate: D, id: 'ev_pay_9', step: st6, call: 'tc_pay_12', claim: '事发当天共 17 笔重复入账、多入账 613 元、涉及 14 个用户', observedAt: T('2026-08-14T14:48:00'), actor: 'ledger', kind: 'jsonpath', anchor: '$.rows[0]', source: 'operator' });
   emit(C, s2, {
     type: 'step.closed',
-    payload: { stepId: st6, status: 'confirmed', verdict: '2026-08-13 全天 17 笔重复入账，多入账 613.00 元，涉及 14 个 uid。只有 3 个用户来投诉，其余 11 个尚未察觉，需要主动冲正。', confidence: 0.9, at: T('2026-08-14T14:49:00') },
+    payload: {
+      stepId: st6,
+      status: 'confirmed',
+      verdict: '2026-08-13 全天 17 笔重复入账，多入账 613.00 元，涉及 14 个 uid。只有 3 个用户来投诉，其余 11 个尚未察觉，需要主动冲正。',
+      confidence: 0.9,
+      // 产出物：这次调查真正要交出去的东西。**名单落在影响面这一步上**——
+      // 「要冲正的是这几个人」本来就属于影响面，而选择器不认 kind（见 queries.effectiveRoster）。
+      // 载荷里是 JSON 串，与 `closeStep` 落的一模一样（events.ts 里那段）
+      roster: JSON.stringify({
+        label: '需要主动冲正的用户',
+        idKind: 'uid',
+        complete: false,
+        basis: '按 2026-08-13 全天 ledger 里同 trade_id 重复的记录聚合；跨天的重复没查',
+        items: [
+          { id: 'u_10032', note: '已投诉' },
+          { id: 'u_10077', note: '已投诉' },
+          { id: 'u_10412', note: '已投诉' },
+          { id: 'u_10588' },
+          { id: 'u_11204' },
+          { id: 'u_11390' },
+          { id: 'u_11877' },
+          { id: 'u_12043' },
+          { id: 'u_12561' },
+          { id: 'u_12904' },
+          { id: 'u_13115' },
+          { id: 'u_13470' },
+          { id: 'u_13802' },
+          { id: 'u_14166' },
+        ],
+      }),
+      metrics: JSON.stringify([
+        { label: '重复入账笔数', value: '17 笔', bound: 'exact', basis: '2026-08-13 全天，按 trade_id 去重后统计' },
+        { label: '多入账金额', value: '613.00 元', bound: 'exact', basis: '同上' },
+        { label: '涉及用户', value: '14', bound: 'exact', basis: '同上；其中 3 个已投诉' },
+        { label: '幂等锁缺失时长', value: '9 个月', bound: 'lower', basis: 'TODO 是 2025-11 提交的，更早的版本没查' },
+      ]),
+      at: T('2026-08-14T14:49:00'),
+    },
   });
 
   // 遗留问题：哪怕是空的也要出现

@@ -350,6 +350,120 @@ export type ChatLine = {
   opening?: boolean;
 };
 
+/**
+ * 产出物：一次调查交出来的**东西**，与形态正交（overview.md 的「产出物」）。
+ *
+ * 形态回答的是「这次排查怎么推理的」，产出物回答的是「问的那个问题，答案是什么」——
+ * 有一整类调查（捞一批小号 / 找哪次变更引入的 / 量清楚影响多大）的答案不是一段因果解释，
+ * 而是一组结构化事实。它们跨多步聚合而来，**没有任何一次工具调用的输出恰好就是它**，
+ * 所以只能由 agent 亲手落一次账——这是 `expected`/`actual` 那一族字段的同类，不是证据。
+ *
+ * 🔴 **两种产出物各有一个不许省的口径字段**（`Roster.complete` / `Metric.bound`）。
+ * 它们才是这两个类型存在的理由：一列 id 与一个数字压成散文之后，最先丢的永远是
+ * 「这是不是全集」「这是不是下界」，而那句话决定读者敢不敢拿它去动手。
+ * 留成自由文本的话，agent 不写没有任何东西会提醒它，事后也没人看得出来少了什么。
+ */
+export type RosterItem = {
+  id: string;
+  /** 这一条的补充，如「被举报本号」「桥接号」。没有就不填，不要拿它凑字。 */
+  note?: string;
+};
+
+export type Roster = {
+  /** 这批东西是什么，读者看的那句话：「关联账号」「受影响订单」。 */
+  label: string;
+  /** id 的种类：`userId` / `orderId` / `commit`。印在表头上，读者靠它知道这一列能拿去做什么。 */
+  idKind: string;
+  /**
+   * 这份名单是不是全集。**false = 下界**，报告上会明写出来。
+   *
+   * 长度为 1 完全正常（「是哪次变更引入的」答案就是一个 commit），所以这里没有条数门槛。
+   */
+  complete: boolean;
+  /** 口径：这批是怎么圈出来的、边界在哪。`complete=false` 时它就是「为什么不全」。 */
+  basis: string;
+  items: RosterItem[];
+  /**
+   * 被工具截掉了多少条（`ROSTER_MAX`），没截就没有这一项。
+   *
+   * **必须印出来**：截断的名单会被一并置成 `complete=false`，而那一档还有另一种来路
+   * （agent 自己就只捞到这么多）。只标"下界"的话，两者在纸上长得一模一样，
+   * 而前者意味着**这份报告漏掉了它本来查到的东西**——那是要回头重来的信号。
+   */
+  truncated?: number;
+};
+
+export type Metric = {
+  /** 这个数是什么：「受害者数」「团伙时间跨度」。 */
+  label: string;
+  /** 值连单位一起，字符串而不是数字：真实答案长这样——`13 / 16`、`375 天`、`2`。 */
+  value: string;
+  /** 准数 / 下界 / 上界。**枚举而不是让 agent 在值里写 `≥`**，理由见 `Roster` 上那段。 */
+  bound: 'exact' | 'lower' | 'upper';
+  /** 口径：这个数覆盖什么范围、怎么算出来的。`bound` 非 exact 时它就是「为什么只是个界」。 */
+  basis: string;
+};
+
+export const METRIC_BOUNDS = ['exact', 'lower', 'upper'] as const;
+
+/**
+ * 两种产出物各自的硬上限，**报告的每一节都装不下无界的表**：
+ * 长图那条链路上 `paginate` 明写超预算的单块自成一页（`shared/paging.ts`），
+ * 于是一张 N 行的表会变成一张高 N×32px 的图，而 `Page.captureScreenshot` 到万把像素
+ * 就开始失败——**表现是导出整个不成，不是慢**。报告屏与 Markdown 只是卡和长。
+ *
+ * 🔴 **超限的处置两者不一样，这是有意的**：
+ *
+ * - **名单是查出来的集合，条数不由 agent 定**。600 个受影响订单就是 600 个，
+ *   逼它"少查一点"没有意义。所以超出的截掉、强制按下界处理、并印出截了多少——
+ *   一份被截过的名单仍旧是能拿去动手的部分交付
+ * - **指标是 agent 亲手写的一张表，条数完全由它定**。超过这个数说明它把明细当成了指标，
+ *   那是要改的写法、不是要保住的数据，所以在工具边界直接退回
+ *
+ * 两个入口都要拦：写入侧（`normalizeRoster`）挡 agent 那一条，读侧（`queries.STORED_*`）
+ * 挡库里那一份——`seed-cases` 与任何直接发 `step.closed` 的路径压根不经过写入侧的归一。
+ */
+export const ROSTER_MAX = 500;
+export const METRICS_MAX = 40;
+
+/**
+ * 把名单截到上限以内，并守住那条不变量：**截过的名单不可能是全集**。
+ *
+ * 写入侧与读侧共用这一份：各写一遍的话两处迟早给出不同的 `truncated`，
+ * 而纸上那句「已截掉 N 条」正是靠它。
+ *
+ * 🔴 **不变量要在每条路径上都成立，不能只在"这次真截了"那条上。** 一度写成
+ * `items 没超就原样返回`，于是库里一份 `{complete:true, truncated:10, items:[…300 条]}`
+ * （手工修库、seed、或任何不走归一的写入）会原样进报告，纸上同时印着「全集」与
+ * 「已截掉 10 条」——**给动手处置的人两个互相矛盾的完整性口径**，而两句都出自这一份数据。
+ *
+ * `truncated` 是**累加**的：库里那份可能已经被截过一次，这里再截时不能把它抹掉。
+ * `0` 按"没截过"处理，不留这个键——它只会在纸上多出一句「已截掉 0 条」。
+ */
+export function capRoster(roster: Roster): Roster {
+  const cut = Math.max(0, roster.items.length - ROSTER_MAX);
+  const truncated = (roster.truncated ?? 0) + cut;
+  if (!truncated) {
+    if (roster.truncated === undefined) return roster;
+    const { truncated: _zero, ...rest } = roster;
+    return rest;
+  }
+  return {
+    ...roster,
+    // 截过的名单按定义就不是全集，agent 说了 true、库里写着 true，都按 false 落
+    complete: false,
+    items: cut ? roster.items.slice(0, ROSTER_MAX) : roster.items,
+    truncated,
+  };
+}
+
+/** 界的记号，印在值前面。准数不加记号——加了反而像在强调。 */
+export const BOUND_MARK: Record<Metric['bound'], string> = {
+  exact: '',
+  lower: '≥ ',
+  upper: '≤ ',
+};
+
 /** 定稿前的两个强制 step（overview §6.2）。 */
 export type ClosingStepKind = 'impact' | 'leftover';
 
@@ -567,6 +681,16 @@ export type Snapshot = {
     actual: string | null;
     leftovers: ReportStepRef[];
     refuted: ReportStepRef[];
+    /**
+     * 名单那一节（overview.md 的「产出物」）。取**当前生效的那条声明**（`queries.effectiveRoster`），
+     * 挂在声明它的那一步上，所以那一步被推翻时它跟着失效——与应然/实然同一条纪律。
+     */
+    roster: { stepId: string; roster: Roster } | null;
+    /**
+     * 影响面那一节里的指标。**只认影响面那一步**（`queries.reportSections`），
+     * 与它上面那段散文同出一步，不会各指一处。
+     */
+    metrics: Metric[];
   };
 };
 
@@ -635,6 +759,8 @@ export const EMPTY_SNAPSHOT: Snapshot = {
     actual: null,
     leftovers: [],
     refuted: [],
+    roster: null,
+    metrics: [],
   },
 };
 

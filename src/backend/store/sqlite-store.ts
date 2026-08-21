@@ -10,15 +10,25 @@ import path from 'node:path';
 import type { Db } from '../db/database.js';
 import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
-import { effectiveStep, reportSections, timestampedEvidenceCount } from '../db/queries.js';
+import { effectiveRoster, effectiveStep, reportSections, timestampedEvidenceCount } from '../db/queries.js';
 import { locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
 import { isTimeOnly, parseOccurredAt, type TimeBase, type TimeBaseSource } from '../db/timebase.js';
 import type { InvestigationStore } from '../tools/definitions.js';
-import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../tools/schemas.js';
+import type {
+  AskOperatorArgs,
+  CloseStepArgs,
+  MetricArg,
+  OpenStepArgs,
+  RosterArg,
+} from '../tools/schemas.js';
 import {
+  capRoster,
+  ROSTER_MAX,
   VERDICT_SHAPES,
   type ClosingStepKind,
   type DeleteOutcome,
+  type Metric,
+  type Roster,
   type ShapeSuggestion,
   type VerdictShape,
 } from '../../shared/ipc.js';
@@ -698,6 +708,11 @@ export function createInvestigationSession(
         | undefined;
       if (!step) return { warnings: [`未知 stepId ${args.stepId}`] };
 
+      // 产出物归一**只做一次，就在这儿**：事件里落的是归一后的串，重放不再算一遍
+      // （见 events.ts 那段）。算法哪天改了，老事件不该跟着变形
+      const roster = args.roster ? normalizeRoster(args.roster) : null;
+      const metrics = args.metrics ? normalizeMetrics(args.metrics) : null;
+
       // **投影是 patch 语义（缺省=不动），所以判断一律按合成之后的最终值来。**
       // 按本次入参判的话，重新 close 那一次会两头错：只补了 evidence 的那次看不见
       // 库里已经躺着的 `state`（缺主体不报警），只补了 expected 的那次又会被当成
@@ -715,6 +730,8 @@ export function createInvestigationSession(
         warnings.push('这个结论没有任何证据，无法被复核。请补 evidence 后重新 close。');
       }
       warnings.push(...shapeWarnings(final, args.status, step.kind));
+      warnings.push(...deliverableWarnings(roster, metrics, args.status, step.kind));
+      warnings.push(...closingStepWarnings(args.status, step.kind));
 
       // **基准现读，不用闭包里那份 `intake`。** agent 读完问题后可能把基准改到别的日子
       // （`case.timebase_set`），而这个会话是在那之前开的——用捕获值的话，改基准之前落的
@@ -790,6 +807,18 @@ export function createInvestigationSession(
           actual: blankToUndefined(args.actual),
           shape: args.shape,
           remediation: blankToUndefined(args.remediation),
+          // 🔴 **「缺省=不动」认的是"这个键没给"，不是"给出来是空的"**（events.ts 那段）。
+          // 两者在这儿分开处理，而且**两个字段的答案不一样**：
+          //
+          // - `metrics: []` 是一句合法的话——"这一步现在没有指标"。影响面那一节少了几个数
+          //   照样成立（还有那段话），所以显式给空就落 `[]`，把上一次那几个数清掉。
+          //   按 `value.length` 判的话，重算之后写 `[]` 会被当成没给，旧指标留在报告里且不出声
+          // - `roster: { items: [] }` 不是"空名单"，是**根本不成其为名单**（存储那侧的
+          //   `items` 就是 `.min(1)`）。落一个空的进去，读侧会把它判成坏列并喊一声——
+          //   而那不是坏数据，是 agent 的意图。所以这一支保持"不动"，并当场说清
+          //   （`deliverableWarnings`）：真要撤掉一份名单，是把那一步推翻或改成非 confirmed
+          roster: roster?.value ? JSON.stringify(roster.value) : undefined,
+          metrics: metrics ? JSON.stringify(metrics.value) : undefined,
           at: ctx.now(),
         },
       });
@@ -805,6 +834,18 @@ export function createInvestigationSession(
       //
       // 而且这里**只陈述事实，不给处置**：写"要让它算数就把那条根因推翻"等于教它去
       // 推翻一条有效结论、或把置信度往上凑——真该不该推翻，只有查过的它自己判得了。
+      // 同上：只有落库之后才比得出这次的名单是不是把此前那份顶掉了。
+      // **顶掉是正当的**（选择器取最新那条，重做一次名单本来就该覆盖），这里只报事实——
+      // 不报的话，agent 在两步上各交一份名单时不会知道报告只会印后交的那一份
+      if (roster?.value) {
+        const now = effectiveRoster(db, ctx.caseId);
+        if (now && now.step_id !== args.stepId) {
+          warnings.push(
+            `报告的名单取的是最新那条仍然成立的声明——现在那条出自 ${now.step_id}` +
+              `（${now.roster.items.length} 条），所以这一份目前不生效。`,
+          );
+        }
+      }
       if (args.status === 'confirmed' && step.kind === 'normal') {
         const sections = reportSections(db, ctx.caseId);
         const root = sections.rootCause;
@@ -838,7 +879,7 @@ export function createInvestigationSession(
           );
         }
       }
-      return { warnings };
+      return { warnings, rosterCount: roster ? (roster.value?.items.length ?? 0) : undefined };
     },
 
     async askOperator(args: AskOperatorArgs) {
@@ -990,6 +1031,168 @@ function shapeWarnings(
     out.push('expected 与 actual 要成对给：只有一半的对照说明不了任何事。');
   }
   return out;
+}
+
+/**
+ * 名单归一：去空白、丢掉空 id、**按 id 去重**，并报出丢了几条。
+ *
+ * 🔴 **去重不是洁癖，是这一带唯一能自动发现的错。** 名单里的 id 是 agent 从好几次查询里
+ * 手抄汇总出来的（库里没有任何一次调用的输出恰好就是这一列，否则它就该是证据而不是产出物），
+ * 而报告上「16 个账号」这个数是读者真会拿去汇报、拿去做处置的。抄重一条的表现是
+ * **数目虚高且毫无报错**——静默去重同样不行：那样这个数会与 agent 自己在 verdict 里
+ * 写的对不上，而两个数都印在同一份报告上。
+ *
+ * 重复条目的 `note` 取第一条非空的：手抄时补注多半只写一次。
+ */
+export function normalizeRoster(input: RosterArg): { value: Roster | null; dropped: string[] } {
+  const seen = new Map<string, { id: string; note?: string }>();
+  const dropped: string[] = [];
+  for (const raw of input.items ?? []) {
+    const id = raw.id?.trim();
+    if (!id) continue;
+    const note = blankToUndefined(raw.note);
+    const hit = seen.get(id);
+    if (hit) {
+      dropped.push(id);
+      if (!hit.note && note) hit.note = note;
+      continue;
+    }
+    seen.set(id, note ? { id, note } : { id });
+  }
+  const items = [...seen.values()];
+  if (!items.length) return { value: null, dropped };
+  // 上限与截断的规则**只此一份**（`shared/ipc.ts` 的 `capRoster`），读侧用的是同一个：
+  // 各写一遍的话两处迟早给出不同的 truncated，而纸上那句「已截掉 N 条」正是靠它
+  return {
+    value: capRoster({
+      label: input.label.trim(),
+      idKind: input.idKind.trim(),
+      complete: input.complete,
+      basis: input.basis.trim(),
+      items,
+    }),
+    dropped,
+  };
+}
+
+/** 指标归一：去空白，丢掉连名字或值都没有的条目（那种印出来是一行空格）。 */
+export function normalizeMetrics(input: MetricArg[]): { value: Metric[]; dropped: number } {
+  const value: Metric[] = [];
+  let dropped = 0;
+  for (const m of input ?? []) {
+    const label = m.label?.trim();
+    const val = m.value?.trim();
+    if (!label || !val) {
+      dropped += 1;
+      continue;
+    }
+    value.push({ label, value: val, bound: m.bound, basis: m.basis?.trim() ?? '' });
+  }
+  return { value, dropped };
+}
+
+/**
+ * 产出物的当场提醒。与 `shapeWarnings` 同一族——**全是「填了但不生效」**：
+ * 不当场说，agent 以为自己已经交代过了，而报告到定稿那天才发现那一节不在。
+ *
+ * 收的是**归一之后**的结果，所以「16 条里有 2 条重复」这种只有这里说得出来。
+ */
+function deliverableWarnings(
+  roster: { value: Roster | null; dropped: string[] } | null,
+  metrics: { value: Metric[]; dropped: number } | null,
+  status: CloseStepArgs['status'],
+  kind: string,
+): string[] {
+  const out: string[] = [];
+  if (roster?.value) {
+    // 🔴 **口径是这两个类型存在的理由，而 `z.string()` 拦不住一串空格**（`"   "` 有长度、
+    // 过得了 schema，`trim()` 之后成了空串照旧落库）。不当场说的话，报告上会是一份
+    // 写着「下界，不是全集」却没有一个字解释为什么不全的名单——恰好绕过了这个字段
+    const r = roster.value;
+    if (!r.basis) {
+      out.push(
+        '名单的 basis（口径）是空的。报告会照实写「口径没填」，而那一栏正是读者判断' +
+          '这份名单能不能直接拿去处置的依据——补一句：这批是怎么圈出来的、边界在哪。',
+      );
+    }
+    if (!r.label || !r.idKind) {
+      out.push('名单的 label 与 idKind 不能是空白：前者是这批东西是什么，后者是列头。');
+    }
+    if (r.truncated) {
+      out.push(
+        `名单超过 ${ROSTER_MAX} 条，多出的 ${r.truncated} 条已截掉，并按下界处理` +
+          '（complete 强制为 false）。报告会印出截掉了多少——名单这么长多半意味着' +
+          '它该换成一次导出，而不是一份读给人看的报告。',
+      );
+    }
+  }
+  if (roster) {
+    // 名单是「这次调查的答案」，而一个还没被证实的结论给不出答案。不认 kind——
+    // 「受影响的订单」落在影响面那一步上同样正当，报告的选择器也不看 kind
+    if (status !== 'confirmed') {
+      out.push(
+        `名单声明在一个 ${status} 的结论上，不会进报告——它是这次调查的答案，` +
+          '只有已证实的结论交得出答案。',
+      );
+    }
+    if (roster.dropped.length) {
+      const sample = roster.dropped.slice(0, 3).join('、');
+      out.push(
+        `名单里有 ${roster.dropped.length} 条重复的 id 已去掉（${sample}${roster.dropped.length > 3 ? ' …' : ''}），` +
+          `现在是 ${roster.value?.items.length ?? 0} 条。**核对一下这个数**：` +
+          '你在 verdict 里写的条数若是按去重前算的，报告上那两个数会对不上。',
+      );
+    }
+    if (!roster.value) {
+      out.push(
+        '名单里一条有效的 id 都没有，这一节装不出来——**上一次填好的那份保持原样**。' +
+          '要撤掉一份名单，把出它的那一步推翻（supersedes）或改成非 confirmed，' +
+          '报告那侧只认已证实的结论。',
+      );
+    }
+  }
+  if (metrics) {
+    // 与 remediation 只认 leftover 步同一条：填错地方不报错的话，这几个数会安静地消失
+    if (kind !== 'impact') {
+      out.push(
+        `metrics 只进影响面那一节，且只认量化影响面（kind="impact"）那一步——这一步是 ${kind}，` +
+          '这几个数不会出现在报告里。',
+      );
+    }
+    if (metrics.dropped) {
+      out.push(`有 ${metrics.dropped} 条指标缺名字或缺值，已丢掉。`);
+    }
+    // 同名单那条：`bound` 是枚举、拦得住，`basis` 是自由文本、一串空格就绕过去了
+    const noBasis = metrics.value.filter((m) => !m.basis).map((m) => m.label);
+    if (noBasis.length) {
+      out.push(
+        `这几条指标的 basis（口径）是空的：${noBasis.join('、')}。报告会照实写「口径没填」——` +
+          '一个没有口径的数与一句「近 30 天内至少 N，更早的查不到」是两个不同的事实，' +
+          '而读者只会拿前者去汇报。',
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * 两个强制 step 被 close 成 `refuted` 时的提醒。
+ *
+ * **定稿闸与报告共用 `effectiveStep`，而它把 `refuted` 一并排掉了**（见那边那段）：
+ * 于是这一下的真实后果是"这一步不算数了"，而 agent 看到的只会是定稿闸重新报缺——
+ * 它多半会再开一个同 kind 的步，而不是把这一步重新收成 confirmed。
+ *
+ * 影响面那一步的 `direction` 常常写成一个真命题（「我怀疑不止个案」），被否掉是正常结果；
+ * 要说的是：**把量出来的那个结论按 `confirmed` 收**，"其实只影响了 1 个人"同样是影响面。
+ */
+function closingStepWarnings(status: CloseStepArgs['status'], kind: string): string[] {
+  if (status !== 'refuted' || (kind !== 'impact' && kind !== 'leftover')) return [];
+  const what = kind === 'impact' ? '影响面' : '遗留问题';
+  return [
+    `这一步是${what}（kind="${kind}"），收成 refuted 之后它就不算数了：定稿闸会重新报缺，` +
+      `报告里${what}那一栏也会空着。假设被否掉本身没问题——把量出来的那个结论按 confirmed 收，` +
+      `「其实只影响了 1 个人」同样是一条${what}。`,
+  ];
 }
 
 /** 纯空白等于没填：`" "` 过得了 `z.string()`，却会让所有 truthiness 判断以为它填好了。 */
