@@ -12,8 +12,12 @@ import path from 'node:path';
 
 export type StoredBlob = { sha256: string; size: number; mime: string; lineCount: number };
 
+export function blobSha(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
 export function storeBlob(dir: string, text: string, mime = 'text/plain'): StoredBlob {
-  const sha256 = createHash('sha256').update(text).digest('hex');
+  const sha256 = blobSha(text);
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, sha256);
   // 内容寻址：同一份日志被多次引用时不重复写

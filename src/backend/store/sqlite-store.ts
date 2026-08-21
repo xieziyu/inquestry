@@ -11,7 +11,7 @@ import type { Db } from '../db/database.js';
 import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
 import { effectiveRoster, effectiveStep, reportSections, timestampedEvidenceCount } from '../db/queries.js';
-import { locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
+import { blobSha, locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
 import { isTimeOnly, parseOccurredAt, type TimeBase, type TimeBaseSource } from '../db/timebase.js';
 import type { InvestigationStore } from '../tools/definitions.js';
 import {
@@ -339,9 +339,10 @@ export function readCaseStatus(db: Db, caseId: string): CaseStatus | null {
  * 却仍能被重放建回来的调查。
  *
  * 🔴 **「这个 blob 属于哪次调查」认 `payload_fts`，不认 `tool_calls`。**
- * 落一次工具输出是**两条事件两个事务**（`recordToolEnd`：先 `blob.stored`，再
+ * `sweepZombies` 补记一次调用的输出仍是**两条事件两个事务**（先 `blob.stored`，再
  * `toolcall.completed`），进程卡在两者之间时，`blobs` 行、`payload_fts` 行、磁盘文件都在了，
- * 而 `tool_calls.output_sha256` 还是空的。只认 `tool_calls` 的话这一对错在两个方向上：
+ * 而 `tool_calls.output_sha256` 还是空的（`recordToolEnd` 已把两条包进一个事务，这个窗口只剩那里）。
+ * 只认 `tool_calls` 的话这一对错在两个方向上：
  *
  *   - 漏删：这次调查落下的那份原文谁都指不到它，界面说删干净了，它永远留在库和磁盘上
  *   - **误删**：另一次调查卡在同一个窗口里，它那份原文看起来"没人引用"，于是被这一下清掉
@@ -1017,12 +1018,37 @@ export function createInvestigationSession(
     },
 
     recordToolEnd({ callId, output, status }) {
+      /**
+       * 🔴 **先记欠账，再写文件，提交时结清。**文件落盘在库的事务之外：写完文件到事务提交之间
+       * 进程被掐（SIGKILL、断电），库里回滚得干干净净，而文件留下了，且没有任何一行指得到它、
+       * 没人记得该去删它——正是 `blob_trash` 要防的孤儿。所以意图先于文件持久化：
+       * 启动时的 `emptyBlobTrash` 会把没结清的那份按引用复核一遍再删（blob 是内容寻址的，
+       * 这个 sha 可能早被别的调用用着，那边只删真正没人要的）。同步失败也走同一条路，
+       * 只是不等下次启动，当场清。
+       *
+       * 🔴 **两条事件必须同进同出。**各提交各的话，第二条落库途中失败会留下 `blobs` 行与
+       * `payload_fts` 行已在、而这次调用仍是 `pending` 的局面：下次启动 `sweepZombies` 把它改判
+       * `abandoned` 并指向"已放弃"那个 blob，真实输出就此变成一条没人引用的 blob 加一条搜得到
+       * 却指不回去的 FTS 行，且没有任何东西看得出来。结清欠账那一句也在同一个事务里，
+       * 否则又多出一个"提交了、欠账没划掉"的窗口——那会在启动时被当成孤儿复核，不丢数据但白跑。
+       * `emitTo` 内层那个事务照旧（better-sqlite3 的嵌套事务走 savepoint）。
+       */
+      const sha256 = blobSha(output);
+      db.prepare(`INSERT OR REPLACE INTO blob_trash (sha256,at) VALUES (?,?)`).run(sha256, ctx.now());
       const blob = storeBlob(ctx.blobDir, output);
-      emit({ type: 'blob.stored', payload: { ...blob, at: ctx.now() } });
-      emit({
-        type: 'toolcall.completed',
-        payload: { callId, outputSha256: blob.sha256, status: status ?? 'done', at: ctx.now() },
-      });
+      try {
+        db.transaction(() => {
+          emit({ type: 'blob.stored', payload: { ...blob, at: ctx.now() } });
+          emit({
+            type: 'toolcall.completed',
+            payload: { callId, outputSha256: blob.sha256, status: status ?? 'done', at: ctx.now() },
+          });
+          db.prepare(`DELETE FROM blob_trash WHERE sha256=?`).run(sha256);
+        })();
+      } catch (err) {
+        emptyBlobTrash(db, { blobDir: ctx.blobDir });
+        throw err;
+      }
     },
 
     convergeLane({ lane, outcome, summary }) {
