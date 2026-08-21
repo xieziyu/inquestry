@@ -70,6 +70,12 @@ const VIEWS = new Map<string, ViewBox>();
 const OPEN_ASIDES = new Map<string, ReadonlySet<string>>();
 
 /**
+ * 导览图收起还是展开。**与 `VIEWS` 同一族、同寿命**：它答的是"我这会儿想怎么看这幅图"，
+ * 不是这次调查的事实，所以住在模块里、不落库，关 app 回到默认的收起。
+ */
+let MINIMAP_OPEN = false;
+
+/**
  * 点与拖分得开：旁白与组头行都参与画布拖拽（不让它们参与的话，旁白密的地方拖不动图），
  * 所以松手时位移超过这几个像素就只算拖过一次画布，不算点在它们身上。
  */
@@ -161,6 +167,8 @@ export function Stage({
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewBox>({ x: 40, y: 20, k: 1 });
   const [follow, setFollow] = useState(true);
+  /** 同 `openAsides`：模块里那份是真相，这个 state 只为了让它一改就重渲染。 */
+  const [minimap, setMinimap] = useState(MINIMAP_OPEN);
   const [picked, setPicked] = useState<string | null>(null);
 
   /**
@@ -521,12 +529,31 @@ export function Stage({
             >
               跟随最新
             </button>
+            <button
+              className={`txt ${minimap ? 'on' : ''}`}
+              onClick={() => {
+                MINIMAP_OPEN = !MINIMAP_OPEN;
+                setMinimap(MINIMAP_OPEN);
+              }}
+              title={
+                minimap
+                  ? '整幅图的缩略，点哪儿画布就跳到哪儿'
+                  : '导览图收起：左下角只剩这一条，底下的画布点得到也拖得动'
+              }
+            >
+              导览图
+            </button>
           </div>
           </div>
-        <Minimap layout={layout} view={view} size={freeSize()} waiting={waiting.at} onGo={(x, y) => setView((v) => {
+        {/**
+         * 收起时**整块不渲染**，不能改成 `display:none`：`.s-hud` 没有底色，但整个外框都收走点击
+         * （上面 `onPointerDown` 把落在 `.s-hud` 上的按下整条排除在画布拖拽外）。留在 DOM 里的话
+         * 这一簇的高度不缩，屏幕上看着已经收起来，那片空白却照旧点不到卡、也拖不动图。
+         */}
+        {minimap && <Minimap layout={layout} view={view} size={freeSize()} waiting={waiting.at} onGo={(x, y) => setView((v) => {
           const { w, h } = freeSize();
           return { ...v, x: w / 2 - x * v.k, y: h / 2 - y * v.k };
-        })} />
+        })} />}
       </div>
 
       {pickedBox && (
