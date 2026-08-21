@@ -5,7 +5,8 @@
  * 直接 INSERT 投影表的话，下次升级重放完这些调查就空了。
  *
  * 跑：`npm run seed`（它把 better-sqlite3 的 ABI 一并切好，别自己拼 tsx）。
- * 换库：`npm run seed -- <db 路径>`，默认是 app 的 userData 那份。
+ * 换库：`npm run seed -- <db 路径>`，默认是**开发那份** userData（`DEV_USER_DATA_DIR`）——
+ * 假调查不该落进正式包的库里。
  * 工作区目录默认全是仓库根，想有区分度给 `INQUESTRY_SEED_ROOTS=/a,/b`。
  *
  * 重复跑是安全的：case id 全是写死的，重跑先把它们连事件带投影删干净再重建。
@@ -24,19 +25,20 @@ import { blobDir, openDatabase } from '../src/backend/db/database.js';
 import type { DomainEvent } from '../src/backend/db/events.js';
 import { applyEvent } from '../src/backend/db/projector.js';
 import { parseOccurredAt } from '../src/shared/timebase.js';
+import { DEV_USER_DATA_DIR } from '../src/shared/user-data.js';
 
 /** 仓库根。**从脚本自己的位置算，不用 `process.cwd()`**——从别的目录调用它时后者是错的。 */
 const REPO = path.resolve(fileURLToPath(import.meta.url), '../..');
 
 /**
- * app 的 `userData`，按平台展开。
+ * dev 那份 `userData`，按平台展开。
  *
  * **这里只能重算一份，不能调 `app.getPath('userData')`**：那要一个起来的 Electron app，
- * 而这个脚本跑在裸 node 上。三条分支抄的是 Electron 的规则，目录名取 `productName`。
+ * 而这个脚本跑在裸 node 上。三条分支抄的是 Electron 的规则。
  * 对不上的表现是"跑完了，但 app 里什么都没有"——两边各写各的库，谁都不报错。
  */
 function userData(): string {
-  const name = 'Inquestry';
+  const name = DEV_USER_DATA_DIR;
   if (process.platform === 'darwin') return path.join(homedir(), 'Library/Application Support', name);
   if (process.platform === 'win32') return path.join(process.env.APPDATA ?? path.join(homedir(), 'AppData/Roaming'), name);
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(homedir(), '.config'), name);

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +26,7 @@ import { claudeAuthStatus, sdkClaudeExecutable } from '../backend/env/sdk-bin.js
 import { proposeCaseFacts, timebaseFrom } from './case-namer.js';
 import { CaseRegistry } from './case-registry.js';
 import { applyTakeover, CaseRunner } from './case-runner.js';
+import { isReleaseChannel } from './channel.js';
 import { createUpdater } from './updater.js';
 import {
   EMPTY_SNAPSHOT,
@@ -50,6 +51,25 @@ import { normalizeSettings, type UiSettings } from '../shared/settings.js';
 import { reportMarkdown } from '../shared/markdown.js';
 import { pageFile } from '../shared/paging.js';
 import { reportInput } from '../shared/report.js';
+import { DEV_USER_DATA_DIR } from '../shared/user-data.js';
+
+/**
+ * 正式渠道与开发中的包分家，各用各的 userData。
+ *
+ * 开发中的包跑着开发中的 schema，最容易把库写到正式包读不了的版本上（`isReleaseChannel`）。
+ *
+ * **必须跑在任何一次 `getPath('userData')` 之前**，所以放在模块顶层而不是 whenReady 里。
+ * 显式给了 --user-data-dir 时不插手：CDP 那套验证要的就是一个临时空目录。
+ *
+ * 自己先把目录建出来：Electron 文档说 `setPath` 对不存在的目录会抛（实测 43 不抛，
+ * 目录由它自己建）。**这一句在启动那个 try 之外**，真抛了就没有窗口、没有失败屏、
+ * 什么都没有——两行 mkdir 换掉一条只在换 Electron 版本时才现形的启动崩溃。
+ */
+if (!isReleaseChannel() && !process.argv.some((a) => a.startsWith('--user-data-dir'))) {
+  const dir = path.join(app.getPath('appData'), DEV_USER_DATA_DIR);
+  mkdirSync(dir, { recursive: true });
+  app.setPath('userData', dir);
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RECENT_ROOTS_KEY = 'intake.recent_roots';
