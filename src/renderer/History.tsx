@@ -7,7 +7,7 @@ import type {
   CaseListRow,
   DeleteOutcome,
 } from '../shared/ipc.js';
-import { ago, caseNode, caseShape, caseState, caseTerminal, rootLabel, TodoBadge } from './caseline.js';
+import { ago, caseNode, caseShape, caseSnip, caseState, caseTerminal, rootLabel, TodoBadge } from './caseline.js';
 import { freshenHits } from './drafts.js';
 
 /** ≥3 字走得到索引，快到可以边打边查。 */
@@ -399,7 +399,7 @@ function Row({
               </span>
               <span className="dot">·</span>
               <span className="snip">
-                {c.headline ?? (c.steps ? `${c.steps} 步，还没有结论` : '还没开始查')}
+                {caseSnip(c)}
               </span>
             </>
           )}

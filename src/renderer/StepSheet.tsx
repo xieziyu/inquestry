@@ -18,6 +18,7 @@ import { Icon } from './Icon.js';
 export function StepSheet({
   box,
   meta,
+  stray,
   liveLanes,
   aside,
   onClose,
@@ -29,6 +30,11 @@ export function StepSheet({
 }: {
   box: StageBox;
   meta: CaseMeta;
+  /**
+   * 不属于任何方向的那几次调用（`unassignedCalls`）。**这儿是它们唯一读得到的地方**：
+   * 兜底步不出卡、报告也不列它，卡面那条带子只报个数。
+   */
+  stray: CallNode[];
   liveLanes: string[];
   /**
    * 点开的是一句旁白时，它所在的那一组。**由舞台那侧按 `ownerId` 取好送进来**——
@@ -71,7 +77,7 @@ export function StepSheet({
         ) : box.kind === 'step' ? (
           <>
             <span className="ord">{box.row.label}</span>
-            <span className="kind">{kindLabel(box.row.step.kind)}</span>
+            <span className="kind">{kindLabel(box.row.step.kind, box.row.step.lane)}</span>
             <span className={`state ${box.row.step.status}`}>{statusLabel(box.row.step.status)}</span>
           </>
         ) : null}
@@ -84,7 +90,7 @@ export function StepSheet({
         {say ? (
           <SayGroupBody group={say} />
         ) : box.kind === 'case' ? (
-          <CaseBody meta={meta} />
+          <CaseBody meta={meta} stray={stray} onExcerpt={onExcerpt} />
         ) : box.kind === 'step' ? (
           <StepBody box={box} onExcerpt={onExcerpt} onGo={onGo} liveLanes={liveLanes} onStopLane={onStopLane} />
         ) : null}
@@ -166,7 +172,15 @@ function SayGroupBody({
   );
 }
 
-function CaseBody({ meta }: { meta: CaseMeta }) {
+function CaseBody({
+  meta,
+  stray,
+  onExcerpt,
+}: {
+  meta: CaseMeta;
+  stray: CallNode[];
+  onExcerpt: (callId: string, anchor: string | null, title: string) => void;
+}) {
   return (
     <>
       <section className="sh-sec">
@@ -195,6 +209,46 @@ function CaseBody({ meta }: { meta: CaseMeta }) {
           </span>
         </div>
       </section>
+
+      {/* 那几次不属于任何方向的调用。**开场摸底与收尾杂务混在一起，不去猜是哪一类**：
+          它们的共同点只有"发生时没有开着的步"，按时刻分成两段就是替 agent 编一个意图 */}
+      {stray.length > 0 && (
+        <section className="sh-sec">
+          <h4>不属于任何方向的调用 {stray.length} 次 · 原始输入输出完整留存</h4>
+          {/* 「还说不出假设，先摸一眼」与收尾时那几发都落在这儿——它们不是一个排查方向，
+              但确实发生过，所以留得住、找得到 */}
+          <CallList calls={stray} onExcerpt={onExcerpt} />
+        </section>
+      )}
+    </>
+  );
+}
+
+/** 一串工具调用。**step 卡与信息卡共用这一份**：两处各写一遍的话，一处加了标记另一处不会有。 */
+function CallList({
+  calls,
+  onExcerpt,
+}: {
+  calls: CallNode[];
+  onExcerpt: (callId: string, anchor: string | null, title: string) => void;
+}) {
+  return (
+    <>
+      {calls.map((c) => (
+        <div key={c.id} className={`sh-call ${c.status}`} onClick={() => onExcerpt(c.id, null, c.toolName)}>
+          <div className="ch">
+            <b>#{c.callNumber}</b>
+            {c.toolName}
+            <span className={`origin ${c.origin}`}>{c.origin === 'operator' ? '人工' : 'agent'}</span>
+            {gateLabel(c.gate) && <span className="gated">{gateLabel(c.gate)}</span>}
+            {callStatusLabel(c.status, c.gate) && (
+              <span className={`cs ${c.status}`}>{callStatusLabel(c.status, c.gate)}</span>
+            )}
+            <span className="lines">{c.outputLines} 行</span>
+          </div>
+          <pre>{c.outputPreview}</pre>
+        </div>
+      ))}
     </>
   );
 }
@@ -283,21 +337,7 @@ function StepBody({
       {step.calls.length > 0 && (
         <section className="sh-sec">
           <h4>工具调用 {step.calls.length} 次 · 原始输入输出完整留存</h4>
-          {step.calls.map((c) => (
-            <div key={c.id} className={`sh-call ${c.status}`} onClick={() => onExcerpt(c.id, null, c.toolName)}>
-              <div className="ch">
-                <b>#{c.callNumber}</b>
-                {c.toolName}
-                <span className={`origin ${c.origin}`}>{c.origin === 'operator' ? '人工' : 'agent'}</span>
-                {gateLabel(c.gate) && <span className="gated">{gateLabel(c.gate)}</span>}
-                {callStatusLabel(c.status, c.gate) && (
-                  <span className={`cs ${c.status}`}>{callStatusLabel(c.status, c.gate)}</span>
-                )}
-                <span className="lines">{c.outputLines} 行</span>
-              </div>
-              <pre>{c.outputPreview}</pre>
-            </div>
-          ))}
+          <CallList calls={step.calls} onExcerpt={onExcerpt} />
         </section>
       )}
     </>

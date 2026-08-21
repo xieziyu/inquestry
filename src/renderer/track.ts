@@ -1,4 +1,5 @@
 import type { ChatLine, StepNode } from '../shared/ipc.js';
+import { directionText, isFoldedFallback } from '../shared/report.js';
 
 /**
  * 轨道布局（D23 / ui.md §3）。
@@ -82,7 +83,18 @@ export type TrackLayout = {
 /** 主干那条线的 id。信息卡也算它的一员，所以它恒占 0 列。 */
 export const TRUNK = 'trunk';
 
-export function trackLayout(steps: StepNode[]): TrackLayout {
+export function trackLayout(all: StepNode[]): TrackLayout {
+  /**
+   * **主干兜底步不上轨道**（判据与理由见 `shared/report.ts` 的 `isFoldedFallback`）：
+   * 它永远没有命题、没有结论、没有证据，占一个与"一个排查方向"同等规格的位置就是纯噪声。
+   * 那几次调用改由信息卡认领——卡面一条带子进详情抽屉（`unassignedCalls`）。
+   *
+   * 滤在这儿而不是调用方：轨道与几何、旁白归属、导览图全从这一份行序长出来，
+   * 少滤一处的表现是画布上凭空多出一张空卡，或者旁白挂到一张看不见的卡下面去。
+   * 序号照旧是库里的 `ordinal`（会跳号）——重编的话报告与画布会各说一套编号，
+   * 而"被 #3 推翻"这类引用两边都得对得上。
+   */
+  const steps = all.filter((s) => !isFoldedFallback(s));
   const byId = new Map(steps.map((s) => [s.id, s]));
 
   /**
@@ -305,6 +317,14 @@ const CHARS_PER_LINE = { dir: 22, say: 22, question: 22 } as const;
 
 /** 结论那一格的定额：**恒占两行**，与这会儿有没有结论无关（见上面那段红字）。 */
 export const VERDICT_LINES = 2;
+/**
+ * 信息卡底下那条带子（「另有 N 次调用不属于任何方向」）占的高度：**恒占，N=0 也占**。
+ *
+ * 那几次调用来一次涨一个数，按"有没有"决定出不出这一行的话，第一次兜底调用落地的那一刻
+ * 信息卡长高一截，它下面每一张已经落笔的卡整体下移——与结论槽、标题槽是同一条（D23）。
+ * 上面那段红字里"高度只准建立在不会再变的字段上"说的正是这种字段。
+ */
+export const STRAY_H = 23;
 /** 标题那一格的定额：**恒占一行**，改名不改高度。全文在详情浮层里。 */
 export const TITLE_LINES = 1;
 /**
@@ -321,18 +341,10 @@ function textWidth(s: string) {
 }
 
 /**
- * 卡面上那句假设。**估行数与渲染必须用同一份文本**——两个兜底句一长一短，
- * 各写一份的结果是支线那张卡按短的估、按长的渲染，末尾那行被裁掉。
- *
- * 两句兜底不能共用一句：主干那句说的是"agent 在声明方向之前就先查了一次"，
- * 支线那句得说清方向由主线收敛时给；照抄主干那句的话，读的人会以为主线漏了一次 `open_step`。
+ * 卡面上那句假设。**住在 `shared/report.ts`**：报告与 Markdown 也要按同一份文本分派兜底句，
+ * 各写一份的结果是同一条支线在两个屏上被说成两件事。舞台这侧照旧从这儿取。
  */
-export function directionText(step: { direction: string | null; lane: string | null }) {
-  if (step.direction) return step.direction;
-  return step.lane
-    ? '（支线：子 agent 自己的调用都记在这里，方向由主线在收敛回来时给）'
-    : '（未归类：agent 在声明方向之前就先查了一次）';
-}
+export { directionText };
 
 /** 估行数。空文本给 0 行（那一段整个不渲染，也就不占高度）。 */
 export function estLines(text: string | null | undefined, perLine: number, max: number) {
@@ -426,7 +438,7 @@ export const GROUP_BOX_PREFIX = 'aside:';
  * 真正会失败的检查在 `uishot` 那种真渲染的探针里（正文 scrollHeight 不超过它自己的高度）。
  */
 function caseHeight(titleLines: number, questionLines: number) {
-  return 32 + titleLines * 21 + 7 + questionLines * 19 + 36;
+  return 32 + titleLines * 21 + 7 + questionLines * 19 + STRAY_H + 36;
 }
 function stepHeight(dirLines: number, vdLines: number) {
   return 58 + dirLines * 20 + 6 + vdLines * 18;

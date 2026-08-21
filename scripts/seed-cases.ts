@@ -488,7 +488,10 @@ function seedPaymentCase() {
 
   chat(T('2026-08-14T09:28:00'), 'user', '别在 MQ 上耗了，回调是同步 HTTP 打进来的，直接看 handleCallback 那段代码。', s1);
 
-  // #3 未归类兜底：agent 在声明方向之前就先查了一次
+  // #3 兜底步：#2 收了之后 agent 还没声明下一个方向就先查了两下，harness 就地开一个把调用接住。
+  // **真实形态是永远 open、0 条证据、没有结论**——agent 拿不到它的 stepId，`close_step` 无从调用。
+  // 一度在这儿补了 close + verdict，那份数据在两个屏上都是假的：舞台会给它一张有结论的卡，
+  // 而报告的「遗留问题」按 status 取、不看 kind，于是它混进了那一节
   const st3 = 'st_pay_3';
   emit(C, s1, {
     type: 'step.opened',
@@ -497,10 +500,6 @@ function seedPaymentCase() {
   call(C, { id: 'tc_pay_6', session: s1, step: st3, tool: 'Read', at: T('2026-08-14T09:28:25'), endAt: T('2026-08-14T09:28:27'), input: { file_path: 'src/pay/handleCallback.ts' }, output: CODE_SNIPPET });
   // 超时自动放行的那一档
   call(C, { id: 'tc_pay_7', session: s1, step: st3, tool: 'Grep', at: T('2026-08-14T09:28:40'), endAt: T('2026-08-14T09:31:45'), gate: 'timeout', input: { pattern: 'idempot', path: 'src/pay' }, output: 'src/pay/README.md:12: 幂等键规范见风控那边的 RFC-2211（未定稿）' });
-  emit(C, s1, {
-    type: 'step.closed',
-    payload: { stepId: st3, status: 'inconclusive', verdict: '（未归类）先扫了一遍回调代码，handleCallback 里那把幂等锁只留了一条 TODO。', confidence: 0.5, at: T('2026-08-14T09:32:00') },
-  });
 
   // #4 挂在 #1 下面的分叉
   const st4 = 'st_pay_4';

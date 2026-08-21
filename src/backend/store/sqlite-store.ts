@@ -596,15 +596,23 @@ export function createInvestigationSession(
    * 支线的兜底节点**挂在起它那次调用所在的步下面**：lane key 就是那次调用的
    * `tool_use_id`，顺着它查一次就得到父。轨道因此不必认识泳道，照旧按
    * `parent_step_id` 把它缩进成一条分叉（D23）。
+   *
+   * 🔴 **主干的兜底节点只在"主干还停在它身上"时复用。** 它永远关不掉（agent 拿不到
+   * 它的 stepId），所以整场会话里"当下没开步"的调用都会回灌到最早那一个——
+   * 表现是收尾时写 memory 的那几发，落在了排在最前面的那个节点上，
+   * 时间线在那儿是断的。主干上再开过步就另起一个，那几发因此落在自己的节点、排在末尾。
+   *
+   * 判据是**主干这一条线上有没有更新的步**，不是整个会话：子 agent 的步是另一条线上的事，
+   * 拿它当分界的话，每起一条支线就多一个兜底节点，而主干的叙事根本没被打断过。
    */
   function ensureStep(lane?: string): string {
     const open = db
       .prepare(
-        `SELECT id FROM steps WHERE session_id=? AND lane IS ? AND status='open'
+        `SELECT id, kind, ordinal FROM steps WHERE session_id=? AND lane IS ? AND status='open'
          ORDER BY ordinal DESC LIMIT 1`,
       )
-      .get(ctx.sessionId, lane ?? null) as { id: string } | undefined;
-    if (open) return open.id;
+      .get(ctx.sessionId, lane ?? null) as { id: string; kind: string; ordinal: number } | undefined;
+    if (open && (lane || open.kind !== 'unclassified' || open.ordinal === lastTrunkOrdinal())) return open.id;
     const id = ctx.newId('st');
     emit({
       type: 'step.opened',
@@ -630,6 +638,17 @@ export function createInvestigationSession(
     return (db.prepare(`SELECT step_id FROM tool_calls WHERE id=?`).get(lane) as
       | { step_id: string }
       | undefined)?.step_id;
+  }
+
+  /** 主干上最后落笔的那一步的序号；没有就是 0。见 `ensureStep` 那段红字。 */
+  function lastTrunkOrdinal(): number {
+    return (
+      (
+        db
+          .prepare(`SELECT MAX(ordinal) m FROM steps WHERE session_id=? AND lane IS NULL`)
+          .get(ctx.sessionId) as { m: number | null }
+      ).m ?? 0
+    );
   }
 
   /** 这条泳道当前开着的那一步。与 `ensureStep` 认的是同一条（`lane IS ?` / `status='open'`）。 */

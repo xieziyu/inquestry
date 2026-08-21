@@ -153,8 +153,11 @@ export function casePage(
   const rows = db
     .prepare(
       `SELECT ${CASE_COLS}, c.project_root, c.incident_date, c.verdict_shape,
+              -- 只数有方向的步：兜底步是 harness 就地开的容器，没有命题也不出卡，
+              -- 数进来的话这一栏比人在工作区里数得出的方向多出好几。direction 只有
+              -- agent 显式 open_step 时才写，所以它同时排掉了主干与支线两种兜底
               (SELECT COUNT(*) FROM steps s JOIN sessions se ON se.id = s.session_id
-                WHERE se.case_id = c.id AND s.lane IS NULL) AS steps,
+                WHERE se.case_id = c.id AND s.direction IS NOT NULL) AS steps,
               (SELECT s.verdict_text FROM steps s JOIN sessions se ON se.id = s.session_id
                 WHERE se.case_id = c.id AND s.verdict_text IS NOT NULL AND s.status != 'superseded'
                 ORDER BY ${CHRONO_DESC} LIMIT 1) AS headline

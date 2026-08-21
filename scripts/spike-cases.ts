@@ -30,7 +30,14 @@ import {
   type Db,
 } from '../src/backend/db/database.js';
 import { checkEventShapes, rebuildProjections } from '../src/backend/db/projector.js';
-import { caseList, MAX_HITS, reportSections, searchCases, searchNarrative } from '../src/backend/db/queries.js';
+import {
+  caseList,
+  casePage,
+  MAX_HITS,
+  reportSections,
+  searchCases,
+  searchNarrative,
+} from '../src/backend/db/queries.js';
 import {
   deleteCase,
   emptyBlobTrash,
@@ -43,6 +50,7 @@ import {
   EMPTY_SNAPSHOT,
   type CaseBrief,
   type CaseHit,
+  type CaseListRow,
   type DeleteOutcome,
 } from '../src/shared/ipc.js';
 import { cacheBlob, cacheHit } from '../src/backend/agent/capabilities.js';
@@ -50,7 +58,7 @@ import { DEFAULT_UI_SETTINGS, LIMIT_BOUNDS, normalizeSettings } from '../src/sha
 import { CaseRegistry } from '../src/main/case-registry.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { draftKey, freshenHits, pruneDrafts, stateFillable, type CardDrafts } from '../src/renderer/drafts.js';
-import { caseNode, caseState, rootParent } from '../src/renderer/caseline.js';
+import { caseNode, caseSnip, caseState, rootParent } from '../src/renderer/caseline.js';
 import { stateOf } from '../src/renderer/RunBar.js';
 import type { ShapeSuggestion, Snapshot } from '../src/shared/ipc.js';
 
@@ -752,6 +760,60 @@ async function main() {
     '报告的「最新」按会话先后算，旧会话的大 ordinal 压不过新会话',
     reportSections(db, 'case_x').impact?.verdict_text === '新会话给的影响面：37 个用户',
     `取到的是「${reportSections(db, 'case_x').impact?.verdict_text}」`,
+  );
+
+  // ── ⑥.5 历史页那一行：「开始了没有」按 started 说，不按步数 ────────────────
+  //
+  // 开局必有一段"还说不出假设，先摸一眼"：CLI 延迟加载 MCP 工具，agent 想调 open_step
+  // 得先 ToolSearch 一次，而那本身就是一次要记账的调用——`ensureStep()` 就地开一个兜底步
+  // 把它接住。那种步没有 direction，历史页的 `steps` 不数它（数了就比人在工作区里
+  // 数得出的方向多），于是"已启动 / 0 方向"这一档只有 `started` 说得出。
+  const fb = makeRunner('case_fb', '还没声明方向就先查了两下');
+  const fbs = (fb as unknown as Probe).beginSession();
+  fbs.recordToolStart({ callId: 'call_fb1', toolName: 'ToolSearch', input: { query: 'select:open_step' } });
+  fbs.recordToolEnd({ callId: 'call_fb1', output: 'ok' });
+  fb.close();
+  const fbRow = casePage(db, {}).rows.find((r) => r.id === 'case_fb')!;
+  const fbSteps = (
+    db
+      .prepare(
+        `SELECT COUNT(*) c FROM steps s JOIN sessions se ON se.id=s.session_id
+         WHERE se.case_id='case_fb' AND s.direction IS NULL`,
+      )
+      .get() as { c: number }
+  ).c;
+  check(
+    '只跑过兜底调用、一次 open_step 都没有的调查：started 为真而 steps 为 0',
+    fbSteps === 1 && !!fbRow.started && fbRow.steps === 0 && fbRow.headline === null,
+    `库里兜底步 ${fbSteps} 个 · started=${fbRow.started} · steps=${fbRow.steps} —— ` +
+      '兜底步个数必须非 0，否则"steps 数全部步"那种写法在这份夹具上也算得对，这条就是空的',
+  );
+  /** 库里那一行接成历史页那一行（`started` 在 SQLite 里是 0/1）。运行时那一半这儿用不到。 */
+  const asListRow = (over: Partial<CaseListRow> = {}): CaseListRow => ({
+    id: fbRow.id,
+    title: fbRow.title,
+    status: fbRow.status,
+    updatedAt: fbRow.updated_at,
+    current: false,
+    todos: 0,
+    running: false,
+    started: !!fbRow.started,
+    loaded: false,
+    projectRoot: fbRow.project_root,
+    incidentDate: fbRow.incident_date,
+    verdictShape: null,
+    steps: fbRow.steps,
+    headline: fbRow.headline,
+    ...over,
+  });
+  check(
+    '这一行写的是「已开始」，不是「还没开始查」',
+    caseSnip(asListRow()) === '已开始，还没有明确方向' &&
+      caseSnip(asListRow({ started: false })) === '还没开始查' &&
+      caseSnip(asListRow({ steps: 3 })) === '3 步，还没有结论' &&
+      caseSnip(asListRow({ headline: '就是它' })) === '就是它',
+    '四档都验：按步数分档的话，这次调查在历史页写着「还没开始查」，' +
+      '而它的工作区信息卡上正列着那几次调用',
   );
 
   // ── ⑦ 载入着的调查不会被切换栏的条数上限截掉 ────────────────────────────

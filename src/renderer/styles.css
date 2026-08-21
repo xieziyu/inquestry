@@ -646,6 +646,20 @@ button.primary:has(> .ic) { gap: 6px; }
   margin: 7px 0 0; color: var(--dim); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap;
   display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* 「另有 N 次调用不属于任何方向」：那几次调用唯一的入口（点卡片开详情抽屉）。
+   🔴 **恒占这一行，空着也占**——高度是 `track.ts` 的 `STRAY_H` 算好的，
+   按"有没有"决定出不出的话，第一次兜底调用落地的那一刻整条主干往下掉一截。
+   压得比问题描述还暗一档：它是一条线索，不是这张卡要读的正文。 */
+.casecard .stray {
+  margin-top: 7px; height: 16px; overflow: hidden;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; line-height: 16px; color: var(--dim-2); white-space: nowrap;
+}
+/* 只在鼠标经过整张卡时露出来，同「改标题」那一枚：常驻的话每张卡都像挂着一件待办 */
+.casecard .stray .go { color: var(--dim); opacity: 0; transition: opacity .14s ease; }
+.casecard:hover .stray .go { opacity: 1; }
+.world[data-lod="far"] .casecard .stray { display: none; }
+
 .casecard .meta {
   display: flex; gap: 16px; flex-wrap: wrap; margin-top: 9px;
   padding-top: 8px; border-top: 1px solid var(--line-soft);

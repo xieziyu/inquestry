@@ -85,6 +85,20 @@ export function caseShape(c: CaseListRow): string | null {
 }
 
 /**
+ * 列表上那句摘要：当前结论 → 查过几个方向 → 还没开始。
+ *
+ * 🔴 **"开始了没有"按 `started` 说，不按步数。** `steps` 只数 agent 声明过方向的步
+ * （`queries.ts` 的 `casePage`），而一次调查完全可能已经跑起来、兜底步里落了好几次调用，
+ * 却还没 `open_step`——按步数读的话这一行写着「还没开始查」，而那次调查的工作区信息卡上
+ * 正列着那几次调用。同一次调查在两个屏上说了两句相反的话，且两处都不报错。
+ */
+export function caseSnip(c: CaseListRow): string {
+  if (c.headline) return c.headline;
+  if (c.steps) return `${c.steps} 步，还没有结论`;
+  return c.started ? '已开始，还没有明确方向' : '还没开始查';
+}
+
+/**
  * 相对时间。**只到"天"为止，再往前就给日期**：
  * "37 天前"要人自己换算成哪一天，而调查是按日子记的（基准日期就是一天）。
  */

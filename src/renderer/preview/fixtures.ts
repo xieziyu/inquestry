@@ -39,7 +39,8 @@ const min = 60_000;
  * CHAT / 支线同一个故事的说法。**只换文案字段**：状态、置信度、证据结构原样保留，
  * 那些才是版面差异的来源，动了它们预览就不再覆盖那些形态。
  */
-const STORY: Record<string, { direction: string; verdict: string }> = {
+// 兜底步只换 verdict：`direction` 必须留 null，否则预览上看不到那两句兜底文案
+const STORY: Record<string, { direction?: string; verdict: string }> = {
   st1: {
     direction: '先证实两条记录是不是同一个请求写进去的',
     verdict: '两条 order 来自两个 req_id，第一条超时 2140ms——第二条是网关重试写出来的。',
@@ -64,11 +65,14 @@ const STORY: Record<string, { direction: string; verdict: string }> = {
     direction: '重试为什么没按幂等约定退避',
     verdict: '还没查清。',
   },
+  // 支线兜底步：没有命题，方向由主线收敛回来时给
+  st_lane: { verdict: '翻了近三个月的同类工单，四张里有三张的根因写的就是「重试 + 无幂等」。' },
 };
 const EV_STORY: Record<string, { claim: string; occurredAtRaw: string | null }> = {
   e1: { claim: 't_order 落下第一条 u1001:cart7 订单', occurredAtRaw: '12:03:02' },
   e2: { claim: '同一 cart_key 的第二条写入落库，没有被索引拦下', occurredAtRaw: '12:04:51' },
   e3: { claim: '从库 seconds_behind_master=0.34，幂等检查读到的是旧数据', occurredAtRaw: null },
+  e4: { claim: 'TK-20250311 / TK-20250702 / TK-20260204 三张工单的结论都是「网关重试 + 服务端无幂等」', occurredAtRaw: null },
 };
 const steps = rawSteps.map((s, i) => ({
   ...s,
@@ -138,14 +142,24 @@ const REPORT: Snapshot['report'] = {
  * 往共用夹具里加的话，`spike:report` 覆盖的那个案子就和屏幕上这个慢慢变成两回事。
  */
 const LANE = 'toolu_01ab9f';
+/**
+ * 预览这一侧另接的那几步的序号：**从共用夹具的最大 `ordinal` 接着数，不许写死**。
+ * 那份夹具随时会加步（它按"每一项都让某种错法算错"长），写死的数会与它撞号——
+ * 而同一会话里两个 `#9` 是真数据不可能有的形态：卡上、报告里、"被 #9 推翻"那类引用
+ * 会各指一张卡，且哪儿都不报错。`spike:stage` 有一条兜着这个。
+ */
+let ordSeq = Math.max(...rawSteps.map((s) => s.ordinal));
+const nextOrd = () => ++ordSeq;
 /** 底带上那个「N 证据」不是 0 才看得出版面；内容在这一层用不到。 */
 const ev0 = (id: string) => ({ id, claim: id, anchor: null, occurredAtRaw: null, actor: null, callId: 'lc1' });
 steps.push(
   {
     ...rawSteps[0]!,
     id: 'lane1',
-    ordinal: 7,
+    ordinal: nextOrd(),
     startedAt: now - 5 * min,
+    // 支线兜底步的真实 kind。写成 `normal` 的话，预览上看不到"徽标按 lane 分派"那一档
+    kind: 'unclassified',
     lane: LANE,
     parentStepId: steps[1]!.id,
     direction: null,
@@ -157,8 +171,9 @@ steps.push(
   {
     ...rawSteps[0]!,
     id: 'lane2',
-    ordinal: 8,
+    ordinal: nextOrd(),
     startedAt: now - 4 * min,
+    kind: 'unclassified',
     lane: LANE,
     parentStepId: steps[1]!.id,
     direction: null,
@@ -170,7 +185,7 @@ steps.push(
   {
     ...rawSteps[0]!,
     id: 'fork1',
-    ordinal: 9,
+    ordinal: nextOrd(),
     startedAt: now - 3 * min,
     parentStepId: steps[3]!.id,
     direction: '换个角度：先看这张表的唯一约束是不是从来就没建上过',
@@ -229,7 +244,7 @@ steps.push(
   {
     ...rawSteps[0]!,
     id: 'live1',
-    ordinal: 10,
+    ordinal: nextOrd(),
     startedAt: now - 3 * min,
     parentStepId: null,
     direction: '把 12:00–12:10 那一段的重试全量捞出来，看还有没有别的表被写重',
@@ -242,7 +257,7 @@ steps.push(
   {
     ...rawSteps[0]!,
     id: 'live2',
-    ordinal: 11,
+    ordinal: nextOrd(),
     startedAt: now - 40_000,
     parentStepId: null,
     direction: '这一轮还在想下一步查什么',
@@ -255,7 +270,7 @@ steps.push(
   {
     ...rawSteps[0]!,
     id: 'lane3',
-    ordinal: 12,
+    ordinal: nextOrd(),
     startedAt: now - 2 * min,
     lane: LANE,
     parentStepId: steps[1]!.id,
@@ -266,6 +281,12 @@ steps.push(
     calls: [liveCall('lc5', 'WebFetch', 22_000)],
   },
 );
+
+/**
+ * 这份夹具的步骤表。**导出只为让 `spike:stage` 验得到序号**——浏览器这一侧照旧只用
+ * `installPreviewApi()`，这个目录本来也不进 Electron 的打包路径。
+ */
+export const PREVIEW_STEPS = steps;
 
 const CASES: CaseBrief[] = [
   // 五行**各占一档节点**（运行中 / 等你 / 待开始 / 已定稿 / 已归档）：少一档就等于那一档的配色没人看过。

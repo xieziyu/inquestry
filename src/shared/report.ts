@@ -10,6 +10,7 @@
  */
 
 import type {
+  CallNode,
   CaseMeta,
   ClosingStepKind,
   IncidentEntry,
@@ -53,6 +54,84 @@ export const SHAPE_SOURCE_COPY: Record<ShapeSource, string> = {
   agent: 'agent 声明的',
   inferred: '没人声明过，按现有数据推的',
 };
+
+/**
+ * 兜底步：某次工具调用发生时那条泳道上没有开着的 step，harness 就地开一个把它接住
+ * （`sqlite-store.ts` 的 `ensureStep`）。同一个 `kind` 底下装着两种完全不同的东西，
+ * **按 `lane` 分**：
+ *
+ * - **主干兜底**（`lane` 为空）：agent 拿不到它的 stepId，`close_step` 无从调用，
+ *   所以它没有命题、没有结论、恒为 0 条证据。开场"还说不出假设先摸一眼"与收尾杂务都落这里
+ * - **支线兜底**（有 `lane`）：子 agent 自己的账本，主线收敛回来时补上 summary 与 `converged`，
+ *   有证据、在报告里挂着脚注
+ *
+ * 🔴 **要滤掉的是前者，判据不能只看 `kind`**：按 kind 筛会把支线那一批连同它们的脚注一起
+ * 筛掉，而页脚水印仍旧写着总条数。**还得确认它确实只是那个自动开出来的容器**：
+ * 真实链路上它恒为 open、没有命题、没有结论、0 条证据，但库里躺着按老写法造的数据
+ * （`seed-cases`、任何直接发 `step.closed` 的路径都不经过那条约束），那种步上带着
+ * 人写下的结论或挂着的证据——折掉它，那些东西就再也没有出口了。
+ */
+export function isTrunkFallback(step: { kind: StepNode['kind']; lane: string | null }): boolean {
+  return step.kind === 'unclassified' && !step.lane;
+}
+
+/** 舞台不给它卡、报告不给它行的那一种。理由与判据见 {@link isTrunkFallback}。 */
+export function isFoldedFallback(step: {
+  kind: StepNode['kind'];
+  lane: string | null;
+  status: StepNode['status'];
+  direction: string | null;
+  verdict: string | null;
+  evidence: unknown[];
+}): boolean {
+  return (
+    isTrunkFallback(step) &&
+    step.status === 'open' &&
+    step.direction === null &&
+    step.verdict === null &&
+    step.evidence.length === 0
+  );
+}
+
+/**
+ * 那几次不属于任何方向的调用。**信息卡是它们唯一的出口**（卡面那条带子 + 详情抽屉里的清单）——
+ * 舞台不再给兜底步一张卡，报告也不列它，但调用本身是真发生过的，"完整留存"说的正是这个。
+ *
+ * 顺序逐字是步的到达顺序，步内是调用自己的顺序：**不按时间重排**，那是排查时间线的读法。
+ */
+export function unassignedCalls(steps: StepNode[]): CallNode[] {
+  return steps.filter(isFoldedFallback).flatMap((s) => s.calls);
+}
+
+/**
+ * 卡面 / 报告上那句假设。**估行数与渲染必须用同一份文本**——两个兜底句一长一短，
+ * 各写一份的结果是支线那张卡按短的估、按长的渲染，末尾那行被裁掉。
+ *
+ * 两句兜底不能共用一句，理由见 {@link isTrunkFallback}：支线那句得说清方向由主线收敛时给，
+ * 照抄主干那句的话，读的人会以为主线漏了一次 `open_step`。**报告与 Markdown 也走这一份**：
+ * 那两处一度各写着一句「（未归类）」，于是一条跑完的子 agent 支线在纸上被印成了分类失败。
+ *
+ * 主干那句在正常链路上已经没有出处（那种步不出卡、不进报告），留着是因为带证据的老数据还在库里。
+ */
+export function directionText(step: { direction: string | null; lane: string | null }): string {
+  if (step.direction) return step.direction;
+  return step.lane
+    ? '（支线：子 agent 自己的调用都记在这里，方向由主线在收敛回来时给）'
+    : '（不属于任何方向：这几次调用发生时没有开着的步）';
+}
+
+/**
+ * 归档的半程报告顶上那句话。**报告屏与 Markdown 共用这一份**：各写各的结果是同一份调查
+ * 在纸上与导出的文档里被说成两件事，而这句话正是"它没有根因栏不是漏了"的唯一交代。
+ *
+ * 🔴 **0 要单独说。** `abortedAt` 数的是 agent 声明过方向的步，而刚建单就归档、
+ * 或只跑过兜底调用（还没 `open_step`）的调查都到得了这儿——那时套进「第 N 步」
+ * 印出来的是一句「第 0 步」，人读到的是产品出了 bug，而事实是"一个方向都没来得及明确"。
+ */
+export function abortedNote(abortedAt: number): string {
+  const where = abortedAt > 0 ? `在第 ${abortedAt} 步` : '在明确任何方向之前';
+  return `调查${where}被人为终止。以下是查到为止的部分。`;
+}
 
 export type ChainLink = {
   stepId: string;
@@ -142,8 +221,9 @@ export type ReportPlan = {
    */
   evidenceCount: number;
   /**
-   * 归档的半程报告顶上那句「调查在第 N 步被人为终止」（ui.md §8.4）。
+   * 归档的半程报告顶上那句话数的方向数（ui.md §8.4）。
    * 其余一律为 null——它是**人为放弃**的标记，不是"步数"这个中性事实。
+   * 措辞由 {@link abortedNote} 一处给，两个屏共用。
    */
   abortedAt: number | null;
   sections: ReportSection[];
@@ -253,7 +333,11 @@ export function reportPlan(input: ReportInput): ReportPlan {
     // 是按老契约写下的事件，而重放它们用的是新代码（`rebuildProjections`）；
     // seed 与任何直接发 `step.closed` 的路径同样不经过那道 schema
     sec('impact', { kind: 'impact', text: report.impact?.trim() || null, metrics: report.metrics }),
-    sec('path', { kind: 'path', rows: input.steps }),
+    // 主干兜底步不进这一节，**也不换成一行计数**：它没有命题、没有结论、没有证据，
+    // 一行「（未归类）· N 次调用 · 0 条证据」在纸上说不出任何事。那几次调用的出口
+    // 在工作区信息卡的详情抽屉里（`unassignedCalls`），报告不是它们的出口。
+    // 筛的判据见 `isFoldedFallback`——只按 kind 筛会连支线那一批的脚注一起筛掉
+    sec('path', { kind: 'path', rows: input.steps.filter((s) => !isFoldedFallback(s)) }),
     sec('leftover', { kind: 'notes', rows: report.leftovers }),
   );
   // 「下一步怎么查」只进未决型（归档强制未决，一并覆盖）：查出根因的报告不留修复建议——
@@ -273,7 +357,10 @@ export function reportPlan(input: ReportInput): ReportPlan {
     frozen: input.frozen,
     labels: stepLabels(input.steps),
     evidenceCount: input.steps.reduce((n, s) => n + s.evidence.length, 0),
-    abortedAt: input.case.status === 'aborted' ? input.steps.length : null,
+    // 「第 N 步」数的是**agent 声明过方向的那几步**。兜底步没有命题：主干那种连行都不占，
+    // 支线那种占着行却是子 agent 的账本——数进来的话，这句话会比人在纸上数得出的方向多出好几。
+    // **0 是可达的**（刚建单就归档、或只跑过兜底调用），渲染层要单独说那一句：见 `abortedNote`
+    abortedAt: input.case.status === 'aborted' ? input.steps.filter((s) => s.direction !== null).length : null,
     sections: dedupe(sections),
   };
 }

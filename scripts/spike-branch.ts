@@ -26,7 +26,7 @@ import { reportSections } from '../src/backend/db/queries.js';
 import { sweepZombies, type InvestigationSession } from '../src/backend/store/sqlite-store.js';
 import { CaseRunner } from '../src/main/case-runner.js';
 import { LaneBridge } from '../src/main/lane-bridge.js';
-import { trackLayout } from '../src/renderer/track.js';
+import { TRUNK, trackLayout } from '../src/renderer/track.js';
 
 /** 泳道那几个方法是 CaseRunner 的私有面：要验的正是它们，只好从旁边够进去。 */
 type Probe = {
@@ -201,24 +201,33 @@ async function main() {
   );
 
   // ── ③ 轨道：一条泳道就是一列，trackLayout 按 lane 键分列 ──────────────────
-  const rows = trackLayout(runner.snapshot().steps).rows;
+  //
+  // 这份夹具一次 `open_step` 都没有，主干上那一步因此是 harness 的兜底节点——
+  // 它**不上轨道**（`isFoldedFallback`），主干那一列在这幅图上只剩信息卡。
+  const track = trackLayout(runner.snapshot().steps);
+  const rows = track.rows;
+  const ordinals = rows.map((r) => r.step.ordinal);
   const colOf = (stepId?: string) => rows.find((r) => r.step.id === stepId)?.col;
   check(
-    '8. 主干在 0 列、并发的两条支线各占一列，且行序仍是到达顺序',
-    colOf(stepOf('main_first')) === 0 &&
+    '8. 主干兜底步不占列，并发的两条支线各占一列，且行序仍是到达顺序',
+    !rows.some((r) => r.step.id === stepOf('main_first')) &&
       colOf(stepOf('inner_a1'))! > 0 &&
       colOf(stepOf('inner_b1'))! > 0 &&
       colOf(stepOf('inner_a1')) !== colOf(stepOf('inner_b1')) &&
-      rows.map((r) => r.step.ordinal).join(',') === rows.map((_, i) => i + 1).join(','),
-    `列号 ${rows.map((r) => r.col).join(',')} / 序号 ${rows.map((r) => r.step.ordinal).join(',')} —— ` +
-      '两条并发支线合到同一列的话，"顺着一列往下读"读到的是两个 agent 交替的调用',
+      ordinals.every((n, i) => i === 0 || n > ordinals[i - 1]!),
+    `列号 ${rows.map((r) => r.col).join(',')} / 序号 ${ordinals.join(',')} —— ` +
+      '两条并发支线合到同一列的话，"顺着一列往下读"读到的是两个 agent 交替的调用。' +
+      '序号跳号是兜底步占掉的，不许在这儿重编：报告那侧印的是同一个 ordinal',
   );
 
   check(
-    '9. 支线那几行标得出「支线」，主干不标',
-    rows.filter((r) => r.step.lane).length === rows.length - 1 &&
-      !rows.find((r) => r.step.id === stepOf('main_first'))!.step.lane,
-    `带 lane 的行 ${rows.filter((r) => r.step.lane).map((r) => r.step.lane).join(',')}`,
+    '9. 每条泳道的列头标得出「支线」，主干那一列还在（只是没有行）',
+    track.lanes.filter((l) => l.kind === 'agent').length === rows.length &&
+      track.lanes.filter((l) => l.kind === 'agent').every((l) => l.label === '支线') &&
+      track.lanes.find((l) => l.id === TRUNK)?.col === 0 &&
+      !rows.some((r) => r.col === 0),
+    `列头 ${track.lanes.map((l) => `${l.label}@${l.col}`).join(' ')} —— ` +
+      '主干不预留 0 列的话，第一条支线会抢走信息卡那一列',
   );
 
   // ── ④ 支线不记账 ────────────────────────────────────────────────────────

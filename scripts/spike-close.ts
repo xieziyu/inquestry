@@ -2576,6 +2576,81 @@ console.log('NOT KILLED');
     );
   }
 
+  // ── 兜底步：收尾杂务不回灌到最早那一个 ─────────────────────────────────
+  /**
+   * 主干的兜底步永远关不掉（agent 拿不到它的 stepId），所以"当下没开步"的调用会一路
+   * 回灌到最早那一个——表现是**排在最前面的那个节点里装着全场最后发生的事**，
+   * 时间线在那儿是断的。修法是"主干还停在它身上"才复用。
+   *
+   * 🔴 **两个方向都验**：只验"另开一个"的话，"每次调用都新开一个"照样通过，
+   * 而那会让开场连着几发摸底各占一个节点。
+   */
+  {
+    let ids = 0;
+    const st = createInvestigationSession(
+      db,
+      {
+        caseId: 'case_stray',
+        sessionId: 'sess_stray',
+        backend: 'claude',
+        blobDir: blobs,
+        isTimestampedSource: () => true,
+        now: () => Date.now(),
+        newId: (prefix) => `${prefix}_stray_${++ids}`,
+        runOperator: async () => ({ answer: '' }),
+      },
+      {
+        title: '兜底步',
+        question: '兜底步',
+        projectRoot: null,
+        incidentDate: '2026-08-09',
+        tzOffset: '+08:00',
+        clues: null,
+      },
+    );
+    const trunkOf = (callId: string) =>
+      (db.prepare(`SELECT step_id FROM tool_calls WHERE id=?`).get(callId) as { step_id: string }).step_id;
+    // 开场：还说不出假设，先摸两下 —— 这两发该落在同一个节点上
+    st.recordToolStart({ callId: 'sc1', toolName: 'ToolSearch', input: {} });
+    st.recordToolStart({ callId: 'sc2', toolName: 'Read', input: {} });
+    // 一条子 agent 支线在开场这一段里起来了：它是另一条线上的事，**不该打断主干**
+    st.recordToolStart({ callId: 'sc_lane', toolName: 'WebFetch', input: {}, lane: 'sc1', agentId: 'ag_x' });
+    st.recordToolStart({ callId: 'sc3', toolName: 'Grep', input: {} });
+    check(
+      '开场那几发落在同一个兜底步上（支线起来了也不算打断主干）',
+      trunkOf('sc1') === trunkOf('sc2') &&
+        trunkOf('sc3') === trunkOf('sc1') &&
+        trunkOf('sc_lane') !== trunkOf('sc1'),
+      `sc1/sc2/sc3 → ${trunkOf('sc1')}/${trunkOf('sc2')}/${trunkOf('sc3')}，支线 → ${trunkOf('sc_lane')} —— ` +
+        '每次调用各开一个的话，开场连着几发摸底会散成一串空节点',
+    );
+
+    // 主干真的往前走了一步，然后收掉：这之后的调用属于"收尾"，不该回灌到开场那一个
+    const mid = await st.store.openStep({ direction: '主干上真开出来的一步' });
+    await st.store.closeStep({
+      stepId: mid.stepId,
+      status: 'inconclusive',
+      verdict: '先挂着',
+      confidence: 0.3,
+      evidence: [],
+    });
+    st.recordToolStart({ callId: 'sc4', toolName: 'Write', input: {} });
+    st.recordToolStart({ callId: 'sc5', toolName: 'Write', input: {} });
+    check(
+      '主干走过一步之后，收尾杂务落到自己的兜底步上，不回灌到开场那一个',
+      trunkOf('sc4') !== trunkOf('sc1') && trunkOf('sc5') === trunkOf('sc4'),
+      `开场 ${trunkOf('sc1')} · 收尾 ${trunkOf('sc4')}/${trunkOf('sc5')} —— ` +
+        '回灌的话，排在最前面的那个节点里装着全场最后发生的事，而排查时间线在那儿是断的',
+    );
+    check(
+      '新开的那个排在时间线末尾，不是插回开场那个位置',
+      (db.prepare(`SELECT ordinal FROM steps WHERE id=?`).get(trunkOf('sc4')) as { ordinal: number }).ordinal >
+        (db.prepare(`SELECT ordinal FROM steps WHERE id=?`).get(mid.stepId) as { ordinal: number }).ordinal,
+      `收尾那个 #${(db.prepare(`SELECT ordinal FROM steps WHERE id=?`).get(trunkOf('sc4')) as { ordinal: number }).ordinal}` +
+        ` 排在 #${(db.prepare(`SELECT ordinal FROM steps WHERE id=?`).get(mid.stepId) as { ordinal: number }).ordinal} 之后`,
+    );
+  }
+
 console.log('\n===== Spike Close 结果 =====');
   for (const [name, ok, detail] of checks) {
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);

@@ -1,4 +1,6 @@
 import type { CallNode, ChatLine, StepNode } from '../shared/ipc.js';
+import { isFoldedFallback } from '../shared/report.js';
+import { CASE_BOX_ID } from './track.js';
 
 /**
  * 舞台的心跳层：**此刻在干什么**（`Stage.tsx` 的卡面底带 · 列头芯片 · HUD「最后更新」）。
@@ -74,7 +76,7 @@ export function stepActivity(
     liveLanes: ReadonlySet<string>;
     /** runner 这会儿跑在哪个 session 上（`snap.sessionId`）。 */
     sessionId: string;
-    /** 主干当前开着的那一步；见 {@link thinkingStep}。 */
+    /** 「agent 在想」这会儿落在哪张卡上；见 {@link thinkingStep}。 */
     thinkingStepId: string | null;
   },
 ): LiveActivity {
@@ -116,16 +118,44 @@ export function stepActivity(
 }
 
 /**
- * 主干（`lane === null`）当前开着的那一步。同时开着好几步时认最后一个。
+ * 「agent 在想」落在哪张卡上。主干（`lane === null`）当前开着的那一步，同时开着好几步时认最后一个；
+ * **主干上没有开着的可见步时落回信息卡**（`CASE_BOX_ID`）。
+ *
+ * 🔴 **落点必须是舞台上真有的那张卡。** 主干兜底步不再出卡（`trackLayout` 滤掉了它），
+ * 而它恰恰是"正常步全关之后唯一还开着的主干步"——认它的话，收尾那段时间里
+ * 「agent 在想」会挂到一张不存在的卡上，表现是这个信号整个消失，且没有任何报错。
+ * 信息卡是主干那一列的头，也是那几次不属于任何方向的调用的落点，落回它是同一条归属。
  *
  * 🔴 **只认这一次会话的。** 上一次会话断在半途留下的 open 步会一直挂在轨道上，
  * 而它恰恰排在后面——不筛会话的话，新一轮刚开、agent 还没 `open_step` 的那几十秒里，
  * 「agent 在想」会落到上一次会话最后那张卡上，秒数从几小时前算起。
  */
-export function thinkingStep(steps: StepNode[], sessionId: string): string | null {
-  let id: string | null = null;
-  for (const s of steps) if (!s.lane && s.status === 'open' && s.sessionId === sessionId) id = s.id;
+export function thinkingStep(steps: StepNode[], sessionId: string): string {
+  let id: string = CASE_BOX_ID;
+  for (const s of steps) {
+    if (s.lane || s.status !== 'open' || s.sessionId !== sessionId) continue;
+    if (isFoldedFallback(s)) continue;
+    id = s.id;
+  }
   return id;
+}
+
+/**
+ * **这一次会话里**最后一次真的发生了什么；这一轮还什么都没发生时给 null。
+ *
+ * 🔴 **信息卡那条底带的秒表只能用这一份，不能用 {@link lastUpdate}。** 后者跨整次调查
+ * （HUD 的「最后更新」问的正是那个），而底带答的是"这一轮想了多久"——一次调查跨多会话，
+ * 新一轮刚开、agent 还没 `open_step` 也还没发出第一次调用的那几十秒里，拿跨会话那份当起点，
+ * 卡上的秒数从上一次会话最后那件事算起，一开屏就是几小时。这道会话闸与 `stepActivity` /
+ * {@link thinkingStep} 那两道是同一条：**心跳层的每个信号都只说这一轮的事**。
+ *
+ * 给 null 时界面只写「agent 在想」、不带秒数：快照里没有会话启动时刻（对话行不带
+ * `sessionId`，认不到这一轮的开场白），而编一个起点出来与真的从那一刻起长得一模一样。
+ */
+export function sessionLastTouch(steps: StepNode[], sessionId: string): number | null {
+  let at = 0;
+  for (const s of steps) if (s.sessionId === sessionId) at = Math.max(at, lastTouch(s));
+  return at || null;
 }
 
 export type LaneActivity =
@@ -180,6 +210,8 @@ export function laneActivity(
  * 后者才是"它是不是卡住了"的答案。两个都要有。
  *
  * `stepId` 为 null = 最近那件事是一句对话，「跳过去」没有落点，由调用方退回图上最后一张。
+ * 落在主干兜底步上时给信息卡：那几次调用归它认领，而兜底步在舞台上没有卡，
+ * 报它的 id 等于给出一个「跳过去」跳不到的落点（同 {@link thinkingStep}）。
  */
 export function lastUpdate(steps: StepNode[], chat: ChatLine[]): { at: number; stepId: string | null } {
   let at = 0;
@@ -188,7 +220,7 @@ export function lastUpdate(steps: StepNode[], chat: ChatLine[]): { at: number; s
     const t = lastTouch(s);
     if (t > at) {
       at = t;
-      stepId = s.id;
+      stepId = isFoldedFallback(s) ? CASE_BOX_ID : s.id;
     }
   }
   for (const c of chat) {
