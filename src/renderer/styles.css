@@ -415,12 +415,15 @@ button.primary:has(> .ic) { gap: 6px; }
 
 /* 旁白：agent 的判断 / 人的补充。刻意不做成卡、不带边框——它是旁白，不是节点。
    做成同样一张卡的话，一屏上会有两种长得一样、而其中一种什么证据都没有的东西 */
-/* 对话行不参与拖拽（`Stage.tsx` 的 pointerdown 把它排除在外），所以它是画布上
-   少有的一段能框选的正文——抓手在这儿是句假话 */
+/* 整块可点：点开右侧抽屉读全文（画布上这一份恒裁三行，抽屉是全文唯一的出口）。
+   因此它和卡片一样参与画布拖拽——它缩进排在主干列内、展开时占掉这一列相当一部分高度，
+   那块要是拖不动图，旁白密的地方就没处下手了。就地框选那条路由"抽屉里复制"接走 */
 .s-say {
   position: absolute; padding: 2px 0 2px 12px; border-left: 2px solid var(--line);
-  font-size: 12px; color: var(--dim); overflow: hidden; cursor: text;
+  font-size: 12px; color: var(--dim); overflow: hidden; cursor: pointer;
 }
+.s-say:hover { border-left-color: var(--accent); }
+.s-say.on { border-left-color: var(--accent); background: var(--tint); }
 .s-say .who {
   display: block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
   color: var(--dim-2); margin-bottom: 1px;
@@ -431,6 +434,24 @@ button.primary:has(> .ic) { gap: 6px; }
 .s-say.assistant .who { color: var(--accent); }
 .s-say.user { border-left-color: var(--fill); }
 .s-say.user p { color: var(--text); }
+
+/* 组头行：两张卡之间那一组旁白收起来时就剩它。**不描边、不加底色**——理由与旁白同一条：
+   一屏上不该有两种长得像卡、而其中一种什么证据都没有的东西。左端那个三角是它唯一的图形。
+   高度是定额（`STAGE.groupH`），所以这里一个字都不许换成会随内容变的排法 */
+.s-group {
+  position: absolute; display: flex; align-items: center; gap: 8px; padding-left: 12px;
+  border-left: 2px solid var(--line-soft); font-size: 11.5px; color: var(--dim-2);
+  cursor: pointer; overflow: hidden; white-space: nowrap;
+}
+.s-group:hover { color: var(--dim); border-left-color: var(--dim-2); }
+.s-group.open { color: var(--dim); }
+.s-group .caret { font-size: 9px; width: 8px; flex: none; }
+.s-group .n { color: var(--dim); font-family: var(--mono); }
+.s-group .prev { color: var(--dim-2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* 正在跑的那一步旁边那一组：计数在涨就说明它还在说话。**给主色不给暖色**——
+   暖色是「需要人动手」的全局专属（ui.md §4），一组还在长的旁白不用人动手 */
+.s-group.live { color: var(--accent); border-left-color: var(--accent); }
+.s-group.live .n { color: var(--accent); }
 
 /* ── 拉远之后的降级（LOD）──
    画布拉远之后正文是一团读不出来的灰。与其糊在那儿，不如**换一种东西给他看**：
@@ -444,6 +465,7 @@ button.primary:has(> .ic) { gap: 6px; }
 .world[data-lod="far"] .stoplane,
 .world[data-lod="far"] .cardstrip,
 .world[data-lod="far"] .s-say p,
+.world[data-lod="far"] .s-group .prev,
 .world[data-lod="far"] .casecard .question,
 .world[data-lod="far"] .casecard .meta,
 .world[data-lod="far"] .casecard .rename,
@@ -459,6 +481,9 @@ button.primary:has(> .ic) { gap: 6px; }
 /* 远档这几个字号是**按缩放倒着放大**的：k 到 0.4 时 30px 才落回 12px 上下。
    照原尺寸留着的话，缩完只有四五个像素，等于把列头与旁白从图上抹掉 */
 .world[data-lod="far"] .s-say .who { font-size: 26px; }
+/* 组头行同理放大计数与三角，**高度一个像素都不许变**（它是几何算好的定额） */
+.world[data-lod="far"] .s-group { font-size: 20px; }
+.world[data-lod="far"] .s-group .caret { font-size: 16px; width: 14px; }
 /* 裸字比框弱：远档没有描边替它撑着，颜色得往上抬一档才不至于被点阵吃掉 */
 .world[data-lod="far"] .lanehead { font-size: 30px; color: var(--dim); }
 .world[data-lod="far"] .lanehead .note, .world[data-lod="far"] .smark { display: none; }
@@ -771,6 +796,23 @@ button.primary:has(> .ic) { gap: 6px; }
   padding: 2px 9px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 11.5px;
 }
 .sh-rel .stoplane:hover { color: var(--bad); border-color: var(--bad); }
+.sh-head .dim { font-size: 11px; color: var(--dim-2); }
+.sh-act { margin-top: 10px; }
+.sh-act button {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--dim);
+  padding: 3px 10px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 11.5px;
+}
+.sh-act button:hover { color: var(--text); }
+/* 同一组的其余几句：点一条换一条。**只留一行**，全文在上面那一段里 */
+.sh-aside { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.sh-aside li {
+  display: flex; gap: 8px; align-items: baseline; padding: 5px 7px; border-radius: 6px;
+  cursor: pointer; font-size: 12px; color: var(--dim);
+}
+.sh-aside li:hover { background: var(--panel-2); }
+.sh-aside li.cur { background: var(--tint); color: var(--text); }
+.sh-aside .who { font-size: 10.5px; color: var(--dim-2); flex: none; }
+.sh-aside .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sh-evi { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .sh-evi li {
   display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; align-items: baseline;

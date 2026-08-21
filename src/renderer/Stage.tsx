@@ -62,6 +62,19 @@ type ViewBox = { x: number; y: number; k: number };
  */
 const VIEWS = new Map<string, ViewBox>();
 
+/**
+ * 每个调查各记一份"哪几组旁白是展开着的"。**理由与 `VIEWS` 同一条**（住在模块里，
+ * 因为换调查那一屏会把整个工作区卸载掉），而且同样**不落库、不进事件**：
+ * 展开与否是读的人此刻的临时状态，不是这次调查的事实。app 重启回到全折叠，与视角一致。
+ */
+const OPEN_ASIDES = new Map<string, ReadonlySet<string>>();
+
+/**
+ * 点与拖分得开：旁白与组头行都参与画布拖拽（不让它们参与的话，旁白密的地方拖不动图），
+ * 所以松手时位移超过这几个像素就只算拖过一次画布，不算点在它们身上。
+ */
+const TAP_SLOP = 4;
+
 export function Stage({
   meta,
   steps,
@@ -107,9 +120,13 @@ export function Stage({
 }) {
   const track = useMemo(() => trackLayout(steps), [steps]);
   const items = useMemo(() => weaveChat(track.rows, chat), [track.rows, chat]);
+  /** 展开着的那几组。**模块里那份是真相**，这个 state 只为了让它一改就重渲染。 */
+  const [openAsides, setOpenAsides] = useState<ReadonlySet<string>>(
+    () => OPEN_ASIDES.get(meta.id) ?? new Set<string>(),
+  );
   const layout = useMemo(
-    () => stageLayout(items, track.lanes, { title: meta.title, question: meta.question }, !!tail),
-    [items, track.lanes, meta.title, meta.question, !!tail],
+    () => stageLayout(items, track.lanes, { title: meta.title, question: meta.question }, !!tail, openAsides),
+    [items, track.lanes, meta.title, meta.question, !!tail, openAsides],
   );
   const edges = useMemo(
     () => [...layout.edges, ...refuteEdges(layout, track.edges)],
@@ -167,21 +184,18 @@ export function Stage({
   );
 
   /**
-   * 把某一张卡摆到可视区中间。
-   *
-   * **主干那一列要连它左边那条旁白槽一起居中**：读的单位是"一列 + 挨着它的那几句话"，
-   * 只按卡片自己居中的话，旁白正好卡在视口左沿被裁掉半个字（实测如此）。
-   * 别的列左边没有旁白，照旧按卡片自己居中。
+   * 把某一张卡摆到可视区中间。**按卡片自己居中就够了**：旁白如今缩进排在卡下面、
+   * 与卡同一列，卡在中间它就在中间——它一度住在主干左边那一栏，那时得连那条槽一起居中，
+   * 否则旁白正好卡在视口左沿被裁掉半个字。
    */
   const centerOn = useCallback(
     (id: string | null, minK?: number) => {
       const n = id ? layout.byId.get(id) : null;
       if (!n) return;
-      const leftPad = n.kind === 'step' && n.row.col === 0 ? STAGE.sayW + STAGE.sayGap : 0;
       setView((v) => {
         const k = minK ? Math.max(v.k, minK) : v.k;
         const { w, h } = freeSize();
-        return { k, x: w / 2 - (n.x - leftPad / 2 + n.w / 2) * k, y: h * 0.44 - (n.y + n.h / 2) * k };
+        return { k, x: w / 2 - (n.x + n.w / 2) * k, y: h * 0.44 - (n.y + n.h / 2) * k };
       });
     },
     [layout, freeSize],
@@ -213,6 +227,7 @@ export function Stage({
     // 浮层跟着一起关：`picked` 是上一个调查里的 step id，新调查的 layout 里查不到它，
     // 于是浮层不渲染、而 `picked` 仍是真——`.sheeting` 与那 466px 的扣减会一直挂着
     setPicked(null);
+    setOpenAsides(OPEN_ASIDES.get(meta.id) ?? new Set<string>());
     const saved = VIEWS.get(meta.id);
     if (saved) setView(saved);
     // 头一回打开停在最新那一步上，不是停在整幅图的缩略——一屏读不出字的缩略图
@@ -276,8 +291,17 @@ export function Stage({
   }, []);
 
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  /** 起手那一下：落在谁身上、在哪儿。松手时拿它分"点"与"拖过一次画布"。 */
+  const press = useRef<{ x: number; y: number; el: HTMLElement } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest('.s-card,.s-say,.s-hud,.todolayer,.stepsheet')) return;
+    const el = e.target as HTMLElement;
+    press.current = { x: e.clientX, y: e.clientY, el };
+    /**
+     * **旁白与组头行不在排除之列**：它们缩进排在主干列内、展开时占掉这一列相当一部分高度，
+     * 那块若拖不动画布，人在旁白密的地方就拖不动图了。点它们的事在松手时判（下面 `endDrag`）——
+     * 拿着指针捕获的是画布，`click` 会被重定向到画布上，挂在那两个元素上的 onClick 根本收不到。
+     */
+    if (el.closest('.s-card,.s-hud,.todolayer,.stepsheet')) return;
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
@@ -286,8 +310,32 @@ export function Stage({
     if (!d) return;
     setView((v) => ({ ...v, x: d.vx + (e.clientX - d.x), y: d.vy + (e.clientY - d.y) }));
   };
-  const endDrag = () => {
+  /** 落点归属：组头行 → 展开 / 收起，某一句旁白 → 开抽屉，其余 → 刚才那一下只是拖画布。 */
+  const endDrag = (e: React.PointerEvent) => {
     drag.current = null;
+    const p = press.current;
+    press.current = null;
+    if (!p || Math.abs(e.clientX - p.x) + Math.abs(e.clientY - p.y) >= TAP_SLOP) return;
+    const id = p.el.closest<HTMLElement>('.s-say,.s-group')?.dataset.box;
+    const hit = id ? layout.byId.get(id) : undefined;
+    if (hit?.kind === 'group') toggleAside(hit.ownerId);
+    else if (hit?.kind === 'say') pick(hit.id);
+  };
+  const cancelDrag = () => {
+    drag.current = null;
+    press.current = null;
+  };
+
+  const toggleAside = (ownerId: string) => {
+    const next = new Set(openAsides);
+    if (!next.delete(ownerId)) next.add(ownerId);
+    else {
+      // 收起后那句的盒子不再排进布局，抽屉随之消失；picked 不清的话 freeSize 仍按抽屉开着扣宽
+      const cur = picked ? layout.byId.get(picked) : undefined;
+      if (cur?.kind === 'say' && cur.ownerId === ownerId) setPicked(null);
+    }
+    OPEN_ASIDES.set(meta.id, next);
+    setOpenAsides(next);
   };
 
   // Esc 关浮层。待办卡自己没有全局键，⌘↵ 由拿着焦点的那张卡收，不经过这儿
@@ -333,6 +381,21 @@ export function Stage({
   const pickedBox = picked ? layout.byId.get(picked) : undefined;
   const far = view.k < LOD_FAR;
 
+  /**
+   * 点开一句旁白时抽屉要装的是**它所在的那一组**：被点那句全文在上，同组其余排在下面。
+   * 组是按 `ownerId` 取的——**归属只在 `weaveChat` 算一次**，这儿不再算第二遍。
+   * 能点到某一句就说明那一组已经展开着，所以组内每一句在画布上都有盒子。
+   */
+  const asideGroup = useMemo(() => {
+    if (pickedBox?.kind !== 'say') return null;
+    const owner = layout.byId.get(pickedBox.ownerId);
+    const at = owner?.kind === 'step' ? `${owner.row.label} 旁边` : '信息卡旁边';
+    const lines = layout.boxes
+      .filter((b): b is Extract<StageBox, { kind: 'say' }> => b.kind === 'say' && b.ownerId === pickedBox.ownerId)
+      .map((b) => b.line);
+    return { at, lines, currentId: pickedBox.id };
+  }, [pickedBox, layout]);
+
   return (
     <div
       className={`stage${pickedBox ? ' sheeting' : ''}`}
@@ -340,9 +403,10 @@ export function Stage({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
-      onPointerCancel={endDrag}
+      onPointerCancel={cancelDrag}
       onDoubleClick={(e) => {
-        if (!(e.target as HTMLElement).closest('.s-card,.s-say')) fit();
+        // 组头行也要排除：双击它是"展开又收起"，不该顺带把整幅图缩到一屏
+        if (!(e.target as HTMLElement).closest('.s-card,.s-say,.s-group')) fit();
       }}
       style={
         {
@@ -382,7 +446,9 @@ export function Stage({
           b.kind === 'case' ? (
             <CaseCard key={b.id} box={b} meta={meta} onRename={onRename} onOpen={() => pick(b.id)} />
           ) : b.kind === 'say' ? (
-            <SayNode key={b.id} box={b} />
+            <SayNode key={b.id} box={b} picked={picked === b.id} />
+          ) : b.kind === 'group' ? (
+            <GroupRow key={b.id} box={b} live={running && b.ownerId === thinkingId} />
           ) : b.kind === 'tail' ? (
             // `tail` 一定在（盒子就是按它排的），收窄一下让 TS 也看得出来
             tail && <TailCard key={b.id} box={b} tail={tail} onReport={onReport} />
@@ -468,6 +534,7 @@ export function Stage({
           box={pickedBox}
           meta={meta}
           liveLanes={liveLanes}
+          aside={asideGroup && { ...asideGroup, onPick: pick }}
           onClose={() => setPicked(null)}
           onExcerpt={onExcerpt}
           onStopLane={onStopLane}
@@ -565,11 +632,17 @@ function wirePath(kind: StageEdge['kind'], a: StageBox, b: StageBox, gutter: num
   return `M${x1},${y1} C${gutter},${y1} ${gutter},${y2} ${x2},${y2}`;
 }
 
-/** 旁白：agent 的判断 / 人的补充。不做成卡——它是旁白，不是节点。 */
-function SayNode({ box }: { box: Extract<StageBox, { kind: 'say' }> }) {
+/**
+ * 旁白：agent 的判断 / 人的补充。不做成卡——它是旁白，不是节点。
+ *
+ * 画布上这一份**恒裁到 `textLines` 行**（几何按同一个数算好了），整块可点：
+ * 点开右侧抽屉读全文。`data-box` 是给松手那一下认落点用的（见 `endDrag`）。
+ */
+function SayNode({ box, picked }: { box: Extract<StageBox, { kind: 'say' }>; picked: boolean }) {
   return (
     <div
-      className={`s-say ${box.line.role}`}
+      className={`s-say ${box.line.role}${picked ? ' on' : ''}`}
+      data-box={box.id}
       style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
     >
       <span className="who">{sayLabel(box.line.role)}</span>
@@ -578,8 +651,30 @@ function SayNode({ box }: { box: Extract<StageBox, { kind: 'say' }> }) {
   );
 }
 
+/**
+ * 一组旁白的组头行。**它只管展开与收起，不开抽屉**：折叠着的时候人还没选定要读哪一句，
+ * "看全文"没有宾语——先展开（一点）、再点想读的那句（一点）。
+ *
+ * 计数用「轮」而不是「句」：一来一回才是读的人数得清的单位。
+ * `live` 只给主色不给暖色——暖色是"需要人动手"的全局专属。
+ */
+function GroupRow({ box, live }: { box: Extract<StageBox, { kind: 'group' }>; live: boolean }) {
+  return (
+    <div
+      className={`s-group${box.open ? ' open' : ''}${live ? ' live' : ''}`}
+      data-box={box.id}
+      title={box.open ? '收起这一组' : '展开这一组'}
+      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
+    >
+      <span className="caret">{box.open ? '▾' : '▸'}</span>
+      <span className="n">{box.open ? `收起这 ${box.count} 轮` : `${box.count} 轮`}</span>
+      {!box.open && <span className="prev">{box.preview}</span>}
+    </div>
+  );
+}
+
 /** 「补充」而不是「你」：人在这儿说的话语义是**异步入队的补充**（ui.md §8.2），不是聊天。 */
-function sayLabel(role: ChatLine['role']) {
+export function sayLabel(role: ChatLine['role']) {
   return ({ assistant: 'agent', user: '补充', system: '系统' } as const)[role];
 }
 
@@ -766,7 +861,8 @@ function Minimap({
       }}
     >
       {layout.boxes
-        .filter((n) => n.kind !== 'say')
+        // 导览图答的是"卡片在整幅图的哪儿"，旁白与组头行都不是卡片
+        .filter((n) => n.kind !== 'say' && n.kind !== 'group')
         .map((n) => (
           <i
             key={n.id}

@@ -176,11 +176,20 @@ export function trackLayout(steps: StepNode[]): TrackLayout {
  */
 export type StageRow =
   | { kind: 'step'; id: string; row: TrackRow }
-  | { kind: 'chat'; id: string; line: ChatLine };
+  /**
+   * `ownerId` = 这句话挂在哪一张主干卡下面。**只在这儿算一次**：舞台按它分组、
+   * 抽屉按它取同组的其余几句，两侧各算一遍的话对不上时不会有任何报错。
+   */
+  | { kind: 'chat'; id: string; line: ChatLine; ownerId: string };
 
 /**
  * 把对话织进轨道。**不改轨道自己的顺序**（D23）：行序仍旧逐字是 `rows` 的顺序，
  * 每句话只是插到"它说出口时已经开出来的最后一步"后面。
+ *
+ * 那一步同时就是它的归属（`ownerId`）：**只认 0 列的主干卡**——旁白全部来自主线，
+ * 挂到一条子 agent 支线上是错的。第一步之前的几句归信息卡。
+ * 归属不落库，就是这里算出来的：`startedAt` 与 `at` 都是落库那一刻定的、之后不变，
+ * 所以同一句话算出来的归属也不会回头改。
  *
  * 两个值都不会再变（`startedAt` 与 `at` 都是落库那一刻定的），所以插好的位置也不会再动——
  * 拿"当前时间"或"当前在跑哪一步"去定位的话，同一句话会随着调查往下走而挪位置。
@@ -197,16 +206,18 @@ export function weaveChat(rows: TrackRow[], chat: ChatLine[]): StageRow[] {
   const said = chat.filter((c) => !c.opening);
   const out: StageRow[] = [];
   let i = 0;
+  let owner = CASE_BOX_ID;
   const drain = (before: number) => {
     while (i < said.length && said[i]!.at < before) {
       const line = said[i]!;
-      out.push({ kind: 'chat', id: line.id, line });
+      out.push({ kind: 'chat', id: line.id, line, ownerId: owner });
       i += 1;
     }
   };
   for (const row of rows) {
     drain(row.step.startedAt);
     out.push({ kind: 'step', id: row.step.id, row });
+    if (row.col === 0) owner = row.step.id;
   }
   drain(Number.POSITIVE_INFINITY);
   return out;
@@ -250,6 +261,8 @@ export function weaveChat(rows: TrackRow[], chat: ChatLine[]): StageRow[] {
  * **位移会不会推走别人**：尾卡在所有盒子的下方，它下移一张卡都不会碰到，
  * 位移只发生在它自己身上。`spike:stage` 那一组把这条写成了两句会失败的断言
  * （尾卡下沿是全图最低 · 加一步之后其余每张卡坐标逐字不变）。
+ * **人自己点开一组旁白除外**：那不是后来到达的信息，是他要求的，而且位移全部发生在
+ * 他手指点的那一行之下（组头行自己不动）——被推走的是他刚要求展开的那一段下面的东西。
  *
  * 别把这条例外读成"尾卡随便算"：它自己的**高度仍旧是定额**，理由与上面那两条一模一样——
  * 根因会换人、形态会在确认条上被改、闸门记号会从"差两步"变成"通了"，全是可变字段。
@@ -258,14 +271,25 @@ export function weaveChat(rows: TrackRow[], chat: ChatLine[]): StageRow[] {
 export const STAGE = {
   /** 卡片宽度。改它要连着 `CHARS_PER_LINE` 一起改，否则行数估算与实际换行对不上。 */
   cardW: 340,
-  sayW: 292,
   /** 列间距。 */
   colGap: 92,
-  /** 旁白落在主干左侧，与主干列之间留这么宽。 */
-  sayGap: 60,
   vGap: 24,
-  /** 左边留出旁白那一栏 + 推翻曲线的空槽。 */
-  padX: 392 + 44,
+  /**
+   * 旁白与组头行相对主干卡左沿的缩进。
+   * 🔴 **必须大于 `flow` 实线画在的那 22px**（`Stage.tsx` 的 `wirePath`）：那条线因此
+   * 正好从组的左侧穿下去，一组旁白读起来是挂在主干线上的，而不是另起的一栏东西。
+   */
+  sayIndent: 26,
+  /** 组头行定高。**与句数、预览句多长都无关**——它一随内容变高就是 D23 那一类位移。 */
+  groupH: 26,
+  /** 卡下沿 → 组头行。比 `vGap` 小一档，组因此读作"贴着上面那张卡的附属物"。 */
+  groupTop: 10,
+  /** 组头行 → 组内第一句（只有展开态才有）。 */
+  groupGap: 8,
+  /** 组内两句之间。 */
+  sayV: 10,
+  /** 左边只留推翻曲线那条空槽（`Wires` 走 `bounds.x1 - 26`）。 */
+  padX: 96,
   padY: 52,
   /** 会话断点条自己占的高度（只有断点那一行前面加）。 */
   sessionGap: 26,
@@ -277,7 +301,7 @@ export const STAGE = {
  * 一行装得下几个全角字。**往小了写**：估出来的行数因此偏多，宁可下面空一点。
  * 只有不可变的那几段在这儿——可变的那两段走下面的定额，压根不估。
  */
-const CHARS_PER_LINE = { dir: 22, say: 21, question: 22 } as const;
+const CHARS_PER_LINE = { dir: 22, say: 22, question: 22 } as const;
 
 /** 结论那一格的定额：**恒占两行**，与这会儿有没有结论无关（见上面那段红字）。 */
 export const VERDICT_LINES = 2;
@@ -333,7 +357,35 @@ export type StageBox =
       dirLines: number;
       vdLines: number;
     }
-  | { kind: 'say'; id: string; x: number; y: number; w: number; h: number; line: ChatLine; textLines: number }
+  | {
+      kind: 'say';
+      id: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      line: ChatLine;
+      textLines: number;
+      /** 这一句挂在哪张主干卡下面（`weaveChat` 算的那一个，抽屉直接用它取同组的其余几句）。 */
+      ownerId: string;
+    }
+  /**
+   * 组头行：两张主干卡之间那一组旁白收起来时就剩它。**它是标注不是节点**——
+   * 不描边不加底色，也不进导览图；点它只切展开/折叠，不开抽屉。
+   */
+  | {
+      kind: 'group';
+      id: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      ownerId: string;
+      count: number;
+      /** 折叠态那行预览取组内第一句：定高一行只装得下一句的开头，而"取头一句"是唯一不会让已经读过的东西变样的一档。 */
+      preview: string;
+      open: boolean;
+    }
   /** 收束卡：主干的尾。内容由 `shared/report.ts` 的 `tailSummary()` 投影，这里只管几何。 */
   | { kind: 'tail'; id: string; x: number; y: number; w: number; h: number; vdLines: number };
 
@@ -361,6 +413,8 @@ export type StageLayout = {
 
 export const CASE_BOX_ID = '__case__';
 export const TAIL_BOX_ID = '__tail__';
+/** 组头行的 id 由所属卡拼出来，两个盒子因此不会撞在同一个 `byId` 键上。 */
+export const GROUP_BOX_PREFIX = 'aside:';
 
 /**
  * 三个高度公式。每一项都对着 CSS 里那一条：内外边距 + 边框 + 每行的行高。
@@ -399,6 +453,8 @@ export function heightOf(box: StageBox) {
   if (box.kind === 'case') return caseHeight(box.titleLines, box.questionLines);
   if (box.kind === 'step') return stepHeight(box.dirLines, box.vdLines);
   if (box.kind === 'tail') return tailHeight(box.vdLines);
+  // 组头行是定额：计数几位数、预览句多长都不许改变它的高度
+  if (box.kind === 'group') return STAGE.groupH;
   return sayHeight(box.textLines);
 }
 
@@ -410,12 +466,16 @@ export function heightOf(box: StageBox) {
  *
  * `tail` 只是个开关：**尾卡出没出生由 `shared/report.ts` 的 `tailSummary()` 判**，
  * 卡面上写什么也在那儿。几何这侧不认识 case 状态，也就不会有第二处规则。
+ *
+ * `expanded` 装着展开着的那几个 `ownerId`（读的人一下一下点出来的临时状态，不落库）。
+ * 传进来而不是在里面记：这个函数仍旧是纯的，检查照样能拿两份 `expanded` 各排一遍。
  */
 export function stageLayout(
   items: StageRow[],
   lanes: TrackLane[],
   caseCard: { title: string; question: string } | null,
   tail = false,
+  expanded: ReadonlySet<string> = new Set(),
 ): StageLayout {
   const boxes: StageBox[] = [];
   const byId = new Map<string, StageBox>();
@@ -431,42 +491,79 @@ export function stageLayout(
     byId.set(box.id, box);
   };
 
+  /**
+   * 旁白按所属主干卡分组，缩进排在那张卡正下方，**主干游标等这一组排完才推**
+   * （顺序是"排卡 → 排组 → 推游标"）。
+   *
+   * 一度让旁白自己占一条游标、落在主干左边那一栏、不推进主干游标——好处是 agent 每说一句
+   * 都不会把后面的步整体下移，代价是那一栏可以无限地跑到主干下面去：一句 87px、一步 164px，
+   * 每步平均超过 1.9 句这一栏就再也追不回主干，于是第 5 步旁边排着的其实是第 2 步说的话。
+   * 换成"就在它下面"之后归属自己成立，一条连线都不用画。
+   *
+   * **后来到达的旁白仍旧推不走别人（D23）**：一句话的 owner 必然是它说出口时最后那张主干卡，
+   * 那张卡下面除了尾卡没有别的东西。折叠着时连尾卡都不动（组头行定额高，计数涨了几何不变），
+   * 展开着时也只把尾卡往下推，而尾卡本来就是这条规则唯一的例外。
+   */
+  const asideOf = new Map<string, Extract<StageRow, { kind: 'chat' }>[]>();
+  for (const it of items) {
+    if (it.kind !== 'chat') continue;
+    const g = asideOf.get(it.ownerId) ?? [];
+    g.push(it);
+    asideOf.set(it.ownerId, g);
+  }
+  /**
+   * 排一张卡下面那一组，返回组底；**没有旁白的那一步一个像素都不多占**（原样返回卡下沿）。
+   * 第一步之前那几句挂在信息卡上，所以信息卡缺席时它们没有落脚处——调用方一律给得出信息卡。
+   */
+  const placeAside = (ownerId: string, cardX: number, cardBottom: number) => {
+    const group = asideOf.get(ownerId);
+    if (!group?.length) return cardBottom;
+    const x = cardX + STAGE.sayIndent;
+    const w = STAGE.cardW - STAGE.sayIndent;
+    const open = expanded.has(ownerId);
+    const top = cardBottom + STAGE.groupTop;
+    push({
+      kind: 'group',
+      id: `${GROUP_BOX_PREFIX}${ownerId}`,
+      x,
+      y: top,
+      w,
+      h: STAGE.groupH,
+      ownerId,
+      count: group.length,
+      preview: group[0]!.line.text,
+      open,
+    });
+    let y = top + STAGE.groupH;
+    // 展开只往组头行**下面**长：人点的那一行与它上方的一切逐字不动，视线焦点因此不跳
+    if (!open) return y;
+    y += STAGE.groupGap;
+    group.forEach((it, i) => {
+      // 展开不解行内的裁行数：一句不裁就是十几行，一组四句能顶两屏，
+      // 而"展开"该是多几行不是整块塌方。长句的全文只在右侧抽屉里读
+      const textLines = estLines(it.line.text, CHARS_PER_LINE.say, 3) || 1;
+      const h = sayHeight(textLines);
+      push({ kind: 'say', id: it.id, x, y, w, h, line: it.line, textLines, ownerId });
+      y += h + (i === group.length - 1 ? 0 : STAGE.sayV);
+    });
+    return y;
+  };
+
   if (caseCard) {
     const titleLines = TITLE_LINES;
     const questionLines = estLines(caseCard.question, CHARS_PER_LINE.question, 3);
     const h = caseHeight(titleLines, questionLines);
     push({ kind: 'case', id: CASE_BOX_ID, x: colX(0), y: STAGE.padY, w: STAGE.cardW, h, titleLines, questionLines });
-    cursor.set(TRUNK, STAGE.padY + h + STAGE.vGap);
+    cursor.set(TRUNK, placeAside(CASE_BOX_ID, colX(0), STAGE.padY + h) + STAGE.vGap);
     lastOfLane.set(TRUNK, CASE_BOX_ID);
     // 主干的列头压在信息卡上方，不是压在第一步上方——信息卡就是这一列的开头
     const trunk = lanes.find((l) => l.id === TRUNK);
     if (trunk) laneHeads.push({ ...trunk, x: colX(0), y: STAGE.padY - STAGE.laneHead + 6 });
   }
 
-  /**
-   * 旁白自己一条游标：它落在主干左边那一栏，**不推进主干的游标**。
-   * 推进的话，agent 每说一句话就把接下来的每一步整体下移一截，而那句话与那一步无关。
-   */
-  let sayCursor = STAGE.padY;
-
   for (const item of items) {
-    if (item.kind === 'chat') {
-      const textLines = estLines(item.line.text, CHARS_PER_LINE.say, 3) || 1;
-      const h = sayHeight(textLines);
-      const y = Math.max(cursor.get(TRUNK) ?? STAGE.padY, sayCursor);
-      push({
-        kind: 'say',
-        id: item.id,
-        x: colX(0) - STAGE.sayW - STAGE.sayGap,
-        y,
-        w: STAGE.sayW,
-        h,
-        line: item.line,
-        textLines,
-      });
-      sayCursor = y + h + 12;
-      continue;
-    }
+    // 旁白不在这条到达序上单独落笔：它跟着自己那张主干卡走（`placeAside`）
+    if (item.kind === 'chat') continue;
 
     const row = item.row;
     const dirLines = estLines(directionText(row.step), CHARS_PER_LINE.dir, 2) || 1;
@@ -483,7 +580,7 @@ export function stageLayout(
     // 断点条占的高度加在这一行头上，而不是让它盖住上一张卡的下沿
     if (row.sessionBreak) y += STAGE.sessionGap;
     push({ kind: 'step', id: row.step.id, x, y, w: STAGE.cardW, h, row, dirLines, vdLines });
-    cursor.set(row.laneId, y + h + STAGE.vGap);
+    cursor.set(row.laneId, placeAside(row.step.id, x, y + h) + STAGE.vGap);
 
     if (row.sessionBreak) {
       marks.push({ id: `mark-${row.step.id}`, x, y: y - 18, sessionIndex: row.step.sessionIndex });
@@ -510,12 +607,13 @@ export function stageLayout(
   /**
    * 收束卡：主干的尾（见文件中段那段「唯一的例外」）。
    *
-   * y 取**所有游标的最大值，旁白那条也算在内**——只按主干算的话，agent 收尾时多说两句，
-   * 旁白就又落到尾卡下面去了，而"终点不许是一句话"正是这张卡存在的全部理由。
+   * y 取**每一列游标的最大值**：旁白已经算在主干游标里（`placeAside` 排完那一组才推游标），
+   * 所以收尾之后 agent 又说的那几句照旧压在尾卡上面——而"终点不许是一句话"
+   * 正是这张卡存在的全部理由。谁把"排卡 → 排组 → 推游标"写回"排卡 → 推游标"，这条当场破。
    */
   if (tail) {
     const h = tailHeight(TAIL_VERDICT_LINES);
-    const y = Math.max(STAGE.padY, sayCursor, ...cursor.values());
+    const y = Math.max(STAGE.padY, ...cursor.values());
     push({ kind: 'tail', id: TAIL_BOX_ID, x: colX(0), y, w: STAGE.cardW, h, vdLines: TAIL_VERDICT_LINES });
     // 主干接到尾卡上：不接的话它看着是块飘在最下面的东西，而它恰恰是这条线的收束
     const prev = lastOfLane.get(TRUNK);

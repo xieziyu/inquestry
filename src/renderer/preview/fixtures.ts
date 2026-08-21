@@ -280,14 +280,59 @@ const CASES: CaseBrief[] = [
   { id: 'c5', title: '导出任务卡在 99%', status: 'aborted', updatedAt: now - 9 * 86400_000, current: false, todos: 0, running: false, started: true, loaded: false },
 ];
 
+/**
+ * 旁白：**这份夹具是拿来压版面的，不是凑数**（同下面 `ask2` 那条）。下限逐条都有出处，
+ * 少哪一条，对应的那种错法在预览里就复现不出来：
+ *
+ * - **连着五步、每步三句以上**：这样才看得出一组收成一行组头之后主干的节奏，
+ *   以及全部展开时它会长成什么样；
+ * - **至少一步一句都没有**（`live1`）：没说过话的那一步一个像素都不该多占，
+ *   它与下一张卡之间该是干净的 `vGap`；
+ * - **至少一句说在支线卡落笔之后**（`ch16`，说在 `lane1` 与 `lane2` 之间）：
+ *   归属只认主干卡，认领到支线上的话它会整组挪到 1 列去；
+ * - **至少一句两百字以上且带换行**（`ch5`）：短句在画布上根本裁不着，
+ *   "被裁了、要开抽屉才读得全"这件事就复现不出来。
+ */
 const CHAT: ChatLine[] = [
   // 开场白由 main 标出来（每次会话最早那条 user 行），舞台不织它——信息卡上已经逐字有了
-  { id: 'ch0', opening: true, role: 'user', at: now - 13 * min, text: '线上反馈：12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。\n基准日期：2026-08-15（时区 +08:00）。' },
-  { id: 'ch1', role: 'user', at: now - 12 * min, text: '线上反馈：12:03 前后用户 u1001 只提交了一次订单，系统里出现了两条重复记录。' },
-  { id: 'ch2', role: 'assistant', at: now - 11 * min, text: '先看这两条记录是不是同一个请求写进去的。我去查网关日志里 u1001 那一段。' },
-  { id: 'ch3', role: 'assistant', at: now - 6 * min, text: '两条记录来自两个 req_id，第一条超时了 2140ms。方向改成「幂等键为什么没拦住第二次」。' },
-  { id: 'ch4', role: 'system', at: now - 5 * min, text: '已接管：接下来除只读与杂务外，每次工具调用都要你放行。' },
-  { id: 'ch5', role: 'user', at: now - 2 * min, text: '重点看 t_order 上那个 cart_key 的索引。' },
+  { id: 'ch0', opening: true, role: 'user', at: now - 14 * min, text: '线上反馈：12:03 前后，用户 u1001 只提交了一次订单，系统里却出现了两条重复记录。请排查根因。\n基准日期：2026-08-15（时区 +08:00）。' },
+  // 第一步之前的几句归信息卡
+  { id: 'ch1', role: 'user', at: now - 13 * min - 20_000, text: '补一句：只有 App 端有这个现象，小程序那边没人报。' },
+
+  // ── st1 ──
+  { id: 'ch2', role: 'assistant', at: now - 12 * min - 45_000, text: '先看这两条记录是不是同一个请求写进去的。我去查网关日志里 u1001 那一段。' },
+  { id: 'ch3', role: 'assistant', at: now - 12 * min - 30_000, text: '两条 order 落库时间差 1.8s，req_id 不一样——不是前端连点，像是重试。' },
+  { id: 'ch4', role: 'user', at: now - 12 * min - 15_000, text: '重试是网关自己发的还是客户端 SDK 发的？这两条追下去不是一回事。' },
+
+  // ── st2 ──
+  { id: 'ch5', role: 'assistant', at: now - 11 * min - 45_000, text: '网关侧的记录是这样：第一次 POST /v1/order 打到 order-api 之后等了 2140ms 没等到响应，网关按默认策略重发了一次，第二次 47ms 就回来了。两次的 cart_key 完全相同，req_id 不同。\n\n也就是说重复不是前端连点造成的，而是超时重试打进来的第二个请求——它在业务上和第一次是同一次下单。\n\n接下来要确认的是幂等这条路：下单接口用 cart_key 做幂等，如果 t_order 上 cart_key 只是普通索引而不是唯一索引，那么两次写入在数据库层面都会成功，幂等就只剩应用层那一道，而应用层在并发窗口里很可能读不到对方还没提交的那一行。' },
+  { id: 'ch6', role: 'assistant', at: now - 11 * min - 30_000, text: '所以方向改成「幂等键为什么没拦住第二次」，先看建表语句。' },
+  { id: 'ch7', role: 'user', at: now - 11 * min - 15_000, text: '上个月有人动过这张表的 DDL，记得一起对一遍。' },
+
+  // ── st3 ──
+  { id: 'ch8', role: 'assistant', at: now - 10 * min - 45_000, text: '先把影响面圈出来：同型重复订单按 cart_key 聚合，窗口取 12:00–12:10。' },
+  { id: 'ch9', role: 'assistant', at: now - 10 * min - 30_000, text: '37 笔，涉及 29 个用户，全部伴随一次网关重试。' },
+  { id: 'ch10', role: 'system', at: now - 10 * min - 15_000, text: '已接管：接下来除只读与杂务外，每次工具调用都要你放行。' },
+
+  // ── st4 ──
+  { id: 'ch11', role: 'assistant', at: now - 9 * min - 48_000, text: '建表语句拿到了，cart_key 那一行是 KEY 不是 UNIQUE KEY。' },
+  { id: 'ch12', role: 'user', at: now - 9 * min - 36_000, text: '那第二次写入在数据库这一层根本不会被挡。' },
+  { id: 'ch13', role: 'assistant', at: now - 9 * min - 24_000, text: '对，所以幂等只剩应用层那一道。下一步看它当时为什么也没兜住。' },
+  { id: 'ch14', role: 'assistant', at: now - 9 * min - 12_000, text: '顺手把 2026-03 那次迁移的 DDL 变更记录也拉了，唯一约束确实是那一版漏建的。' },
+
+  // ── st5 ──
+  { id: 'ch15', role: 'assistant', at: now - 8 * min - 45_000, text: '应用层的幂等检查是写后读，读的是从库。' },
+  { id: 'ch16', role: 'assistant', at: now - 8 * min - 30_000, text: 'seconds_behind_master 当时 0.34s，检查因此 MISS——两次写入都以为自己是第一次。' },
+  { id: 'ch17', role: 'user', at: now - 8 * min - 15_000, text: '那这条链路上还有别的接口也这么写吗？留个遗留问题。' },
+
+  // ── st6：这一句说在支线第一步落笔之后，归属仍旧是主干上那一步 ──
+  { id: 'ch18', role: 'assistant', at: now - 4 * min - 30_000, text: '子 agent 那条线在捞重试记录，我这边先把重试为什么没退避挂成遗留问题。' },
+
+  // ── live1 一句都没有：没说过话的那一步不该多占一个像素 ──
+
+  // ── live2（正在跑的那一步）：组头行给主色活口记号，计数在涨 ──
+  { id: 'ch19', role: 'assistant', at: now - 30_000, text: '再看一眼同机房另外两台的成功率，确认那条链路是不是唯一的差异项。' },
+  { id: 'ch20', role: 'user', at: now - 20_000, text: '边看边说，别等全查完再一起讲。' },
 ];
 
 const PENDING: PendingAsk[] = [
