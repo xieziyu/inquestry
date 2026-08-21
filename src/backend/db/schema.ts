@@ -131,6 +131,10 @@ CREATE TABLE IF NOT EXISTS steps (
   superseded_by      TEXT REFERENCES steps(id),
   t_start            INTEGER NOT NULL,
   t_end              INTEGER,
+  -- 上一次 \`step.closed\` 那条事件的 \`events.seq\`。同一步再 close 一次时，
+  -- 证据整批替换的边界就是它（projector.ts 的 \`replaceEvidenceBatch\`）——
+  -- **不拿时间戳当边界**：投影器读不得时钟，而两次 close 落在同一毫秒里的话，两批就分不开了
+  closed_seq         INTEGER,
   tokens             INTEGER,
   cost_usd           REAL
 );
@@ -169,6 +173,10 @@ CREATE TABLE IF NOT EXISTS evidence_refs (
   anchor_resolved TEXT,                  -- 按内容校正后的锚点；UI 高亮一律用它（blobs.ts locateEvidence）
   claim           TEXT    NOT NULL,
   observed_at     INTEGER NOT NULL,
+  -- 落下这条证据的那个事件的 \`events.seq\`：它与 \`steps.closed_seq\` 一比就知道这条属于哪一批。
+  -- 可空只是 \`ALTER TABLE ADD COLUMN\` 的要求，重放之后每一行都有值；
+  -- 万一真是 NULL，它既不算旧批也不算新批——按"留着"降级，不会把证据删掉
+  seq             INTEGER,
   occurred_at_ms  INTEGER,
   occurred_at_raw TEXT,
   occurred_source TEXT CHECK (occurred_source IN ('auto','operator','agent')),

@@ -24,7 +24,12 @@ import { z } from 'zod';
 
 import { createInquestryMcpServer, toolName } from '../src/backend/tools/sdk-mcp-adapter.js';
 import type { InvestigationStore } from '../src/backend/tools/definitions.js';
-import type { AskOperatorArgs, CloseStepArgs, OpenStepArgs } from '../src/backend/tools/schemas.js';
+import {
+  parseCallRef,
+  type AskOperatorArgs,
+  type CloseStepArgs,
+  type OpenStepArgs,
+} from '../src/backend/tools/schemas.js';
 import { isShowTables, queriesRealTable, queriesWrongTable } from './fixtures/sql-tables.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -147,8 +152,11 @@ let current: StepRec | undefined;
 /** 自带时间戳、能自动抽出 occurredAt 的数据源（overview §4.3）。人工回填与 schema 查询不在其列。 */
 const TIMESTAMPED_SOURCES = new Set(['query_logs']);
 
-/** agent 会照抄工具正文里的 `[call #1]` 标记，"call #1" 与 "#1" 都得认。 */
-const refNum = (ref: string) => Number(String(ref).match(/\d+/)?.[0] ?? NaN);
+/**
+ * 引用解析与真 store 共用 `parseCallRef`（`tools/schemas.ts`）：两处各写一份的话，
+ * 这份夹具会按一套规则给 agent 打分，而线上按另一套记账——`#0` 这种在这儿算数、在那儿被退回。
+ */
+const refNum = (ref: string) => parseCallRef(ref) ?? NaN;
 
 /** 每次工具调用在当前 step 内的编号 —— 正式实现里由 PostToolUse hook 注入，这里手工模拟。 */
 function registerCall(tool: string, brief: string, empty = false): number {
@@ -178,25 +186,38 @@ const store: InvestigationStore = {
   async closeStep(args: CloseStepArgs) {
     const rec = steps.find((s) => s.id === args.stepId);
     const warnings: string[] = [];
-    if (!rec) return { warnings: [`未知 stepId ${args.stepId}`] };
+    if (!rec) return { rejected: true, warnings: [`未知 stepId ${args.stepId}`] };
 
-    if (args.status !== 'inconclusive' && args.evidence.length === 0) {
+    // **整批先解析引用，有一条认不出来就整次退回**——与真 store 同一条状态机
+    // （sqlite-store.ts 的 closeStep）。这份夹具打的是遵从性的分，它与线上各走一套的话，
+    // 打出来的分说明不了线上会发生什么：那边 agent 收到的是"这一步没关上，整批重发"
+    const resolved = args.evidence.map((e) => ({ e, call: rec.calls.find((c) => c.n === refNum(e.callRef)) }));
+    const badRefs = resolved.filter((r) => !r.call).map((r) => r.e.callRef);
+    if (badRefs.length) {
+      return {
+        rejected: true,
+        warnings: [
+          `callRef ${badRefs.join(' / ')} 在本 step 内不存在（本步共 ${rec.calls.length} 次调用）。` +
+            'evidence 是全量，落一半等于把上一批证据换成这次通过的那半批——所以整次退回，' +
+            '这一步原有的证据与结论原样留着。改好 callRef 之后把整批证据重发一次。',
+        ],
+      };
+    }
+
+    if (args.status !== 'inconclusive' && args.evidence.length === 0 && !rec.closed?.evidence.length) {
       warnings.push('这个结论没有任何证据，无法被复核。请补 evidence 后重新 close。');
     }
-    for (const e of args.evidence) {
-      const call = rec.calls.find((c) => c.n === refNum(e.callRef));
-      if (!call) {
-        warnings.push(`callRef ${e.callRef} 在本 step 内不存在（本步共 ${rec.calls.length} 次调用）。`);
-        continue;
-      }
+    for (const { e, call } of resolved) {
       // 只对**自带时间戳、且本次确实有命中**的调用要求 occurredAt。
       // 一刀切会逼 agent 往 schema 事实、聚合结论、零命中这类没有事件时间的证据里
       // 塞查询执行时间——第一轮就这么污染了系统时间线。
-      if (TIMESTAMPED_SOURCES.has(call.tool) && !call.empty && !e.occurredAt) {
+      if (call && TIMESTAMPED_SOURCES.has(call.tool) && !call.empty && !e.occurredAt) {
         warnings.push(`证据「${e.claim.slice(0, 20)}…」来自 ${call.tool} 却缺 occurredAt，系统时间线会断在这里。`);
       }
     }
-    rec.closed = args;
+    // evidence 是全量：带了证据就整份替换上一批，给 `[]` 则上一批照旧留着（同真 store）。
+    // 照单存 args 的话，只补 remediation 那一次会把这一步的证据从打分记录里抹掉
+    rec.closed = args.evidence.length === 0 && rec.closed ? { ...args, evidence: rec.closed.evidence } : args;
     rec.warnings = warnings;
     if (current?.id === rec.id) current = undefined;
     return { warnings };

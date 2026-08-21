@@ -69,10 +69,11 @@ const db = openDatabase(dbFile);
 /** 与 `sqlite-store.emitTo` 同形：事件先落 `events`，再由同一个投影器 apply。 */
 function emit(caseId: string, sessionId: string | null, ev: DomainEvent) {
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`,
-    ).run(caseId, sessionId, ev.type, JSON.stringify(ev.payload), (ev.payload as { at?: number }).at ?? Date.now());
-    applyEvent(db, ev, { blobDir: dir, caseId });
+    const { lastInsertRowid } = db
+      .prepare(`INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`)
+      .run(caseId, sessionId, ev.type, JSON.stringify(ev.payload), (ev.payload as { at?: number }).at ?? Date.now());
+    // 投影认的 seq 就是刚落下那条事件的 seq（同 `emitTo`）——假数据也得经得起一次重放
+    applyEvent(db, ev, { blobDir: dir, caseId, seq: Number(lastInsertRowid) });
   })();
 }
 

@@ -301,7 +301,13 @@ async function main() {
       type: 'lane.converged',
       payload: { stepId: twiceStep, lane: 'task_alpha', outcome: 'completed', summary: '重放里迟到的第二条', at: (before2?.t_end ?? 0) + 5000 },
     },
-    { blobDir: blobDir(file), caseId: 'case_branch' },
+    // 这条事件不进 `events`（模拟的是重放里迟到的那一条），seq 给一个排在最后的数就行：
+    // 收口幂等与 seq 无关，它只被证据分批用到
+    {
+      blobDir: blobDir(file),
+      caseId: 'case_branch',
+      seq: ((db.prepare(`SELECT MAX(seq) m FROM events`).get() as { m: number | null }).m ?? 0) + 1,
+    },
   );
   const after2 = stepRow(twiceStep);
   check(

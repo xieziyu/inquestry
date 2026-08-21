@@ -25,6 +25,7 @@ import { z } from 'zod';
 import { blobDir, openDatabase, type Db } from '../src/backend/db/database.js';
 import { rebuildProjections } from '../src/backend/db/projector.js';
 import {
+  createInvestigationSession,
   missingClosingSteps,
   readCaseStatus,
   readIntake,
@@ -33,6 +34,7 @@ import {
   type InvestigationSession,
 } from '../src/backend/store/sqlite-store.js';
 import { readBlobHead } from '../src/backend/db/blobs.js';
+import { searchNarrative } from '../src/backend/db/queries.js';
 import { TOOL_DEFS, type InvestigationStore } from '../src/backend/tools/definitions.js';
 import { closeStepShape } from '../src/backend/tools/schemas.js';
 import { METRICS_MAX, ROSTER_MAX } from '../src/shared/ipc.js';
@@ -219,7 +221,9 @@ async function main() {
     status: 'confirmed',
     verdict: '12:40–12:47 共 1832 次请求受影响，占同期 4.1%',
     confidence: 0.9,
-    evidence: [{ callRef: '#1', claim: '同期总量与失败量', occurredAt: '12:47:00' }],
+    // 这一步没有自己的工具调用，所以它不带证据（下面那条形态检查数的正是"带时间的证据只有一条"）。
+    // 写个认不出来的 callRef 是不行的：整次 close 会被退回，这一步压根收不了
+    evidence: [],
   });
   const leftover = await s1.store.openStep({ direction: '重试上限为什么是 5', kind: 'leftover' });
   await s1.store.closeStep({
@@ -275,7 +279,8 @@ async function main() {
     status: 'confirmed',
     verdict: '约 300 次请求受影响',
     confidence: 0.6,
-    evidence: [{ callRef: '#1', claim: '第一版口径', occurredAt: '10:05:00' }],
+    // 这一步没有自己的调用，不带证据（要验的是"哪一步算数"，与证据无关）
+    evidence: [],
   });
   const lo2 = await sRedo.store.openStep({ direction: '遗留', kind: 'leftover' });
   await sRedo.store.closeStep({ stepId: lo2.stepId, status: 'inconclusive', verdict: '无', confidence: 0.2, evidence: [] });
@@ -308,7 +313,7 @@ async function main() {
     status: 'confirmed',
     verdict: '大约 300 次请求受影响',
     confidence: 0.5,
-    evidence: [{ callRef: '#1', claim: '网关侧计数', occurredAt: '12:45:00' }],
+    evidence: [],
   });
   check(
     '推翻之前：这一步算走完了',
@@ -323,7 +328,7 @@ async function main() {
     verdict: '网关那份少算了重试，前一步的影响面作废',
     confidence: 0.9,
     supersedes: [wrongImpact.stepId],
-    evidence: [{ callRef: '#1', claim: '下游账本口径', occurredAt: '12:46:00' }],
+    evidence: [],
   });
   check(
     '强制 step 被别的 kind 推翻之后，缺口重新出现（不能拿作废的结论定稿）',
@@ -352,7 +357,7 @@ async function main() {
     `status=${readCaseStatus(db, 'case_close')}`,
   );
   // 这次调查 agent 一次形态都没声明过，走的是推断那条：有已证实的根因，没有应然实然，
-  // 系统时间线上只有一条证据（影响面那一步的 callRef 落空了，所以排不出"顺序"）→ chain。
+  // 系统时间线上只有一条证据（影响面那一步没带证据，所以排不出"顺序"）→ chain。
   // 换成 open 会把一条真实结论从报告里抹掉，换成 sequence 是装一块空的
   check(
     '没人声明形态时定稿也得落一个装得出来的：chain，不是 open 也不是 sequence',
@@ -851,6 +856,10 @@ async function main() {
   // 而那一次多半只带 evidence。把"没再填"解释成"清空"的话，第一次填好的形态与
   // 应然实然会被静默抹掉——报告主体随之空掉，重放还会一模一样地复现
   const reState = await sShape.store.openStep({ direction: '连接池上限一直就是错的' });
+  // 这一步要收两次证据，**得有一次真的调用**：callRef 认不出来的话整次 close 会被退回
+  // （证据是全量，落一半就是删旧留残），下面两次 close 就都不会发生，而这一段验的正是它们
+  sShape.recordToolStart({ callId: 'call_restate', toolName: 'mcp__repo__read_file', input: { path: 'pool.ts' } });
+  sShape.recordToolEnd({ callId: 'call_restate', output: 'maxConnections = 5\n' });
   await sShape.store.closeStep({
     stepId: reState.stepId,
     status: 'confirmed',
@@ -896,6 +905,473 @@ async function main() {
     !halfAgain.warnings.some((t) => t.includes('成对给')),
     `warnings=${JSON.stringify(halfAgain.warnings)}`,
   );
+
+  // ── evidence 是全量：再 close 一次带了证据，就整份替换上一批 ─────────────
+  //
+  // 当成追加的话，agent 按我们自己那句"请补 evidence 后重新 close"重发一遍
+  //（逐字重发或改写重发都发生过），库里就躺出两份互相独立的证据行，
+  // 报告的系统时间线原样把它们并排印出来。规则在 projector 里，**写入与重放共用**。
+  //
+  // 这一段必须跑真库真 projector：报告那带的夹具是手搓的 Snapshot，压根不经过投影，
+  // 同样的检查加在那儿是空的
+  const cRep = makeRunner('case_evrep', '同一步补证据');
+  const sRep = (cRep as unknown as Probe).beginSession();
+  const evRows = (stepId: string) =>
+    db
+      .prepare(`SELECT id, claim, seq FROM evidence_refs WHERE step_id=? ORDER BY seq`)
+      .all(stepId) as { id: string; claim: string; seq: number | null }[];
+
+  const rep = await sRep.store.openStep({ direction: '设备 A 上挂了多少账号' });
+  sRep.recordToolStart({ callId: 'call_rep', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sRep.recordToolEnd({
+    callId: 'call_rep',
+    output: '命中 2 条\n12:41:07 users 数组含 12 个\n12:41:08 status=-10\n(end)',
+  });
+  const batch = [
+    { callRef: '#1', anchor: '2', claim: '设备 A 的 users 数组含 12 个账号', occurredAt: '12:41:07', actor: 'device-service' },
+    { callRef: '#1', anchor: '3', claim: '该设备 status 为 -10（已封）', occurredAt: '12:41:08', actor: 'device-service' },
+  ];
+  const closeRep = (evidence: typeof batch, confidence: number) =>
+    sRep.store.closeStep({
+      stepId: rep.stepId,
+      status: 'confirmed' as const,
+      verdict: '设备 A 上挂了 12 个账号',
+      confidence,
+      evidence,
+    });
+  await closeRep(batch, 0.8);
+  const firstBatch = evRows(rep.stepId);
+  // 逐字重发同一批：agent 按提示重新 close 时走的正是这条路
+  await closeRep(batch, 0.9);
+  const secondBatch = evRows(rep.stepId);
+  check(
+    '再 close 一次带了证据：整批替换上一批，不是并排躺两份',
+    firstBatch.length === 2 &&
+      secondBatch.length === 2 &&
+      secondBatch.every((r) => !firstBatch.some((o) => o.id === r.id)),
+    `第一批 ${firstBatch.length} 条 → 第二批 ${secondBatch.length} 条（无条件 append 的话这儿是 4 条，` +
+      `而报告的系统时间线原样并排印两遍——用户看到的正是这个）`,
+  );
+
+  // 改写重发：同一件事换了口径，只有 2 条里的 1 条还在。丢掉的那条必须当场说
+  const rewritten = await closeRep(
+    [{ callRef: '#1', anchor: '2', claim: '设备 A 与设备 B 共挂了 12 个账号', occurredAt: '12:41:07', actor: 'device-service' }],
+    0.9,
+  );
+  check(
+    '上一批里没再出现的证据当场报出来（替换语义得自纠错，否则丢证据是静默的）',
+    rewritten.warnings.some((t) => t.includes('整份替换') && t.includes('该设备 status')),
+    `warnings=${JSON.stringify(rewritten.warnings)}`,
+  );
+  check(
+    '被换掉的旧说法从检索里一起消失（漏删 FTS 是静默的：时间线干净了，检索照旧翻得出它）',
+    searchNarrative(db, '该设备 status 为 -10').length === 0 &&
+      searchNarrative(db, '共挂了 12 个账号').length === 1,
+    `旧说法命中 ${searchNarrative(db, '该设备 status 为 -10').length} 条 · 新说法命中 ${searchNarrative(db, '共挂了 12 个账号').length} 条`,
+  );
+
+  // 「这个结论没有任何证据」同样得按**合成之后的最终值**判（closeStep 里那条纪律）：
+  // 这一步的证据上次就落好了，这一次 `evidence: []` 一条都不删——照本次入参判的话，
+  // 我们会对着一个证据齐全的结论说它没有证据，而 agent 唯一的出路是把整批再发一遍，
+  // 正好是替换语义想让它别做的事。**两头都验**：库里真没有证据时它还得照常出声
+  const evKept = await sRep.store.closeStep({
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '设备 A 与设备 B 共挂了 12 个账号',
+    confidence: 0.95,
+    evidence: [],
+  });
+  const bare = await sRep.store.openStep({ direction: '一条证据都不打算给的结论' });
+  const bareClose = await sRep.store.closeStep({
+    stepId: bare.stepId,
+    status: 'confirmed',
+    verdict: '就这么定了',
+    confidence: 0.5,
+    evidence: [],
+  });
+  check(
+    '「没有任何证据」按库里的最终状态判：已有证据的步以 evidence: [] 再 close 时不报，真没有时照报',
+    !evKept.warnings.some((t) => t.includes('没有任何证据')) &&
+      evRows(rep.stepId).length === 1 &&
+      bareClose.warnings.some((t) => t.includes('没有任何证据')),
+    `再 close=${JSON.stringify(evKept.warnings)} · 证据 ${evRows(rep.stepId).length} 条 · ` +
+      `真空的那步=${JSON.stringify(bareClose.warnings)}`,
+  );
+
+  // 🔴 **坏 callRef 不能只丢它自己那一条。** 全量替换之下，落一半就是把上一批换成
+  // "这次恰好验证通过的那个子集"——一个手误抹掉的是旧证据，而 agent 手上没有它，恢复不出来。
+  // 所以整批要么全进要么全不进，且坏的一次列全（只报第一条的话，一个五条的批要来回改五次）
+  const stepRowOf = (id: string) =>
+    db.prepare(`SELECT status, closed_seq, verdict_text FROM steps WHERE id=?`).get(id) as {
+      status: string;
+      closed_seq: number | null;
+      verdict_text: string | null;
+    };
+  const eventCount = () => (db.prepare(`SELECT COUNT(*) c FROM events`).get() as { c: number }).c;
+  const evidenceBeforeBad = evRows(rep.stepId);
+  const stepBeforeBad = stepRowOf(rep.stepId);
+  const eventsBeforeBad = eventCount();
+  const mixed = await sRep.store.closeStep({
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '再补两条（但 callRef 写错了）',
+    confidence: 0.99,
+    evidence: [
+      { callRef: '#1', anchor: '2', claim: '这一条的 callRef 是好的', occurredAt: '12:41:07', actor: 'device-service' },
+      { callRef: '#7', claim: '这一条的 callRef 手误了' },
+      { callRef: '#9', claim: '这一条也手误了' },
+    ],
+  });
+  check(
+    '一批里混了认不出来的 callRef：整次 close 一条都不落，旧证据、结论与 closed_seq 原样不动',
+    mixed.warnings.length === 1 &&
+      mixed.warnings[0]!.includes('#7') &&
+      mixed.warnings[0]!.includes('#9') &&
+      JSON.stringify(evRows(rep.stepId)) === JSON.stringify(evidenceBeforeBad) &&
+      JSON.stringify(stepRowOf(rep.stepId)) === JSON.stringify(stepBeforeBad) &&
+      eventCount() === eventsBeforeBad,
+    `回话=${JSON.stringify(mixed.warnings)} · 证据 ${evidenceBeforeBad.length} → ${evRows(rep.stepId).length} 条 · ` +
+      `步 ${JSON.stringify(stepBeforeBad)} → ${JSON.stringify(stepRowOf(rep.stepId))} · ` +
+      `events ${eventsBeforeBad} → ${eventCount()}` +
+      `（"跳过坏的那条、其余照落"的话，好的那条落进去就把上一批整批顶掉了——一个手误换来一次不可逆的丢证据）`,
+  );
+
+  // 第一次 close 就写错的那一档走的是同一条路：**不是"只落好的那半批"**，
+  // 否则 agent 会以为这一步收了，而它手上那几条从没进过库
+  const firstBad = await sRep.store.openStep({ direction: '第一次 close 就把 callRef 写错' });
+  sRep.recordToolStart({ callId: 'call_firstbad', toolName: 'mcp__datasource__query_logs', input: { q: 'z' } });
+  sRep.recordToolEnd({ callId: 'call_firstbad', output: '命中 1 条\n12:55:00 重试 3 次\n(end)' });
+  const firstBadClose = await sRep.store.closeStep({
+    stepId: firstBad.stepId,
+    status: 'confirmed',
+    verdict: '重试放大了压力',
+    confidence: 0.7,
+    evidence: [
+      { callRef: '#1', anchor: '2', claim: '好的那一条', occurredAt: '12:55:00', actor: 'gateway' },
+      { callRef: '#4', claim: '错的那一条' },
+    ],
+  });
+  check(
+    '第一次 close 混了坏 callRef 也整批拒：这一步仍是开着的，一条证据都没落',
+    firstBadClose.warnings.length === 1 &&
+      firstBadClose.warnings[0]!.includes('#4') &&
+      evRows(firstBad.stepId).length === 0 &&
+      stepRowOf(firstBad.stepId).status === 'open' &&
+      stepRowOf(firstBad.stepId).closed_seq === null,
+    `回话=${JSON.stringify(firstBadClose.warnings)} · 证据 ${evRows(firstBad.stepId).length} 条 · ` +
+      `步=${JSON.stringify(stepRowOf(firstBad.stepId))}`,
+  );
+
+  // 🔴 **认不出来一律算坏的，绝不"抽个数字出来"猜。** `#0` 在抽数字的写法下读成 0，
+  // 而 SQLite 把负的 OFFSET 当 0 算——它于是指向本步第一次调用；`#-1` 被抽成 1，同样落在第一次上。
+  // 两者都不进 badRefs，整批拒那道闸对它们完全不响：证据挂到了 agent 根本没引用的调用上，
+  // 上一批还被整批顶掉，而回话里一个字都不会提
+  const beforeSneaky = evRows(rep.stepId);
+  const eventsBeforeSneaky = eventCount();
+  const sneaky = await sRep.store.closeStep({
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '拿几种糊弄得过去的 callRef 试试',
+    confidence: 0.9,
+    evidence: [
+      { callRef: '#0', anchor: '2', claim: '0 号调用是不存在的', occurredAt: '12:41:07' },
+      { callRef: '#-1', claim: '负数更不是编号' },
+      { callRef: '#abc', claim: '压根不是数字' },
+      { callRef: '#99', claim: '超出本步的调用次数' },
+    ],
+  });
+  check(
+    '#0 / #-1 / #abc / 超界的 #99 一律算认不出来：整批退回，旧证据与 events 一行没动',
+    sneaky.rejected === true &&
+      ['#0', '#-1', '#abc', '#99'].every((r) => sneaky.warnings[0]?.includes(r)) &&
+      JSON.stringify(evRows(rep.stepId)) === JSON.stringify(beforeSneaky) &&
+      eventCount() === eventsBeforeSneaky,
+    `回话=${JSON.stringify(sneaky.warnings)} · 证据 ${beforeSneaky.length} → ${evRows(rep.stepId).length} 条 · ` +
+      `events ${eventsBeforeSneaky} → ${eventCount()}` +
+      `（抽数字的写法下 #0 与 #-1 都会解析成第一次调用，于是这一批"部分有效"，旧批被顶掉）`,
+  );
+
+  // 上面那一批里混着 `#abc`，整批拒因此照样会响——**单独发一个 `#0` 才是真的危险面**：
+  // 抽数字的写法下它是"有效的第一次调用"，这一批于是全票通过，上一批被顶掉，一句提示都没有
+  const onlyZero = await sRep.store.closeStep({
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '只用一个 #0 收一次',
+    confidence: 0.9,
+    evidence: [{ callRef: '#0', anchor: '2', claim: '#0 不该被读成第一次调用', occurredAt: '12:41:07' }],
+  });
+  check(
+    '只带一个 #0 的批次照样整批退回，上一批证据一条不少',
+    onlyZero.rejected === true &&
+      JSON.stringify(evRows(rep.stepId)) === JSON.stringify(beforeSneaky) &&
+      eventCount() === eventsBeforeSneaky,
+    `回话=${JSON.stringify(onlyZero.warnings)} · 证据 ${beforeSneaky.length} → ${evRows(rep.stepId).length} 条 · ` +
+      `events ${eventsBeforeSneaky} → ${eventCount()}` +
+      `（抽数字的写法下这一批全票通过：#0 → OFFSET -1，SQLite 按 0 算，指向第一次调用）`,
+  );
+
+  // 提示词让 agent **照抄工具正文开头那个 `[call #2]`**（investigation.md），而正文里印的就是这个格式
+  // （case-runner.ts 的 PostToolUse 前缀）。只认 `#2` 的话，一条完全合规的引用会在 zod 那层就被打回去
+  /**
+   * 收一次，把落下的那条读回来。**要连 claim 一起读**：只读 `tool_call_id` 的话，
+   * 一个把 `[call #1]` 判成坏 ref 的实现会让这次 close 整批退回，读到的仍是上一条——
+   * 两次"结果相同"，检查照旧全绿，而它其实一个字都没验（这条是探针跑出来的）
+   */
+  const lastEvidence = () =>
+    db
+      .prepare(`SELECT tool_call_id, claim FROM evidence_refs WHERE step_id=? ORDER BY seq DESC LIMIT 1`)
+      .get(rep.stepId) as { tool_call_id: string; claim: string } | undefined;
+  const closeWithRef = async (callRef: string, claim: string) => {
+    await sRep.store.closeStep({
+      stepId: rep.stepId,
+      status: 'confirmed',
+      verdict: '设备 A 与设备 B 共挂了 12 个账号',
+      confidence: 0.9,
+      evidence: [{ callRef, anchor: '2', claim, occurredAt: '12:41:07', actor: 'device-service' }],
+    });
+    return lastEvidence();
+  };
+  const viaHash = await closeWithRef('#1', '只写 #1 的那条');
+  const viaBracket = await closeWithRef('[call #1]', '照抄 [call #1] 的那条');
+  const bracketZero = await sRep.store.closeStep({
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '照抄了一个不存在的编号',
+    confidence: 0.9,
+    evidence: [{ callRef: '[call #0]', claim: '正文里不会印出 #0，但抄错了就是它' }],
+  });
+  check(
+    '照抄 [call #1] 与只写 #1 指向同一次调用；[call #0] 照旧整批退回',
+    viaHash?.claim === '只写 #1 的那条' &&
+      viaBracket?.claim === '照抄 [call #1] 的那条' &&
+      viaHash.tool_call_id === viaBracket.tool_call_id &&
+      bracketZero.rejected === true &&
+      bracketZero.warnings[0]?.includes('[call #0]') === true,
+    `#1 → ${JSON.stringify(viaHash)} · [call #1] → ${JSON.stringify(viaBracket)} · ` +
+      `[call #0] → ${JSON.stringify(bracketZero.warnings)}` +
+      `（正文里印的就是 [call #N]，提示词让它照抄——只认 #N 的话这是我们自己造的回归）`,
+  );
+
+  // 超长数字串过得了"整串是数字"这一关，`Number` 之后却是 Infinity：直接绑给 OFFSET 会抛
+  // datatype mismatch。**那就成了异常而不是退回**——agent 拿到的是崩溃，不是"改好 callRef 再重发"
+  const bigOutcome = await sRep.store
+    .closeStep({
+      stepId: rep.stepId,
+      status: 'confirmed',
+      verdict: '拿一串很长的数字当编号',
+      confidence: 0.9,
+      evidence: [{ callRef: `#${'9'.repeat(400)}`, claim: '长到 Number 之后是 Infinity' }],
+    })
+    .then((r) => ({ rejected: r.rejected === true, threw: '' }))
+    .catch((e: Error) => ({ rejected: false, threw: e.message }));
+  check(
+    '超长数字串走的是整批退回，不是抛异常',
+    bigOutcome.rejected && !bigOutcome.threw,
+    `rejected=${bigOutcome.rejected} · 抛出=${bigOutcome.threw || '(没抛，对的)'}` +
+      `（少了 isSafeInteger 这一关，SQLite 会为一个 Infinity 的 OFFSET 抛 datatype mismatch）`,
+  );
+
+  // 回话的**头一句**也得跟着分派：退回时这一步没关上、证据一条没落，
+  // 头却照旧写"已关闭（confirmed），收到 3 条证据"的话，agent 读到的是两句互相矛盾的话——
+  // 它多半按前一句往下走，而它手里那批证据再也发不出去了
+  const closeDef = TOOL_DEFS.find((d) => d.name === 'close_step')!;
+  const rejectedText = await closeDef.run(sRep.store, {
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '又一次写错了 callRef',
+    confidence: 0.9,
+    evidence: [{ callRef: '#8', claim: '这条的 callRef 又错了' }],
+  });
+  const acceptedText = await closeDef.run(sRep.store, {
+    stepId: rep.stepId,
+    status: 'confirmed',
+    verdict: '设备 A 与设备 B 共挂了 12 个账号',
+    confidence: 0.9,
+    evidence: [],
+  });
+  check(
+    '被退回时回话头说的是「没有关闭」，且带上原因；正常收尾那句原样不变',
+    !rejectedText.includes('已关闭') &&
+      rejectedText.includes('没有关闭') &&
+      rejectedText.includes('#8') &&
+      acceptedText.includes('已关闭'),
+    `被退回=${rejectedText.replace(/\n/g, ' / ')}\n      正常=${acceptedText.replace(/\n/g, ' / ')}` +
+      `（头不分派的话，"已关闭、收到 1 条证据"与"一条都没落下"会并排出现在同一段回话里）`,
+  );
+
+  // 🔴 **这一条才是这次改动真正的危险面。** `evidence` 是必填字段，只补 remediation 那次传的是
+  // `[]`（prompt/investigation.md 明写着这条路）——少了"本批带没带证据"那个存在性判断，
+  // 那一步的证据会被整批抹掉，而上面几条照旧全绿
+  const only = await sRep.store.openStep({ direction: '汇总未查清的问题', kind: 'leftover' });
+  sRep.recordToolStart({ callId: 'call_keep', toolName: 'mcp__datasource__query_logs', input: { q: 'y' } });
+  sRep.recordToolEnd({ callId: 'call_keep', output: '命中 1 条\n12:50:00 队列积压 3 万条\n(end)' });
+  await sRep.store.closeStep({
+    stepId: only.stepId,
+    status: 'inconclusive',
+    verdict: '队列那侧还没查清',
+    confidence: 0.3,
+    evidence: [{ callRef: '#1', anchor: '2', claim: '队列积压 3 万条', occurredAt: '12:50:00', actor: 'queue' }],
+  });
+  const keptBefore = evRows(only.stepId);
+  const onlyRemediation = await sRep.store.closeStep({
+    stepId: only.stepId,
+    status: 'inconclusive',
+    verdict: '队列那侧还没查清',
+    confidence: 0.3,
+    remediation: '先给队列消费加延迟观测',
+    evidence: [],
+  });
+  const keptAfter = evRows(only.stepId);
+  check(
+    '只补 remediation 那次（evidence: []）一条都不删',
+    keptBefore.length === 1 && keptAfter.length === 1 && keptAfter[0]?.id === keptBefore[0]?.id,
+    `${keptBefore.length} 条 → ${keptAfter.length} 条（漏了那个存在性判断的话它归零，` +
+      `而"替换生效"那两条照旧全绿——一个会抹掉证据的实现就这么过了）`,
+  );
+  check(
+    '没发生替换就不报「整份替换」那句话',
+    !onlyRemediation.warnings.some((t) => t.includes('整份替换')),
+    `warnings=${JSON.stringify(onlyRemediation.warnings)}`,
+  );
+
+  // 存量脏数据靠的就是这一下（`SCHEMA_VERSION` 8→9 那级空步骤后面跟着的重投）：
+  // 规则一旦读了时钟或生成了 id，重放到同一位置就删出另一批，这条当场 FAIL。
+  // **逐行比对，不写死期望值**——写死的期望值只会被后来的人抄成新的现状
+  const evAll = () =>
+    JSON.stringify(
+      db.prepare(`SELECT id, step_id, claim, seq FROM evidence_refs ORDER BY id`).all(),
+    );
+  const beforeReplay = evAll();
+  rebuildProjections(db, { blobDir: blobs });
+  check(
+    '重投一遍逐行相同，且每一行都带回了 seq（存量四份调查变干净靠的正是这一下）',
+    evAll() === beforeReplay &&
+      (db.prepare(`SELECT COUNT(*) c FROM evidence_refs WHERE seq IS NULL`).get() as { c: number }).c === 0 &&
+      evRows(rep.stepId).length === 1 &&
+      searchNarrative(db, '该设备 status 为 -10').length === 0,
+    `重放前后一致=${evAll() === beforeReplay} · 那一步 ${evRows(rep.stepId).length} 条证据 · ` +
+      `旧说法在检索里 ${searchNarrative(db, '该设备 status 为 -10').length} 条`,
+  );
+  cRep.close();
+
+  // 🔴 **批次边界不能是时间戳。** 两次 close 落进同一毫秒时，`observed_at` 与上次的 `t_end`
+  // 全都相等，"上一批"与"这一批"当场分不开——而它不报错，只是安静地不替换。
+  // 这一段把时钟钉死在同一个数上：所有事件同毫秒，只有 `events.seq` 还分得清先后
+  const FROZEN = 1_777_000_000_000;
+  let frozenIds = 0;
+  const frozen = createInvestigationSession(
+    db,
+    {
+      caseId: 'case_evsame',
+      sessionId: 'sess_frozen',
+      backend: 'claude',
+      blobDir: blobs,
+      isTimestampedSource: () => true,
+      now: () => FROZEN,
+      newId: (prefix) => `${prefix}_frozen_${++frozenIds}`,
+      runOperator: async () => ({ answer: '' }),
+    },
+    {
+      title: '同一毫秒内收两次',
+      question: '同一毫秒内收两次',
+      projectRoot: null,
+      incidentDate: '2026-08-09',
+      tzOffset: '+08:00',
+      clues: null,
+    },
+  );
+  const same = await frozen.store.openStep({ direction: '同一毫秒内被收两次的那一步' });
+  frozen.recordToolStart({ callId: 'call_same', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  frozen.recordToolEnd({ callId: 'call_same', output: '命中 1 条\n12:41:07 502 gateway\n(end)' });
+  const closeSame = (claim: string) =>
+    frozen.store.closeStep({
+      stepId: same.stepId,
+      status: 'confirmed' as const,
+      verdict: '同一毫秒内收了两次',
+      confidence: 0.7,
+      evidence: [{ callRef: '#1', anchor: '2', claim, occurredAt: '12:41:07', actor: 'gateway' }],
+    });
+  await closeSame('第一批的说法');
+  await closeSame('第二批的说法');
+  const sameRows = evRows(same.stepId);
+  check(
+    '两次 close 落在同一毫秒里也只剩后一批（边界是 events.seq，不是时间戳）',
+    sameRows.length === 1 && sameRows[0]?.claim === '第二批的说法',
+    `${sameRows.length} 条：${sameRows.map((r) => r.claim).join(' / ')}` +
+      `（拿时间戳当边界的话这儿是 2 条：observed_at 与上次的 t_end 全等，谁都不比谁大）`,
+  );
+  frozen.endSession();
+
+  // 🔴 **一批证据落到一半失败，留下的是永远删不掉的孤儿。** `replaceEvidenceBatch` 只删
+  // `seq < 上次 closed_seq` 的行，而半批的 seq 比它大——重试时完整的一批落进来，那半批还在旁边躺着。
+  //
+  // 制造失败的手法是**让第二条证据拿到一个已经用过的 id**（`evidence_refs.id` 是主键）：
+  // 注入点在会话自己的 id 生成器上，生产路径上一个开关都不用加
+  let atomicIds = 0;
+  let collide = false;
+  const atomic = createInvestigationSession(
+    db,
+    {
+      caseId: 'case_atomic',
+      sessionId: 'sess_atomic',
+      backend: 'claude',
+      blobDir: blobs,
+      isTimestampedSource: () => true,
+      now: () => Date.now(),
+      newId: (prefix) => (collide && prefix === 'ev' ? 'ev_collide' : `${prefix}_atomic_${++atomicIds}`),
+      runOperator: async () => ({ answer: '' }),
+    },
+    {
+      title: '一批落到一半失败',
+      question: '一批落到一半失败',
+      projectRoot: null,
+      incidentDate: '2026-08-09',
+      tzOffset: '+08:00',
+      clues: null,
+    },
+  );
+  const half = await atomic.store.openStep({ direction: '这一步的第二批会在中途炸掉' });
+  atomic.recordToolStart({ callId: 'call_atomic', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  atomic.recordToolEnd({ callId: 'call_atomic', output: '命中 2 条\n12:41:07 a\n12:41:08 b\n(end)' });
+  await atomic.store.closeStep({
+    stepId: half.stepId,
+    status: 'confirmed',
+    verdict: '第一批，正常落下',
+    confidence: 0.8,
+    evidence: [{ callRef: '#1', anchor: '2', claim: '第一批那条', occurredAt: '12:41:07', actor: 'app' }],
+  });
+  const evOfStep = () =>
+    JSON.stringify(
+      db
+        .prepare(`SELECT id, claim, seq FROM evidence_refs WHERE step_id=? ORDER BY seq`)
+        .all(half.stepId),
+    );
+  const beforeHalf = { ev: evOfStep(), events: eventCount(), step: JSON.stringify(stepRowOf(half.stepId)) };
+  collide = true;
+  const blewUp = await atomic.store
+    .closeStep({
+      stepId: half.stepId,
+      status: 'confirmed',
+      verdict: '第二批，第二条会撞主键',
+      confidence: 0.9,
+      evidence: [
+        { callRef: '#1', anchor: '2', claim: '第二批的第一条', occurredAt: '12:41:07', actor: 'app' },
+        { callRef: '#1', anchor: '3', claim: '第二批的第二条（撞主键）', occurredAt: '12:41:08', actor: 'app' },
+      ],
+    })
+    .then(() => null)
+    .catch((e: Error) => e.message);
+  check(
+    '一批证据落到一半失败：整批回滚，证据、events 与 closed_seq 与出事前逐字相同',
+    blewUp !== null &&
+      evOfStep() === beforeHalf.ev &&
+      eventCount() === beforeHalf.events &&
+      JSON.stringify(stepRowOf(half.stepId)) === beforeHalf.step,
+    `抛出=${blewUp ?? '(竟然没抛)'} · 证据 ${beforeHalf.ev} → ${evOfStep()} · ` +
+      `events ${beforeHalf.events} → ${eventCount()} · 步 ${beforeHalf.step} → ${JSON.stringify(stepRowOf(half.stepId))}` +
+      `（一条一条各提交各的话，第一条已经落库、closed_seq 还停在上一批——那条孤儿的 seq 比它大，往后再也删不掉）`,
+  );
+  atomic.endSession();
 
   // 声明跟着它那一步一起失效：形态说的是"结论属于哪一类"，结论作废了这句话也就不成立
   const cDead = makeRunner('case_shape_dead', '声明被推翻');
