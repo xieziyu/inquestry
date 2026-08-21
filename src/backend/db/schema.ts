@@ -22,6 +22,16 @@ export const SCHEMA_SQL = `
 --   1. \`events\` 是唯一真相，其余表都是它的物化投影，可 truncate 后重放重建
 --   2. 大 payload 不进库，只存 sha256 引用；库里存的是可检索文本
 
+-- ────────────────────────────── 库自己的元信息 ──────────────────────────────
+-- 🔴 **schema 版本记在这儿，而不是 \`user_version\`。** 后者被拿去记"最低还有谁读得动
+-- 这份库"了（database.ts 的 MIN_READER_VERSION），两者在 additive 的升级里会分叉：
+-- 库是 v10 了，\`user_version\` 还停在 9，好让 9 那版照旧打得开。
+-- 不是投影，重放不碰它（不在 PROJECTION_TABLES 里）。
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 -- ─────────────────────────────── 真相层 ───────────────────────────────
 
 CREATE TABLE IF NOT EXISTS events (

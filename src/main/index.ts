@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
-import { blobDir, openDatabase, type Db } from '../backend/db/database.js';
+import { blobDir, DatabaseTooNewError, openDatabase, type Db } from '../backend/db/database.js';
 import {
   deleteCase,
   emptyBlobTrash,
@@ -1204,11 +1204,34 @@ app.whenReady().then(async () => {
  } catch (err) {
    // 启动失败必须看得见：否则表现是「窗口没出来」，连日志都没有
    console.error('[main] 启动失败', err);
+   // 库比本版新是**唯一一种人能自己处理的启动失败**（更新一下就好），给他那句话而不是调用栈
+   const detail = err instanceof DatabaseTooNewError ? err.message : String((err as Error).stack ?? err);
    createWindow();
-   win?.webContents.once('did-finish-load', () => {
-     win?.webContents.executeJavaScript(
-       `document.body.innerHTML = '<pre style="padding:40px;color:#f0806c;font:13px monospace">启动失败：' + ${JSON.stringify(String((err as Error).stack ?? err))} + '</pre>'`,
+   const painted = new Promise<void>((res) => win?.webContents.once('did-finish-load', () => res()));
+   const show = (text: string) => {
+     void painted.then(() =>
+       win?.webContents.executeJavaScript(
+         `document.body.innerHTML = '<pre style="padding:40px;color:#f0806c;font:13px monospace;white-space:pre-wrap">' + ${JSON.stringify(text)} + '</pre>'`,
+       ),
      );
+   };
+   show(`启动失败：${detail}`);
+   // 🔴 **这一屏也得自己够得着更新。** 它最常见的成因就是库比本版新，而那句话给的解法
+   // 恰恰是装上新版；更新器建在 try 里的话，抛错那一刻它压根没建起来——屏上写着
+   // 「更新到新版后即可打开」，而这个 app 一辈子都不会去查一次更新，只能人工去下载。
+   // 下好了直接装：这一屏没有会话、没有没存下的东西，没有什么要先问用户的
+   const updater = createUpdater({
+     onStatus: (s) => {
+       if (s.phase === 'downloading') show(`启动失败：${detail}\n\n正在下载 ${s.version}……${s.percent}%`);
+       if (s.phase === 'ready') {
+         show(`启动失败：${detail}\n\n${s.version} 已下好，正在重启……`);
+         updater.install();
+       }
+       // 查更新也失败了就得说：那句「更新到新版后即可打开」这时是等不来的，
+       // 只剩人工去下载一条路——不说的话这一屏看着像还在等，其实谁也没在动
+       if (s.phase === 'error') show(`启动失败：${detail}\n\n查更新失败：${s.message}`);
+     },
+     cleanup: () => undefined,
    });
  }
 });

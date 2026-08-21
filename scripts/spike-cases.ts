@@ -23,7 +23,10 @@ import path from 'node:path';
 import { readBlobHead, storeBlob } from '../src/backend/db/blobs.js';
 import {
   blobDir,
+  DatabaseTooNewError,
   MIGRATIONS,
+  MIN_READER_VERSION,
+  minReaderOf,
   openDatabase,
   planUpgrade,
   SCHEMA_VERSION,
@@ -140,6 +143,16 @@ async function work(runner: CaseRunner, direction: string, callId: string, occur
     ],
   });
   return stepId;
+}
+
+/**
+ * 把一份库假装成上一版：**两个戳都得调**。
+ * 只调 `user_version` 的话 `planUpgrade` 认 `meta` 里那份真实版本，当场判成 fresh，
+ * 于是整段迁移自检根本没走迁移——而它看着与"迁移成功"一模一样。
+ */
+function demote(d: DatabaseCtor.Database, to: number): void {
+  d.prepare(`UPDATE meta SET value=? WHERE key='schema_version'`).run(String(to));
+  d.pragma(`user_version = ${to}`);
 }
 
 async function main() {
@@ -315,12 +328,12 @@ async function main() {
   // 体检只是那道闸，路在 `openDatabase` 里。启动路径不分岔的话，
   // 哪怕只加一个 nullable 列，现有调查照样会从 app 里消失（文件留成 .bak，界面上没了）。
   //
-  // 手法：把这份**真跑出来的库**的 user_version 调低一格假装它是旧的，再给一级假步骤。
+  // 手法：把这份**真跑出来的库**调低一格假装它是旧的，再给一级假步骤。
   // 不能靠改 SCHEMA_VERSION——那是个常量，而且改了整套自检都会跟着漂
   const migrated = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-migrate-')), 'inquestry.db');
   db.prepare(`VACUUM INTO ?`).run(migrated);
   const oldDb = new DatabaseCtor(migrated);
-  oldDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  demote(oldDb, SCHEMA_VERSION - 1);
   oldDb.close();
 
   const casesBefore = (db.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c;
@@ -329,6 +342,7 @@ async function main() {
     steps: [
       {
         to: SCHEMA_VERSION,
+        compat: 'additive',
         apply: (d) => {
           d.exec(`ALTER TABLE cases ADD COLUMN probe_col TEXT`);
           // **顺序探针**：这张表由幂等 `SCHEMA_SQL` 建。步骤跑在它之前的话，
@@ -389,7 +403,7 @@ async function main() {
   db.prepare(`VACUUM INTO ?`).run(real);
   const realOld = new DatabaseCtor(real);
   for (const c of topCols) realOld.exec(`ALTER TABLE ${c.table} DROP COLUMN ${c.column}`);
-  realOld.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  demote(realOld, SCHEMA_VERSION - 1);
   realOld.close();
 
   /**
@@ -476,7 +490,7 @@ async function main() {
   const staleFile = path.join(mkdtempSync(path.join(tmpdir(), 'inquestry-stale-')), 'inquestry.db');
   db.prepare(`VACUUM INTO ?`).run(staleFile);
   const staleDb = new DatabaseCtor(staleFile);
-  staleDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  demote(staleDb, SCHEMA_VERSION - 1);
   staleDb.close();
   // 有人把一级"其实改了载荷形状"的升级声明成可重放时该怎么办：**退回挪库**。
   // 硬迁的话会落出一批半残的调查，而它与一次成功的迁移长得一模一样；
@@ -487,7 +501,7 @@ async function main() {
   brokenDb
     .prepare(`INSERT INTO events (case_id,session_id,type,payload,created_at) VALUES (?,?,?,?,?)`)
     .run('case_x', null, 'step.closed', JSON.stringify({ stepId: 'st_old', status: 'confirmed', at: 1 }), 1);
-  brokenDb.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+  demote(brokenDb, SCHEMA_VERSION - 1);
   brokenDb.close();
   // ⚠️ **这里必须接住异常**：抛出去的话整个脚本当场死，一条检查都跑不到，
   // 而退出码看着与"抓住了"一模一样（今天第三次踩这个形状）。"没抛错"本身就是要验的一半
@@ -495,7 +509,9 @@ async function main() {
   let threw = '';
   try {
     const salvaged = openDatabase(broken, {
-      steps: [{ to: SCHEMA_VERSION, apply: (d) => d.exec(`ALTER TABLE cases ADD COLUMN probe_col TEXT`) }],
+      steps: [
+        { to: SCHEMA_VERSION, compat: 'additive', apply: (d) => d.exec(`ALTER TABLE cases ADD COLUMN probe_col TEXT`) },
+      ],
     });
     salvagedCases = (salvaged.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c;
     salvaged.close();
@@ -513,8 +529,91 @@ async function main() {
   check(
     '阶梯缺一级时退回挪库，不硬着头皮迁一半',
     planUpgrade(staleFile, []).kind === 'archive' &&
-      planUpgrade(staleFile, [{ to: SCHEMA_VERSION, apply: () => {} }]).kind === 'replay',
-    `空阶梯=${planUpgrade(staleFile, []).kind} / 补齐后=${planUpgrade(staleFile, [{ to: SCHEMA_VERSION, apply: () => {} }]).kind}`,
+      planUpgrade(staleFile, [{ to: SCHEMA_VERSION, compat: 'additive', apply: () => {} }]).kind === 'replay',
+    `空阶梯=${planUpgrade(staleFile, []).kind} / 补齐后=${planUpgrade(staleFile, [{ to: SCHEMA_VERSION, compat: 'additive', apply: () => {} }]).kind}`,
+  );
+
+  /** 造一份"比本版新"的库：真实版本写进 meta，最低读者写进 user_version。 */
+  const newerLib = (tag: string, version: number, minReader: number) => {
+    const f = path.join(mkdtempSync(path.join(tmpdir(), `inquestry-${tag}-`)), 'inquestry.db');
+    db.prepare(`VACUUM INTO ?`).run(f);
+    const d = new DatabaseCtor(f);
+    d.prepare(`INSERT INTO meta (key,value) VALUES ('schema_version',?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(String(version));
+    d.pragma(`user_version = ${minReader}`);
+    d.close();
+    return f;
+  };
+  /** 打开它，回来的是"抛了什么"与"库被动过没有"。 */
+  const openAndInspect = (f: string) => {
+    let threw = '没抛错';
+    let cases = -1;
+    try {
+      const d = openDatabase(f);
+      cases = (d.prepare(`SELECT COUNT(*) c FROM cases`).get() as { c: number }).c;
+      d.close();
+    } catch (e) {
+      threw = e instanceof DatabaseTooNewError ? 'DatabaseTooNewError' : `另一种错：${(e as Error).message}`;
+    }
+    const probe = new DatabaseCtor(f, { readonly: true });
+    const kept = {
+      minReader: Number(probe.pragma('user_version', { simple: true })),
+      version: Number((probe.prepare(`SELECT value FROM meta WHERE key='schema_version'`).get() as { value: string }).value),
+    };
+    probe.close();
+    return { threw, cases, ...kept, dir: readdirSync(path.dirname(f)).join(' ') };
+  };
+
+  // 🔴 **降级的正路**：additive 的新库不抬 min_reader，老版本照旧打得开。
+  // 这一条成立，「开发时用了高版本 schema，回头启动旧的正式包」才不会出事——
+  // 而它必须由**库自己**声明得出来，不能靠新版本里加判断：旧代码已经在磁盘上了
+  const compat = openAndInspect(newerLib('compat', SCHEMA_VERSION + 1, SCHEMA_VERSION));
+  check(
+    'additive 的新库老版本照常打开，两个戳一个都不改写',
+    compat.threw === '没抛错' &&
+      compat.cases > 0 &&
+      compat.version === SCHEMA_VERSION + 1 &&
+      compat.minReader === SCHEMA_VERSION,
+    `${compat.threw}，读到 ${compat.cases} 个调查，库还是 v${compat.version}/最低读者 v${compat.minReader}` +
+      ` —— 把 meta 写回本版的话，真实版本就丢了，下次用新版打开会当成没迁过`,
+  );
+
+  // breaking 的那一级才停下来：**这一档也不挪库**。挪走之后随自动更新装上的新版
+  // 会拿着那个空库当一切正常，再不会去找 .bak——用户看到的是"升级完数据没了"
+  //（0.2.0 挪走 v9 库那次就是这么丢的）
+  const blocked = openAndInspect(newerLib('newer', SCHEMA_VERSION + 2, SCHEMA_VERSION + 1));
+  check(
+    'breaking 的新库停下来等更新，不挪库（挪了的话新版起来会拿着空库当一切正常）',
+    blocked.threw === 'DatabaseTooNewError' &&
+      blocked.version === SCHEMA_VERSION + 2 &&
+      blocked.minReader === SCHEMA_VERSION + 1 &&
+      !blocked.dir.includes('.bak'),
+    `${blocked.threw}，库还是 v${blocked.version}/最低读者 v${blocked.minReader}，目录=${blocked.dir}`,
+  );
+
+  // 🔴 **已经发出去的 0.3.0 认的是"user_version == 9 就照常打开"**，它不看 meta。
+  // 这个数一旦被抬到 9 以上，线上那一版会把库判成降级挪走——而那份代码改不动了。
+  // 所以往后每加一级都要先答一句：这级是 additive 吗？是就别抬
+  const shipped = new DatabaseCtor(file, { readonly: true });
+  const stamps = {
+    minReader: Number(shipped.pragma('user_version', { simple: true })),
+    version: Number((shipped.prepare(`SELECT value FROM meta WHERE key='schema_version'`).get() as { value: string }).value),
+  };
+  shipped.close();
+  check(
+    '新代码写出来的库，user_version 仍是已发出去那版认得的 9（抬了它，线上 0.3.0 会把库挪走）',
+    stamps.minReader === 9 && stamps.version === SCHEMA_VERSION && MIN_READER_VERSION === 9,
+    `最低读者 v${stamps.minReader}（MIN_READER_VERSION=${MIN_READER_VERSION}）/ 真实版本 v${stamps.version}`,
+  );
+
+  // min_reader 由阶梯自己算：additive 不抬、breaking 抬到那一级。
+  // 反过来验一句，否则上一条只证明"今天恰好是 9"，证明不了这条规则还在
+  const ladderAdditive = minReaderOf([{ to: 99, compat: 'additive' }]);
+  const ladderBreaking = minReaderOf([{ to: 99, compat: 'additive' }, { to: 100, compat: 'breaking' }]);
+  check(
+    'min_reader 只被 breaking 的那一级抬起来，additive 的加多少级都不动',
+    ladderAdditive === MIN_READER_VERSION && ladderBreaking === 100,
+    `全 additive=${ladderAdditive}（该等于 ${MIN_READER_VERSION}）/ 末级 breaking=${ladderBreaking}（该等于 100）`,
   );
 
   const sessions = db
