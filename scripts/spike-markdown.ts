@@ -120,9 +120,33 @@ check(
   (() => {
     const out = md({ case: { ...base().case, status: 'aborted' }, shape: 'open' });
     const quote = out.split('\n').filter((l) => l.startsWith('>')).join('\n');
-    return quote.includes('人为终止') && quote.includes(`第 ${steps.length} 步`);
+    // 数的是有方向的那几步（兜底步没有命题）——夹具里两种兜底各一个，所以这个数小于 steps.length
+    const directed = steps.filter((x) => x.direction !== null).length;
+    return directed < steps.length && quote.includes('人为终止') && quote.includes(`第 ${directed} 步`);
   })(),
   '它没有根因栏不是漏了。这句挪到正文里，等于让人读完整篇才知道结论不算数',
+);
+
+/**
+ * 🔴 **一个方向都没有的归档报告不许印「第 0 步」。** 刚建单就归档、或只跑过兜底调用
+ * （还没 `open_step`）的调查都到得了这儿；那句话在导出的文档里被转发到看不见上下文的地方，
+ * 一句「第 0 步」读起来就是产品坏了。措辞与报告屏共用 `abortedNote`。
+ */
+check(
+  '一个方向都没有的归档：第一屏照旧警告，但不写「第 0 步」',
+  (() => {
+    // 夹具原样派生：只换 status 与 steps（兜底步的 direction 都是 null）
+    const strayOnly = steps.filter((x) => x.direction === null);
+    const out = md({ case: { ...base().case, status: 'aborted' }, steps: strayOnly, shape: 'open' });
+    const quote = out.split('\n').filter((l) => l.startsWith('>')).join('\n');
+    return (
+      strayOnly.length > 0 &&
+      quote.includes('⚠️') &&
+      quote.includes('明确任何方向之前') &&
+      !quote.includes('第 0 步')
+    );
+  })(),
+  '⚠️ 那一档与「第 N 步」是同一句话的两种写法，只改一处的话两个屏上说的就不是一件事',
 );
 
 check(
@@ -455,7 +479,9 @@ check(
   '每条证据都在正文里被引到，不只是有个定义',
   VERDICT_SHAPES.every((shape) => {
     const body = prose(md({ shape }));
-    return ['e1', 'e2', 'e3'].every((k) => body.includes(`[^${k}]`));
+    // e4 挂在支线兜底步上：排查路径是通用三块里唯一"所有 step 都在"的一节，
+    // 按 kind 把 unclassified 一刀切掉的话，正文里就再也没有引到它的地方
+    return ['e1', 'e2', 'e3', 'e4'].every((k) => body.includes(`[^${k}]`));
   }),
   '多数渲染器只渲染被正文引用过的定义：漏引一条，那条证据在导出的文档里整条消失，而页脚仍写着 N 条可溯源',
 );
@@ -488,9 +514,39 @@ check(
   '脚注编号跟着 step 顺序，与正文出现的顺序无关',
   (() => {
     const defs = md({ shape: 'distribution' }).split('\n').filter((l) => l.startsWith('[^'));
-    return defs.map((l) => l.slice(0, 6)).join() === '[^e1]:,[^e2]:,[^e3]:';
+    return defs.map((l) => l.slice(0, 6)).join() === '[^e1]:,[^e2]:,[^e3]:,[^e4]:';
   })(),
   '按引用顺序编的话，同一次调查换个形态导出就换一套编号——两份文档之间没法互相对',
+);
+
+/**
+ * 兜底句按 `lane` 分派（`directionText`）。**两句都得验**：一句「（未归类）」写死在这儿时，
+ * 一条跑完的子 agent 支线在导出的文档里被印成"分类失败"——纸上看着一切正常，
+ * 而读的人会以为主线漏了一次 open_step。
+ *
+ * 编号按夹具里的 `ordinal` 现取：写死数字的话，夹具增删一步这几条就悄悄改验别人去了。
+ */
+const pathLine = (id: string) => {
+  const ord = steps.find((s) => s.id === id)!.ordinal;
+  return md().split('\n').find((l) => l.includes(`\`#${ord}\``)) ?? '';
+};
+check(
+  '支线兜底步印成「支线」那一句，主干兜底步压根不在路径里',
+  (() => {
+    const lane = pathLine('st_lane');
+    return lane.includes('支线') && !lane.includes('未归类') && pathLine('st_stray') === '';
+  })(),
+  `实得「${pathLine('st_lane') || '（没印出来）'}」`,
+);
+
+check(
+  '老写法那种已关的兜底步照旧有行，印的是主干那句而不是「未归类」',
+  (() => {
+    const line = pathLine('st_closed');
+    return line.includes('不属于任何方向') && !line.includes('未归类') && line.includes('TODO');
+  })(),
+  `实得「${pathLine('st_closed') || '（没印出来）'}」—— 它带着一句人读得到的结论，` +
+    '折掉它那句话在导出的文档里就整条消失了',
 );
 
 // ── 被推翻的划掉，事实不划 ──────────────────────────────────────────────
@@ -533,7 +589,7 @@ check(
   '页脚水印带 case 编号、生成时间与全案证据数',
   (() => {
     const foot = md().split('\n').find((l) => l.startsWith('Case ')) ?? '';
-    return foot.includes('case_1') && foot.includes('2026-08-12 15:04') && foot.includes('3 条证据');
+    return foot.includes('case_1') && foot.includes('2026-08-12 15:04') && foot.includes('4 条证据');
   })(),
   '拿系统时间线的条数当总数会把证据量报少（夹具里 e3 没有时间戳）；没有生成时间则分不出手上这份是哪一版',
 );

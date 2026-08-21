@@ -19,18 +19,22 @@
  * 算错（应然/实然填着、时间线有两条、未决型那份带着一条已证实根因），否则"不装"的检查全是空的。
  */
 
+import { readFileSync } from 'node:fs';
+
 import { EMPTY_SNAPSHOT, VERDICT_SHAPES, type Snapshot } from '../src/shared/ipc.js';
 import {
+  abortedNote,
   reportInput,
   reportPlan,
   SHAPE_SOURCE_COPY,
   tailSummary,
+  unassignedCalls,
   type ReportInput,
 } from '../src/shared/report.js';
 // 夹具与 spike:markdown 共用一份（`fixtures/report-case.ts`）：章节的取舍与它的渲染是
 // 同一条链路的前后两段，各自造一份的话，一边补了字段另一边没补，那边的检查就变成空的
 import { reportMarkdown } from '../src/shared/markdown.js';
-import { base, FIX_TEXT, incident, METRICS, report, ROSTER, step, steps } from './fixtures/report-case.js';
+import { base, ev, FIX_TEXT, incident, METRICS, report, ROSTER, step, steps } from './fixtures/report-case.js';
 
 /** 形态 → 它排最前的那一块。与 `report.ts` 的 `MAIN_BLOCKS` 说的是同一件事，验的正是它。 */
 const MAIN = {
@@ -380,6 +384,55 @@ check(
   '洗成一路顺利的叙事就是假历史，而"查过哪些方向"正是下一个人最需要的',
 );
 
+/**
+ * 🔴 **筛的判据必须是"主干兜底 + 0 条证据"，不能只看 kind。** 同一个 `unclassified` 底下
+ * 装着两种东西：主干那个永远没有命题、没有结论、没有证据（agent 拿不到它的 stepId），
+ * 支线那个是子 agent 的账本、有证据、在 Markdown 里挂着脚注。按 kind 一刀切的表现是
+ * 那批脚注整片消失，而页脚水印仍旧写着总条数——**两个方向都验**，只验一个的话
+ * "整类 unclassified 都留着"与"整类都筛掉"各能骗过一半。
+ */
+check(
+  '排查路径不列主干兜底步，但支线兜底步照旧在（连它的证据一起）',
+  (() => {
+    const b = bodyOf({}, 'path');
+    if (b?.kind !== 'path') return false;
+    const ids = b.rows.map((r) => r.id);
+    return !ids.includes('st_stray') && ids.includes('st_lane') && b.rows.some((r) => r.evidence.some((e) => e.id === 'e4'));
+  })(),
+  '一行「（未归类）· N 次调用 · 0 条证据」说不出任何事；而按 kind 一刀切会把支线那批脚注一起删掉',
+);
+
+check(
+  '带着证据的主干兜底步不筛（老数据里有，筛掉证据就没有出口了）',
+  (() => {
+    const withEv = steps.map((x) =>
+      x.id === 'st_stray' ? { ...x, evidence: [ev('e9', 'svc-a', '10:09:00')] } : x,
+    );
+    const b = bodyOf({ steps: withEv }, 'path');
+    return b?.kind === 'path' && b.rows.some((r) => r.id === 'st_stray');
+  })(),
+  '真实链路上主干兜底恒为 0 条证据，但 seed 与任何直接发 step.closed 的路径不经过那条约束',
+);
+
+/**
+ * 🔴 **"0 条证据"不是唯一的出口，结论也是。** 老写法造出来的兜底步已关、带着一句人写下的
+ * 结论、却仍旧 0 条证据（`seed-cases` 一度就这么造，开发库里这种数据可达）。只按
+ * "主干兜底 + 0 条证据"折的话，它连同那句结论一起从报告与画布上消失，而它的调用
+ * 会被并进信息卡那条带子——一句有出处的结论就这样被说成"不属于任何方向的几次调用"。
+ */
+check(
+  '已关、带结论的兜底步不折：报告有它的行，那几次调用也不算进信息卡那条带子',
+  (() => {
+    const b = bodyOf({}, 'path');
+    if (b?.kind !== 'path') return false;
+    const row = b.rows.find((r) => r.id === 'st_closed');
+    const stray = unassignedCalls(steps).map((c) => c.id);
+    return !!row && row.verdict !== null && !stray.includes('tc_closed1') && stray.includes('tc_stray1');
+  })(),
+  `带子上那几次调用实得 ${JSON.stringify(unassignedCalls(steps).map((c) => c.id))} —— ` +
+    '两个方向都验：真的那种要在带子里，这种老数据一次都不许进',
+);
+
 check(
   '因果链在根因那一步收束，不越过它',
   (() => {
@@ -439,7 +492,7 @@ check(
   '归因切分按全部证据算，不是系统时间线那一份',
   (() => {
     const b = bodyOf({ shape: 'distribution' }, 'split');
-    return b?.kind === 'split' && b.groups.map((g) => `${g.actor}:${g.count}`).join() === 'svc-a:2,svc-b:1';
+    return b?.kind === 'split' && b.groups.map((g) => `${g.actor}:${g.count}`).join() === 'svc-a:2,svc-b:2';
   })(),
   'svc-b 那条没有时间戳、不在系统时间线里——按它算就会凭空少掉一组，而"只在某一小撮上"与有没有时间戳无关',
 );
@@ -468,16 +521,51 @@ check(
 
 check(
   '证据数按全案证据算，不是系统时间线的条数',
-  reportPlan(base()).evidenceCount === 3,
+  reportPlan(base()).evidenceCount === 4,
   '页脚水印写的是"N 条证据可在 Inquestry 溯源"；拿只含带时间戳那份的系统时间线当总数，正式报告会把证据量报少（夹具里 e3 就没有时间戳）',
 );
 
 // ── 归档 / 冻结 ────────────────────────────────────────────────────────
 
+/** 夹具里两种兜底步各有一个，所以这个数**必然**小于 `steps.length`——不然下面那条是空检查。 */
+const DIRECTED = steps.filter((s) => s.direction !== null).length;
+/**
+ * 🔴 **0 个方向是可达的，而「第 0 步」是句错话。** 刚建单就归档、或只跑过兜底调用
+ * （agent 还没 `open_step`）的调查都到得了这儿——`abortedAt` 给 0 是对的（归档了、
+ * 且一个方向都没明确），错的是把它套进「第 N 步」那句模板。
+ * **两个方向都验**：0 那句不许出现「第 0 步」，非 0 那句照旧要有步号。
+ */
 check(
-  '归档的报告顶上说得出在第几步被终止',
-  reportPlan(base({ case: { ...base().case, status: 'aborted' } })).abortedAt === steps.length,
-  '半程报告没有根因栏，不说清是人为终止的话，读起来像是查完了什么都没查到',
+  '一个方向都没有的归档报告：abortedAt 给 0，而顶上那句不写「第 0 步」',
+  (() => {
+    // 夹具原样派生：只把 status 换成 aborted、steps 只留兜底步（它们的 direction 都是 null）
+    const strayOnly = steps.filter((s) => s.direction === null);
+    const plan = reportPlan(base({ case: { ...base().case, status: 'aborted' }, steps: strayOnly }));
+    const note = plan.abortedAt === null ? '' : abortedNote(plan.abortedAt);
+    return (
+      strayOnly.length > 0 &&
+      plan.abortedAt === 0 &&
+      note.includes('明确任何方向之前') &&
+      !note.includes('第 0 步') &&
+      abortedNote(3).includes('第 3 步')
+    );
+  })(),
+  `实得「${abortedNote(0)}」/「${abortedNote(3)}」—— 夹具里那几步必须非空，` +
+    '否则"步数不为 0"这种写法在它上面也算得对',
+);
+
+check(
+  '那句话在报告屏上没有第二个出处（措辞只此一份）',
+  !readFileSync(new URL('../src/renderer/ReportPaper.tsx', import.meta.url), 'utf8').includes('被人为终止'),
+  '纸上与导出的文档各写一句的话，同一份调查会被说成两件事 —— 而 0 那一档正是两处最容易只改一边的',
+);
+
+check(
+  '归档的报告顶上说得出在第几步被终止，数的是 agent 声明过方向的那几步',
+  DIRECTED < steps.length &&
+    reportPlan(base({ case: { ...base().case, status: 'aborted' } })).abortedAt === DIRECTED,
+  `有方向的 ${DIRECTED} 步 / 共 ${steps.length} 步 —— 把兜底步数进来的话，` +
+    '这句话会比人在纸上数得出的方向多出好几，而半程报告顶上那句正是给人对账用的',
 );
 
 check(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CaseMeta, ChatLine, PendingAsk, PendingGate, StepNode } from '../shared/ipc.js';
 import {
+  CASE_BOX_ID,
   STAGE,
   directionText,
   refuteEdges,
@@ -11,10 +12,17 @@ import {
   type StageEdge,
   type StageLayout,
 } from './track.js';
-import type { TailSummary } from '../shared/report.js';
-import { useSecond } from './clock.js';
-import { elapsedText, laneActivity, lastUpdate, stepActivity, thinkingStep, type LiveActivity } from './live.js';
+import { unassignedCalls, type TailSummary } from '../shared/report.js';
+import {
+  laneActivity,
+  lastUpdate,
+  sessionLastTouch,
+  stepActivity,
+  thinkingStep,
+  type LiveActivity,
+} from './live.js';
 import { CaseCard } from './CaseCard.js';
+import { Elapsed } from './Elapsed.js';
 import { StepSheet } from './StepSheet.js';
 import { TailCard } from './TailCard.js';
 import { Icon } from './Icon.js';
@@ -125,6 +133,11 @@ export function Stage({
   onReport: () => void;
 }) {
   const track = useMemo(() => trackLayout(steps), [steps]);
+  /**
+   * 不属于任何方向的那几次调用。**兜底步不上轨道**（`trackLayout` 滤掉了它），
+   * 它们由信息卡认领：卡面一条恒占一行的带子 + 详情抽屉里的清单。
+   */
+  const stray = useMemo(() => unassignedCalls(steps), [steps]);
   const items = useMemo(() => weaveChat(track.rows, chat), [track.rows, chat]);
   /** 展开着的那几组。**模块里那份是真相**，这个 state 只为了让它一改就重渲染。 */
   const [openAsides, setOpenAsides] = useState<ReadonlySet<string>>(
@@ -162,6 +175,8 @@ export function Stage({
   const thinkingId = useMemo(() => thinkingStep(steps, sessionId), [steps, sessionId]);
   const liveSet = useMemo(() => new Set(liveLanes), [liveLanes]);
   const lastAct = useMemo(() => lastUpdate(steps, chat), [steps, chat]);
+  /** 信息卡那条底带的秒表起点：**只认这一轮**，理由见 `sessionLastTouch`。 */
+  const sessionAct = useMemo(() => sessionLastTouch(steps, sessionId), [steps, sessionId]);
   const running = busy || liveLanes.length > 0;
 
   const box = useRef<HTMLDivElement>(null);
@@ -452,7 +467,19 @@ export function Stage({
         ))}
         {layout.boxes.map((b) =>
           b.kind === 'case' ? (
-            <CaseCard key={b.id} box={b} meta={meta} onRename={onRename} onOpen={() => pick(b.id)} />
+            <CaseCard
+              key={b.id}
+              box={b}
+              meta={meta}
+              stray={stray}
+              // 「在想」落到信息卡上时才出底带；这一轮已经交回来了就什么都不出（同 `stepActivity`）。
+              // 起点按**本会话**取（`sessionLastTouch`）：这张卡跨会话一直在，
+              // 而跨会话那份（`lastAct`）是 HUD「最后更新」的读法，拿来当秒表起点的话，
+              // 新一轮刚开的那几十秒里它从上一次会话最后那件事算起
+              thinking={busy && thinkingId === CASE_BOX_ID ? { since: sessionAct } : null}
+              onRename={onRename}
+              onOpen={() => pick(b.id)}
+            />
           ) : b.kind === 'say' ? (
             <SayNode key={b.id} box={b} picked={picked === b.id} />
           ) : b.kind === 'group' ? (
@@ -560,6 +587,7 @@ export function Stage({
         <StepSheet
           box={pickedBox}
           meta={meta}
+          stray={stray}
           liveLanes={liveLanes}
           aside={asideGroup && { ...asideGroup, onPick: pick }}
           onClose={() => setPicked(null)}
@@ -706,17 +734,6 @@ export function sayLabel(role: ChatLine['role']) {
 }
 
 /**
- * 秒表。**整个 app 里只有它订阅时钟**（`clock.ts` 那段红字说了为什么不能往上提）。
- *
- * 秒数一律 `Date.now() - from` 现算：快照是事件驱动的，一次几十秒的调用期间一条都不推，
- * 靠快照的话这个数根本不会变——而"数字在变"正是这一层唯一扛事的东西。
- */
-function Elapsed({ from, markStale }: { from: number; markStale?: boolean }) {
-  useSecond();
-  return <>{elapsedText(Date.now() - from, markStale)}</>;
-}
-
-/**
  * 进行中的步骤卡底部那一行：`⟳ Grep 40s · 4 调用 · 3 证据`。
  *
  * 🔴 **绝对定位在卡片底部那 20px 保留带里，一个像素都不许改变卡高**：位置是 `track.ts`
@@ -815,7 +832,7 @@ function StepNodeCard({
     >
       <div className="c-head">
         <span className="ord">{row.label}</span>
-        <span className={`kind ${step.kind}`}>{kindLabel(step.kind)}</span>
+        <span className={`kind ${step.kind}`}>{kindLabel(step.kind, step.lane)}</span>
         {/* 推翻者不在这条轨道上时曲线画不出来，这句话照旧——
             少一道划线就是把一个已经作废的结论显示成仍然成立的 */}
         {row.refutedBy !== null && (
@@ -921,6 +938,13 @@ export function statusLabel(s: StepNode['status']) {
   )[s];
 }
 
-export function kindLabel(k: StepNode['kind']) {
+/**
+ * 徽标。**兜底步要按 `lane` 分派**（同 `directionText`）：舞台上剩下的 `unclassified`
+ * 只有支线兜底那一种，把子 agent 的账本标成「未归类」是纯粹的错标——它没有命题不是
+ * 因为分类失败，是因为方向由主线收敛回来时才给。主干那种在这儿已经没有出处（不出卡），
+ * 留着是因为带证据的老数据还在库里。
+ */
+export function kindLabel(k: StepNode['kind'], lane: string | null = null) {
+  if (k === 'unclassified') return lane ? '支线' : '未归类';
   return ({ normal: '排查', unclassified: '未归类', impact: '影响面', leftover: '遗留问题' } as const)[k];
 }

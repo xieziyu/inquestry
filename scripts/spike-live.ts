@@ -19,7 +19,15 @@
 import { readFileSync } from 'node:fs';
 
 import { clockRunning, subscribeSecond } from '../src/renderer/clock.js';
-import { elapsedText, lastUpdate, laneActivity, stepActivity, thinkingStep } from '../src/renderer/live.js';
+import {
+  elapsedText,
+  lastUpdate,
+  laneActivity,
+  sessionLastTouch,
+  stepActivity,
+  thinkingStep,
+} from '../src/renderer/live.js';
+import { CASE_BOX_ID } from '../src/renderer/track.js';
 import type { CallNode, ChatLine, StepNode } from '../src/shared/ipc.js';
 
 const checks: [string, boolean, string][] = [];
@@ -268,8 +276,46 @@ const IDLE = {
   check(
     '「agent 在想」不会落到上一次会话最后那张开着的卡上',
     thinkingStep([oldTurn, step({ id: 'st_new' })], NOW_SESSION) === 'st_new' &&
-      thinkingStep([oldTurn], NOW_SESSION) === null,
+      thinkingStep([oldTurn], NOW_SESSION) === CASE_BOX_ID,
     '旧那张排在前面也排得到后面 —— 不筛会话的话，新一轮刚开的那几十秒里它会顶着一个从几小时前算起的秒数',
+  );
+
+  /**
+   * 🔴 **落点必须是舞台上真有的那张卡。** 主干兜底步不出卡（`trackLayout` 滤掉了它），
+   * 而它恰恰是"正常步全关之后唯一还开着的主干步"——认它的话，收尾那段时间里
+   * 「agent 在想」挂到一张不存在的卡上，表现是这个信号整个消失，且没有任何报错。
+   * **两句都要**：只验"不认兜底步"的话，返回 null 也照样过，而那同样是信号消失。
+   */
+  const strayOpen = step({ id: 'st_stray', kind: 'unclassified', direction: null });
+  check(
+    '正常步全关之后，「agent 在想」落到信息卡上，不落到不出卡的兜底步上',
+    thinkingStep([step({ id: 'st_done', status: 'confirmed' }), strayOpen], NOW_SESSION) === CASE_BOX_ID &&
+      thinkingStep([strayOpen, step({ id: 'st_live' })], NOW_SESSION) === 'st_live',
+    '兜底步永远关不掉，所以它是收尾时唯一开着的主干步 —— 认它等于把这个信号挂到一张没有的卡上',
+  );
+
+  // 带着证据的兜底步照旧出卡（老数据里有），落点也就照旧是它自己
+  /**
+   * 🔴 **信息卡那条秒表按本会话算。** 它落在一张跨会话一直都在的卡上，而
+   * `lastUpdate` 跨整次调查（HUD「最后更新」问的正是那个）——两个信号共用一个起点的话，
+   * 新会话刚 busy、这一轮还没 open_step 也没发出第一次调用的那几十秒里，
+   * 信息卡上的秒数从上一次会话最后那件事算起，一开屏就是几小时。
+   * **两个方向都验**：本会话有活动时它得认那一份，跨会话那份也得照旧认旧的（HUD 要它）。
+   */
+  check(
+    '信息卡的秒表只认这一轮：本会话没活动时给 null，而跨会话那份照旧认得出旧会话',
+    sessionLastTouch([oldTurn], NOW_SESSION) === null &&
+      lastUpdate([oldTurn], []).at === oldTurn.startedAt &&
+      sessionLastTouch([oldTurn, step({ id: 'st_now', startedAt: T0 + 50_000 })], NOW_SESSION) ===
+        T0 + 50_000,
+    `实得 ${sessionLastTouch([oldTurn], NOW_SESSION)} —— 拿跨会话那份当起点的话，` +
+      '新一轮刚开的那几十秒里信息卡顶着一个从几小时前算起的秒数',
+  );
+
+  check(
+    '带证据的兜底步照旧出卡，落点也照旧是它',
+    thinkingStep([{ ...strayOpen, evidence: [ev('e1')] }], NOW_SESSION) === 'st_stray',
+    '筛的判据是"主干兜底 + 0 条证据"，与舞台那侧同一条 —— 两处分家的话，卡在图上而信号落在别处',
   );
 
   const idle = step({ id: 'st_i' });

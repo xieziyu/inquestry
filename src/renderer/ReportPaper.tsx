@@ -15,6 +15,8 @@ import { BOUND_MARK, type CaseMeta, type IncidentEntry, type Metric, type Roster
 import { HEAD_BLOCK } from '../shared/paging.js';
 import {
   SHAPE_COPY,
+  abortedNote,
+  directionText,
   type ChainLink,
   type ReportPlan,
   type ReportSection,
@@ -71,9 +73,7 @@ export function ReportPaper({
             {!plan.frozen && <span className="draft">草稿</span>}
           </p>
           {/* 半程报告顶上明写人为终止（ui.md §8.4）：它没有根因栏不是漏了，是没查出来 */}
-          {plan.abortedAt !== null && (
-            <p className="aborted">调查在第 {plan.abortedAt} 步被人为终止。以下是查到为止的部分。</p>
-          )}
+          {plan.abortedAt !== null && <p className="aborted">{abortedNote(plan.abortedAt)}</p>}
         </header>
       )}
 
@@ -407,7 +407,9 @@ function Path({ rows, label }: { rows: StepNode[]; label: (id: string) => string
         <li key={s.id} className={s.status}>
           <span className="n">{label(s.id)}</span>
           <span className="what">
-            {s.direction ?? '（未归类）'}
+            {/* 兜底句按 lane 分派（`directionText`）：这一节里剩下的只有支线兜底，
+                写死一句「（未归类）」等于把一条跑完的子 agent 支线印成分类失败 */}
+            {directionText(s)}
             {s.verdict && <em>{s.verdict}</em>}
           </span>
           {s.supersededBy && <span className="by">← 被 {label(s.supersededBy)} 推翻</span>}

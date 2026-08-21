@@ -13,6 +13,9 @@
  * - `e3` 没有时间戳（不进系统时间线：拿时间线当证据总数就会报少）
  * - `e2` 没有锚点、`e3` 的调用**在本次调查里找不到**（导出的索引要出声，不是留空）
  * - 「下一步怎么查」**非空且带 markdown 元字符**（它恒为「无」时，那一节的检查全是空的）
+ * - **兜底步三种形态各来一个**（`st_stray` 主干真实形态 / `st_closed` 老写法造的已关那种 /
+ *   `st_lane` 支线）：只有第一个该被折掉。少放一个，"按 kind 一刀切"或"只看 kind + 证据数"
+ *   这两种错法就各有一种在所有检查下照样通过
  */
 
 import type { CallNode, IncidentEntry, Metric, Roster, Snapshot, StepNode } from '../../src/shared/ipc.js';
@@ -57,7 +60,7 @@ export const ev = (
  * 舞台心跳层要的 `pending` 那一档不在这份夹具里：这里装的是一个**已经查完的**调查，
  * 报告投影读的也只是证据。在跑的那几种形态由 `spike:live` 自己造。
  */
-const call = (id: string, toolName: string): CallNode => ({
+const call = (id: string, toolName: string, outputPreview = ''): CallNode => ({
   id,
   callNumber: 1,
   toolName,
@@ -65,7 +68,7 @@ const call = (id: string, toolName: string): CallNode => ({
   status: 'done',
   input: '{}',
   gate: null,
-  outputPreview: '',
+  outputPreview,
   outputLines: 12,
   startedAt: 1000,
   endedAt: 3000,
@@ -86,6 +89,52 @@ export const steps: StepNode[] = [
   // 没标置信度的一环，不该参与"最弱一环"的比较；它的调用故意不在本次调查里
   step({ id: 'st5', status: 'confirmed', evidence: [ev('e3', 'svc-b', null, null, 'tc9')] }),
   step({ id: 'st6', kind: 'leftover', status: 'inconclusive' }),
+  /**
+   * 主干兜底步：真实形态是**永远 open、0 条证据、没有命题也没有结论**——agent 拿不到
+   * 它的 stepId，`close_step` 无从调用。报告不列它，工作区把它的调用并进信息卡。
+   * 带上调用：滤错的表现之一正是这几次调用连同它一起从两个屏上消失。
+   */
+  step({
+    id: 'st_stray',
+    kind: 'unclassified',
+    direction: null,
+    verdict: null,
+    status: 'open',
+    calls: [
+      // 开场必有的那一发：CLI 延迟加载 MCP 工具，agent 想调 open_step 得先把 schema 取回来，
+      // 而 ToolSearch 本身就是一次要记账的调用——物理上不可能先 open_step 再做第一次调用
+      call('tc_stray1', 'ToolSearch', 'select:mcp__inquestry__open_step,mcp__inquestry__close_step'),
+      call('tc_stray2', 'Read', '~/.claude/projects/.../memory/MEMORY.md（读了一遍上次的排查笔记）'),
+    ],
+  }),
+  /**
+   * 老写法造出来的主干兜底步：**已关、带着一句结论、0 条证据**。真实链路上做不到
+   * （agent 拿不到它的 stepId），但 `seed-cases` 与任何直接发 `step.closed` 的路径
+   * 都不经过那条约束，开发库里这种数据可达。判据只写"主干兜底 + 0 条证据"的话，
+   * 它会连同那句结论一起被折掉——而它的结论在两个屏上都再没有出口。
+   */
+  step({
+    id: 'st_closed',
+    kind: 'unclassified',
+    direction: null,
+    status: 'confirmed',
+    verdict: '先扫了一遍回调代码，那把幂等锁只留了一条 TODO。',
+    calls: [call('tc_closed1', 'Read')],
+  }),
+  /**
+   * 支线兜底步：**同一个 kind，却是另一件东西**——它有证据、在排查路径里挂着脚注。
+   * 只按 kind 筛的话它会跟着主干那个一起被筛掉，而页脚水印仍旧写着总条数。
+   */
+  step({
+    id: 'st_lane',
+    kind: 'unclassified',
+    lane: 'toolu_lane',
+    parentStepId: 'st4',
+    direction: null,
+    status: 'converged',
+    verdict: '这条支线到此为止',
+    evidence: [ev('e4', 'svc-b', null, null, 'tc1')],
+  }),
 ];
 
 /** 只有带时间戳的两条。svc-b 那条**不在这里**——归因切分若按它算就会凭空少一组。 */

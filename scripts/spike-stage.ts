@@ -37,6 +37,7 @@ import {
   trackLayout,
   weaveChat,
 } from '../src/renderer/track.js';
+import { PREVIEW_STEPS } from '../src/renderer/preview/fixtures.js';
 import type { ChatLine, StepNode } from '../src/shared/ipc.js';
 
 const checks: [string, boolean, string][] = [];
@@ -650,6 +651,140 @@ const { layout: OPENED } = build(STEPS, CHAT, false, ALL_OPEN);
     '还没到该有终点的时候，舞台上压根没有这张卡',
     !noTail.byId.has(TAIL_BOX_ID),
     '出没出生由 tailSummary() 判（认的是开过 impact/leftover 没有），几何这侧只收一个开关',
+  );
+}
+
+// ── ⑫ 主干兜底步不上舞台，它的调用归信息卡 ─────────────────────────────────
+/**
+ * 🔴 三种错法这一组各钉一条：
+ *
+ *   1. **兜底步照旧出卡**（滤漏了）——一张永远没有命题、没有结论、没有证据的卡占着
+ *      与"一个排查方向"同等规格的位置
+ *   2. **把支线兜底也筛了**（只按 kind 筛）——一条跑完的子 agent 支线整列从画布上消失
+ *   3. **信息卡那条带子按"有没有调用"决定出不出**——第一次兜底调用落地的那一刻信息卡
+ *      长高一截，它下面每一张已经落笔的卡整体下移，而且一声不吭
+ */
+{
+  const strayCalls = [
+    {
+      id: 'tc_s1',
+      callNumber: 1,
+      toolName: 'ToolSearch',
+      origin: 'agent' as const,
+      status: 'done',
+      input: '{}',
+      gate: null,
+      outputPreview: '',
+      outputLines: 3,
+      startedAt: 400,
+      endedAt: 600,
+    },
+  ];
+  // 真实形态：永远 open、没有命题、0 条证据，排在最前（开场摸底）与最后（收尾杂务）
+  const stray = (id: string, at: number) =>
+    step({ id, kind: 'unclassified', direction: null, status: 'open', startedAt: at, calls: strayCalls });
+  const withStray = [stray('sx0', 500), ...STEPS, stray('sx1', 99_000)];
+  const { track: strayTrack, layout: strayLayout } = build(withStray, CHAT);
+
+  check(
+    '主干兜底步不出卡，它上下的每一张都逐字落在没有它时的位置上',
+    !strayLayout.byId.has('sx0') &&
+      !strayLayout.byId.has('sx1') &&
+      !strayTrack.rows.some((r) => r.step.id.startsWith('sx')) &&
+      FULL.boxes.every((b) => {
+        const now = strayLayout.byId.get(b.id);
+        return !!now && now.x === b.x && now.y === b.y && now.h === b.h;
+      }),
+    `盒子 ${strayLayout.boxes.length} 个（没有兜底步时 ${FULL.boxes.length} 个）—— ` +
+      '它永远没有命题、没有结论、没有证据，占一张卡就是纯噪声',
+  );
+
+  check(
+    '支线兜底步照旧出卡（同一个 kind，装的是另一件东西）',
+    (() => {
+      const laneStray = step({ id: 'lx', kind: 'unclassified', direction: null, lane: 'tool_use_aaa' });
+      const { layout } = build([...STEPS, laneStray], CHAT);
+      return layout.byId.has('lx');
+    })(),
+    '按 kind 一刀切的话，一条跑完的子 agent 支线整列从画布上消失，而它是有证据的',
+  );
+
+  check(
+    '带证据的主干兜底步照旧出卡（老数据里有，筛掉证据就没有出口了）',
+    (() => {
+      const withEv = step({
+        id: 'ex',
+        kind: 'unclassified',
+        direction: null,
+        evidence: [{ id: 'e9', claim: 'e9', anchor: null, occurredAtRaw: null, actor: null, callId: 'tc_s1' }],
+      });
+      return build([...STEPS, withEv], CHAT).layout.byId.has('ex');
+    })(),
+    '真实链路上主干兜底恒为 0 条证据，但 seed 与任何直接发 step.closed 的路径不经过那条约束',
+  );
+
+  check(
+    '已关、带结论的兜底步照旧出卡（0 条证据也照旧）',
+    (() => {
+      const closed = step({
+        id: 'cx',
+        kind: 'unclassified',
+        direction: null,
+        status: 'confirmed',
+        verdict: '先扫了一遍回调代码，那把幂等锁只留了一条 TODO。',
+      });
+      return build([...STEPS, closed], CHAT).layout.byId.has('cx');
+    })(),
+    '判据只写"主干兜底 + 0 条证据"的话，这句人写下的结论连着它那张卡一起没了 —— ' +
+      '而库里这种老数据可达（seed 一度就这么造）',
+  );
+
+  check(
+    '信息卡那条带子恒占一行：有没有兜底调用，卡高与它下面每一张卡的位置逐字一样',
+    (() => {
+      const a = FULL.byId.get(CASE_BOX_ID)!;
+      const b = strayLayout.byId.get(CASE_BOX_ID)!;
+      return a.h === b.h && heightOf(a) === a.h && heightOf(b) === b.h;
+    })(),
+    `信息卡高 ${FULL.byId.get(CASE_BOX_ID)!.h} —— 按"有没有调用"决定出不出这一行的话，` +
+      '第一次兜底调用落地的那一刻它长高一截，整条主干跟着下移',
+  );
+
+  check(
+    '兜底步说话的那几句照旧有归属，不会挂到一张没有的卡下面',
+    (() => {
+      const orphan = strayLayout.boxes.filter(
+        (b) => (b.kind === 'say' || b.kind === 'group') && !strayLayout.byId.has(b.ownerId),
+      );
+      return orphan.length === 0;
+    })(),
+    '归属是"说出口时最后那张主干卡"算出来的 —— 滤在调用方而不是 trackLayout 的话，' +
+      '这几句会认领到一个不存在的盒子上，那一组于是整个不见',
+  );
+}
+
+// ── ⑬ 预览夹具的序号不重号 ─────────────────────────────────────────────────
+/**
+ * 🔴 **同一会话里两个 `#9` 是真数据里不可能有的形态**：`ordinal` 是会话内序号，写入侧
+ * 逐一发号。预览那份夹具在共用夹具（`scripts/fixtures/report-case.ts`）后面另接几步，
+ * 序号一度是写死的——共用夹具一加步就撞号，而撞号之后卡面、报告与"被 #9 推翻"那类引用
+ * 各指一张卡，两个屏上都不报错。这条兜的是"接着数"那个写法，不是某几个具体的数。
+ */
+{
+  const seen = new Map<string, string>();
+  const clash: string[] = [];
+  for (const s of PREVIEW_STEPS) {
+    const key = `${s.sessionId} #${s.ordinal}`;
+    const prev = seen.get(key);
+    if (prev) clash.push(`${key}：${prev} 与 ${s.id}`);
+    else seen.set(key, s.id);
+  }
+  check(
+    '预览夹具同一会话内的序号不重号',
+    clash.length === 0,
+    clash.length
+      ? `撞号 ${clash.join('；')}`
+      : `${PREVIEW_STEPS.length} 步，最大 #${Math.max(...PREVIEW_STEPS.map((s) => s.ordinal))}`,
   );
 }
 

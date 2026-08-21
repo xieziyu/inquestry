@@ -27,6 +27,8 @@ import { exportStamp } from './time.js';
 import {
   SHAPE_COPY,
   SHAPE_SOURCE_COPY,
+  abortedNote,
+  directionText,
   reportPlan,
   type ChainLink,
   type ReportInput,
@@ -115,9 +117,8 @@ function lede(input: ReportInput, ctx: Ctx): string {
   }
 
   // 这两条是对整份结论的限定，必须与结论同屏——挪到正文里就等于让人先读完再知道它不算数
-  if (ctx.plan.abortedAt !== null) {
-    lines.push(`⚠️ 调查在第 ${ctx.plan.abortedAt} 步被人为终止，以下是查到为止的部分。`);
-  }
+  // 措辞与报告屏共用一份（`abortedNote`）：0 个方向那一档在两个屏上必须是同一句话
+  if (ctx.plan.abortedAt !== null) lines.push(`⚠️ ${abortedNote(ctx.plan.abortedAt)}`);
   if (!ctx.plan.frozen) {
     lines.push('⚠️ 这次调查还没收尾，报告会跟着它一起变。');
   }
@@ -315,7 +316,9 @@ function pathMd(rows: StepNode[], ctx: Ctx): string {
   return rows
     .map((s) => {
       const what = strike(
-        [inline(s.direction ?? '（未归类）'), s.verdict ? inline(s.verdict) : null]
+        // 兜底句按 lane 分派（`directionText`），与报告屏、舞台同一份：写死一句
+        // 「（未归类）」的话，一条跑完的子 agent 支线在导出的文档里被印成分类失败
+        [inline(directionText(s)), s.verdict ? inline(s.verdict) : null]
           .filter(Boolean)
           .join(' —— '),
         refutedStatus(s.status),
