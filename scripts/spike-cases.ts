@@ -109,8 +109,18 @@ async function work(runner: CaseRunner, direction: string, callId: string, occur
     status: 'confirmed',
     verdict: '主从延迟成立',
     confidence: 0.8,
-    // 迁移那一段要验"新列的值靠重放补得回来"，得有一步真的填过它
+    // 迁移那一段要验"新列的值靠重放补得回来"，得有一步真的填过它。
+    // **每加一级迁移就要在这儿补上那一级的新列**，否则那条检查会当场 FAIL 提醒你
+    // （整列都等于 DEFAULT 时，一个默认值就能把它蒙对，检查是空的）
     remediation: '把从库读改成读主库，或给这条链路加一次 read-your-writes 校验',
+    roster: {
+      label: '读到旧值的请求',
+      idKind: 'requestId',
+      complete: false,
+      basis: '只覆盖抽样到的那批',
+      items: [{ id: 'req_1' }, { id: 'req_2', note: '重试那次' }],
+    },
+    metrics: [{ label: '延迟峰值', value: '812ms', bound: 'exact', basis: '单次采样' }],
     evidence: [
       {
         callRef: '#1',

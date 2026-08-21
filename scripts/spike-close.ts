@@ -20,6 +20,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { z } from 'zod';
 
 import { blobDir, openDatabase, type Db } from '../src/backend/db/database.js';
 import { rebuildProjections } from '../src/backend/db/projector.js';
@@ -33,6 +34,10 @@ import {
 } from '../src/backend/store/sqlite-store.js';
 import { readBlobHead } from '../src/backend/db/blobs.js';
 import { TOOL_DEFS, type InvestigationStore } from '../src/backend/tools/definitions.js';
+import { closeStepShape } from '../src/backend/tools/schemas.js';
+import { METRICS_MAX, ROSTER_MAX } from '../src/shared/ipc.js';
+import { reportMarkdown } from '../src/shared/markdown.js';
+import { reportInput } from '../src/shared/report.js';
 import { CaseRunner, closingMessage } from '../src/main/case-runner.js';
 import { callStatusLabel } from '../src/renderer/StepSheet.js';
 import type { DeclarableShape, Snapshot, VerdictShape } from '../src/shared/ipc.js';
@@ -1137,6 +1142,623 @@ async function main() {
     closingMessage(['impact'], true),
   );
   cFixOpen.close();
+
+  // ── 产出物：名单与指标（overview.md 的「产出物」）──────────────────────
+  //
+  // 这一带的错法全是**静默**的，且都落在"口径"上：
+  //   1. 抄重的 id 不去掉 —— 报告上那个条数虚高，而它正是人拿去汇报、拿去做处置的数
+  //   2. 名单挂在被推翻/没查清的结论上照旧进报告 —— 一份没有出处的名单
+  //   3. metrics 填错步（不是影响面那一步）就此消失，而 agent 以为自己交代过了
+  //   4. 重新 close 一次不带名单被当成"清空" —— 补一句结论就把整份名单抹了
+  const cDeliv = makeRunner('case_deliv', '排查关联小号');
+  const sDeliv = (cDeliv as unknown as Probe).beginSession();
+
+  // 抄重的一份：16 条里有 2 条是重的，真实只有 3 个不同的 id
+  const dupStep = await sDeliv.store.openStep({ direction: '我怀疑这台设备上还挂着别的账号' });
+  sDeliv.recordToolStart({ callId: 'call_dv1', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sDeliv.recordToolEnd({ callId: 'call_dv1', output: '命中 3 条\nu_a u_b u_c\n(end)' });
+  const dup = await sDeliv.store.closeStep({
+    stepId: dupStep.stepId,
+    status: 'confirmed',
+    verdict: '同设备上一共 5 个账号',
+    confidence: 0.9,
+    roster: {
+      label: '关联账号',
+      idKind: 'userId',
+      complete: false,
+      basis: '按设备指纹两跳聚合',
+      items: [
+        { id: 'u_a' },
+        { id: ' u_b ' },
+        { id: 'u_a', note: '被举报本号' },
+        { id: '' },
+        { id: 'u_c' },
+        { id: 'u_b' },
+      ],
+    },
+    evidence: [{ callRef: '#1', anchor: '2', claim: '设备文档里列着这几个账号', actor: 'device-service' }],
+  });
+  const roster1 = cDeliv.snapshot().report.roster;
+  check(
+    '名单去重、去空白、丢空条目，并把去重后的条数回给 agent',
+    roster1?.roster.items.map((i) => i.id).join(',') === 'u_a,u_b,u_c' && dup.rosterCount === 3,
+    `items=${JSON.stringify(roster1?.roster.items)} · rosterCount=${dup.rosterCount}（不去重的话报告上那个条数虚高，而它正是人拿去做处置的数）`,
+  );
+  check(
+    '重复条目的备注不丢：手抄时补注多半只写在其中一条上',
+    roster1?.roster.items.find((i) => i.id === 'u_a')?.note === '被举报本号',
+    JSON.stringify(roster1?.roster.items),
+  );
+  check(
+    '去掉了几条要当场说，且提醒里点名让它回头核对 verdict 里那个数',
+    dup.warnings.some((t) => t.includes('重复') && t.includes('核对')),
+    `warnings=${JSON.stringify(dup.warnings)}（静默去重的话，报告上的条数与 agent 自己写的对不上，而两个数都印在同一份报告上）`,
+  );
+
+  // 名单挂在没查清的结论上：不进报告，且当场说
+  const weakStep = await sDeliv.store.openStep({ direction: '我怀疑 IP 段上还能捞出更多' });
+  const weak = await sDeliv.store.closeStep({
+    stepId: weakStep.stepId,
+    status: 'inconclusive',
+    verdict: '没跑成',
+    confidence: 0.2,
+    roster: { label: '疑似账号', idKind: 'userId', complete: false, basis: '猜的', items: [{ id: 'u_z' }] },
+    evidence: [],
+  });
+  check(
+    '名单声明在没查清的结论上不进报告，且当场点破',
+    cDeliv.snapshot().report.roster?.stepId === dupStep.stepId &&
+      weak.warnings.some((t) => t.includes('名单') && t.includes('已证实')),
+    `快照出自=${cDeliv.snapshot().report.roster?.stepId} · warnings=${JSON.stringify(weak.warnings)}`,
+  );
+
+  // 同一步再 close 一次不带名单：保持原样，不是清空（与形态、应然实然同一个 patch 语义）
+  const again = await sDeliv.store.closeStep({
+    stepId: dupStep.stepId,
+    status: 'confirmed',
+    verdict: '同设备上一共 5 个账号（补一句）',
+    confidence: 0.9,
+    evidence: [],
+  });
+  check(
+    '再 close 一次没重填名单时保持原样，回执也不再报条数',
+    cDeliv.snapshot().report.roster?.roster.items.length === 3 && again.rosterCount === undefined,
+    `快照=${JSON.stringify(cDeliv.snapshot().report.roster?.roster.items)} · rosterCount=${again.rosterCount}（当成清空的话，补一句结论就把整份名单抹了）`,
+  );
+
+  // 后交的那份顶掉先交的，且当场说清现在生效的是哪一条
+  const redoRoster = await sDeliv.store.openStep({ direction: '我怀疑还有第三台设备' });
+  sDeliv.recordToolStart({ callId: 'call_dv2', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sDeliv.recordToolEnd({ callId: 'call_dv2', output: '命中 4 条\nu_a u_b u_c u_d\n(end)' });
+  await sDeliv.store.closeStep({
+    stepId: redoRoster.stepId,
+    status: 'confirmed',
+    verdict: '第三台设备带出第 4 个账号',
+    confidence: 0.85,
+    roster: {
+      label: '关联账号',
+      idKind: 'userId',
+      complete: true,
+      basis: '三跳后收敛，无新账号',
+      items: [{ id: 'u_a' }, { id: 'u_b' }, { id: 'u_c' }, { id: 'u_d' }],
+    },
+    evidence: [{ callRef: '#1', anchor: '2', claim: '第三台设备的 users 数组', actor: 'device-service' }],
+  });
+  const stale = await sDeliv.store.closeStep({
+    stepId: dupStep.stepId,
+    status: 'confirmed',
+    verdict: '同设备上一共 5 个账号',
+    confidence: 0.9,
+    roster: { label: '关联账号', idKind: 'userId', complete: false, basis: '按设备指纹两跳聚合', items: [{ id: 'u_a' }] },
+    evidence: [],
+  });
+  check(
+    '报告取最新那份名单，被顶掉的那一份当场收到「目前不生效」',
+    cDeliv.snapshot().report.roster?.stepId === redoRoster.stepId &&
+      stale.warnings.some((t) => t.includes('目前不生效')),
+    `出自=${cDeliv.snapshot().report.roster?.stepId} · warnings=${JSON.stringify(stale.warnings)}`,
+  );
+
+  // 指标只认影响面那一步
+  const strayMetric = await sDeliv.store.openStep({ direction: '我怀疑注册链路没查设备封禁态' });
+  const strayM = await sDeliv.store.closeStep({
+    stepId: strayMetric.stepId,
+    status: 'confirmed',
+    verdict: '三层防线都是空的',
+    confidence: 0.82,
+    metrics: [{ label: '受害者数', value: '2', bound: 'lower', basis: '近 30 天' }],
+    evidence: [],
+  });
+  check(
+    '指标填在非影响面的步上不进报告，且当场点破',
+    cDeliv.snapshot().report.metrics.length === 0 &&
+      strayM.warnings.some((t) => t.includes('metrics') && t.includes('影响面')),
+    `快照=${JSON.stringify(cDeliv.snapshot().report.metrics)} · warnings=${JSON.stringify(strayM.warnings)}`,
+  );
+
+  const impactStep = await sDeliv.store.openStep({ direction: '量化影响面', kind: 'impact' });
+  await sDeliv.store.closeStep({
+    stepId: impactStep.stepId,
+    status: 'confirmed',
+    verdict: '不是个案',
+    confidence: 0.75,
+    metrics: [
+      { label: '受害者数', value: '2', bound: 'lower', basis: '近 30 天，日志保留期限制' },
+      { label: '时间跨度', value: '375 天', bound: 'exact', basis: '首个账号到最后一个' },
+      // 缺值的那条：印出来是一行空格，该丢掉并出声
+      { label: '存量未封', value: '  ', bound: 'exact', basis: '' },
+    ],
+    evidence: [],
+  });
+  const metrics = cDeliv.snapshot().report.metrics;
+  check(
+    '影响面那一步的指标进报告，缺值的丢掉并出声',
+    metrics.length === 2 && metrics[0]?.bound === 'lower' && metrics[1]?.value === '375 天',
+    `快照=${JSON.stringify(metrics)}（不丢的话，报告的指标表里会有一行只有名字的空格）`,
+  );
+
+  // 口径是这两个类型存在的理由，而 `z.string()` 拦不住一串空格
+  const noBasisStep = await sDeliv.store.openStep({ direction: '我怀疑还有第四台设备' });
+  sDeliv.recordToolStart({ callId: 'call_dv3', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sDeliv.recordToolEnd({ callId: 'call_dv3', output: '命中 1 条\nu_e\n(end)' });
+  const blank = await sDeliv.store.closeStep({
+    stepId: noBasisStep.stepId,
+    status: 'confirmed',
+    verdict: '第四台设备',
+    confidence: 0.9,
+    roster: { label: '关联账号', idKind: 'userId', complete: false, basis: '   ', items: [{ id: 'u_e' }] },
+    evidence: [{ callRef: '#1', anchor: '1', claim: '第四台设备的 users 数组', actor: 'device-service' }],
+  });
+  check(
+    '只写空格的口径被当场点破，落库时归一成空',
+    blank.warnings.some((t) => t.includes('basis') && t.includes('口径')) &&
+      cDeliv.snapshot().report.roster?.roster.basis === '',
+    `warnings=${JSON.stringify(blank.warnings)} · basis=${JSON.stringify(cDeliv.snapshot().report.roster?.roster.basis)}（"   " 有长度、过得了 z.string()，于是报告上会是一份写着"下界，不是全集"却没有一个字解释为什么不全的名单）`,
+  );
+
+  // 长名单：长图那条链路上这是硬边，不是手感——超预算的单块自成一页，
+  // 而 Page.captureScreenshot 到万把像素直接失败，表现是导出整个不成
+  const longStep = await sDeliv.store.openStep({ direction: '我怀疑受影响的订单不止这些' });
+  sDeliv.recordToolStart({ callId: 'call_dv4', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sDeliv.recordToolEnd({ callId: 'call_dv4', output: '命中很多\n(end)' });
+  const long = await sDeliv.store.closeStep({
+    stepId: longStep.stepId,
+    status: 'confirmed',
+    verdict: '受影响订单 600 笔',
+    confidence: 0.9,
+    roster: {
+      label: '受影响订单',
+      idKind: 'orderId',
+      // **声明成全集**：截断之后它必须被按下界处理，否则纸上印着"全集"而底下少了一百条
+      complete: true,
+      basis: '按 cart_key 聚合',
+      items: Array.from({ length: 600 }, (_, i) => ({ id: `ord_${i}` })),
+    },
+    evidence: [{ callRef: '#1', anchor: '1', claim: '600 笔', actor: 'ledger' }],
+  });
+  const cut = cDeliv.snapshot().report.roster?.roster;
+  check(
+    '超长名单截断、强制按下界处理，并印出截掉了多少',
+    cut?.items.length === 500 && cut.truncated === 100 && cut.complete === false &&
+      long.warnings.some((t) => t.includes('截')),
+    `条数=${cut?.items.length} · truncated=${cut?.truncated} · complete=${cut?.complete} · warnings=${JSON.stringify(long.warnings)}（不截的话长图那一头是直接断的，不是慢；不置成下界的话纸上印着"全集"而底下少了一百条）`,
+  );
+
+  // 「缺省=不动」认的是"这个键没给"，不是"给出来是空的"。两个字段的答案不一样，
+  // 各验一条：显式 `[]` 要清得掉指标，而空名单不成其为名单，保持原样并当场说清
+  const clearStep = await sDeliv.store.openStep({ direction: '重算影响面', kind: 'impact' });
+  await sDeliv.store.closeStep({
+    stepId: clearStep.stepId,
+    status: 'confirmed',
+    verdict: '先量一版',
+    confidence: 0.8,
+    metrics: [{ label: '受害者数', value: '9', bound: 'exact', basis: '第一版' }],
+    evidence: [],
+  });
+  const hadMetrics = cDeliv.snapshot().report.metrics.length;
+  await sDeliv.store.closeStep({
+    stepId: clearStep.stepId,
+    status: 'confirmed',
+    verdict: '重算之后一个都不剩',
+    confidence: 0.8,
+    metrics: [],
+    evidence: [],
+  });
+  const clearedByEmpty = cDeliv.snapshot().report.metrics.length;
+  await sDeliv.store.closeStep({
+    stepId: clearStep.stepId,
+    status: 'confirmed',
+    verdict: '只补一句话',
+    confidence: 0.8,
+    metrics: [{ label: '受害者数', value: '9', bound: 'exact', basis: '第一版' }],
+    evidence: [],
+  });
+  const backAgain = cDeliv.snapshot().report.metrics.length;
+  await sDeliv.store.closeStep({
+    stepId: clearStep.stepId,
+    status: 'confirmed',
+    verdict: '再补一句，这次连键都不给',
+    confidence: 0.8,
+    evidence: [],
+  });
+  check(
+    '显式给 metrics: [] 能把上一次的指标清掉；不给这个键才是"不动"',
+    hadMetrics === 1 && clearedByEmpty === 0 && backAgain === 1 && cDeliv.snapshot().report.metrics.length === 1,
+    `第一版=${hadMetrics} · 给空数组之后=${clearedByEmpty} · 再填回来=${backAgain} · 不给键=${cDeliv.snapshot().report.metrics.length}（按 value.length 判的话，重算之后写 [] 会被当成没给，旧指标留在报告里且不出声）`,
+  );
+
+  const emptyRosterStep = await sDeliv.store.openStep({ direction: '重列名单' });
+  const emptyRoster = await sDeliv.store.closeStep({
+    stepId: emptyRosterStep.stepId,
+    status: 'confirmed',
+    verdict: '一个都没剩',
+    confidence: 0.9,
+    roster: { label: '关联账号', idKind: 'userId', complete: false, basis: '重列', items: [] },
+    evidence: [],
+  });
+  check(
+    '空名单不成其为名单：保持原样，并当场说清真要撤掉该怎么做',
+    cDeliv.snapshot().report.roster !== null &&
+      emptyRoster.warnings.some((t) => t.includes('保持原样') && t.includes('推翻')),
+    `名单还在=${cDeliv.snapshot().report.roster !== null} · warnings=${JSON.stringify(emptyRoster.warnings)}（落一个空的进去，读侧会把它判成坏列并喊一声——而那不是坏数据，是 agent 的意图）`,
+  );
+
+  // 名单**不认 kind**：「受影响的订单」落在影响面那一步上同样正当（`effectiveRoster` 的契约，
+  // 工具描述与 seed 夹具都按这个来）。单开一个 runner，免得搅乱上面那几条对生效名单的断言
+  const cKind = makeRunner('case_roster_kind', '名单落在影响面步上');
+  const sKind = (cKind as unknown as Probe).beginSession();
+  const kindImpact = await sKind.store.openStep({ direction: '量化影响面', kind: 'impact' });
+  sKind.recordToolStart({ callId: 'call_k1', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sKind.recordToolEnd({ callId: 'call_k1', output: '命中 2 条\nord_1 ord_2\n(end)' });
+  const onImpact = await sKind.store.closeStep({
+    stepId: kindImpact.stepId,
+    status: 'confirmed',
+    verdict: '波及 2 笔订单',
+    confidence: 0.8,
+    roster: {
+      label: '受影响订单',
+      idKind: 'orderId',
+      complete: true,
+      basis: '按 cart_key 全量扫过',
+      items: [{ id: 'ord_1' }, { id: 'ord_2' }],
+    },
+    metrics: [{ label: '受影响订单', value: '2', bound: 'exact', basis: '全量扫过' }],
+    evidence: [{ callRef: '#1', anchor: '1', claim: '两笔', actor: 'ledger' }],
+  });
+  check(
+    '名单落在影响面步上照样生效，且不为此报一句"填错地方了"',
+    cKind.snapshot().report.roster?.stepId === kindImpact.stepId &&
+      !onImpact.warnings.some((t) => t.includes('名单') && t.includes('不生效')),
+    `出自=${cKind.snapshot().report.roster?.stepId}（期望 ${kindImpact.stepId}）· warnings=${JSON.stringify(onImpact.warnings)}（工具描述一度写着"confirmed 的 normal 步"，而选择器不认 kind、seed 夹具也把名单放在影响面上——agent 会照描述另开一个多余的步，或者干脆不填）`,
+  );
+  cKind.close();
+
+  // 影响面步收成 refuted：定稿闸与报告共用 effectiveStep，所以它就此不算数——
+  // 而 agent 只会看到定稿闸重新报缺，不当场说的话它多半会再开一个同 kind 的步
+  const cRef = makeRunner('case_refuted_impact', '影响面被否掉');
+  const sRef = (cRef as unknown as Probe).beginSession();
+  const impRef = await sRef.store.openStep({ direction: '我怀疑不止个案', kind: 'impact' });
+  await sRef.store.closeStep({
+    stepId: impRef.stepId,
+    status: 'confirmed',
+    verdict: '波及 37 个租户',
+    confidence: 0.8,
+    metrics: [{ label: '受影响租户', value: '37', bound: 'exact', basis: '全量扫过' }],
+    evidence: [],
+  });
+  const okGate = missingClosingSteps(db, 'case_refuted_impact').includes('impact');
+  const refutedImpact = await sRef.store.closeStep({
+    stepId: impRef.stepId,
+    status: 'refuted',
+    verdict: '其实就是个案',
+    confidence: 0.8,
+    evidence: [],
+  });
+  check(
+    '被否掉的影响面步不再算数：定稿闸重新报缺，报告也不印它的结论与指标',
+    !okGate &&
+      missingClosingSteps(db, 'case_refuted_impact').includes('impact') &&
+      cRef.snapshot().report.impact === null &&
+      cRef.snapshot().report.metrics.length === 0,
+    `收好时缺口=${okGate} · 否掉后缺口=${JSON.stringify(missingClosingSteps(db, 'case_refuted_impact'))} · 影响面=${cRef.snapshot().report.impact} · 指标=${JSON.stringify(cRef.snapshot().report.metrics)}（只排 superseded 的话，报告上会是"一段被推翻的话 + 一组仍按旧口径算的数"——metrics 走 COALESCE，重新 close 时它照旧留在库里）`,
+  );
+  check(
+    '否掉强制 step 时当场说清后果，不让 agent 只看到定稿闸报缺',
+    refutedImpact.warnings.some((t) => t.includes('影响面') && t.includes('confirmed')),
+    `warnings=${JSON.stringify(refutedImpact.warnings)}（不说的话它多半会再开一个同 kind 的步，而不是把这一步重新收成 confirmed）`,
+  );
+  cRef.close();
+
+  // 坏 JSON：报告那侧已经降级成"没有名单"，写入侧不能反而炸
+  // ── 工具边界：必填的展示字段挡不挡得住一串空格 ────────────────────────
+  //
+  // 这几条是 MCP 在调 `run` 之前跑的那一道，所以直接拿 schema 验。
+  // `.min(1)` 对 `"   "` 是放行的（长度是 3）——**看着有、其实没有的检查比没有更糟**
+  const CLOSE = z.object(closeStepShape);
+  const withRoster = (over: Record<string, unknown>) => ({
+    stepId: 'st_x',
+    status: 'confirmed' as const,
+    verdict: 'v',
+    confidence: 0.9,
+    evidence: [],
+    roster: { label: '关联账号', idKind: 'userId', complete: false, basis: '按设备指纹', items: [{ id: 'u_a' }], ...over },
+  });
+  check(
+    '名单的 label / idKind / basis 只写空格时，整次 close_step 在工具边界就被退回',
+    (['label', 'idKind', 'basis'] as const).every((k) => !CLOSE.safeParse(withRoster({ [k]: '   ' })).success),
+    (['label', 'idKind', 'basis'] as const)
+      .map((k) => `${k}=${CLOSE.safeParse(withRoster({ [k]: '   ' })).success ? '放行' : '退回'}`)
+      .join(' · ') + '（`.min(1)` 放行 "   "，于是这个"必填"在最常见的绕过方式上恰好不生效）',
+  );
+  check(
+    '带空格的合法值照旧收，且存进去时已经 trim 过',
+    (() => {
+      const r = CLOSE.safeParse(withRoster({ basis: '  按设备指纹两跳  ' }));
+      return r.success && r.data.roster?.basis === '按设备指纹两跳';
+    })(),
+    '硬退回不能顺带把正常输入也挡掉；trim 掉之后下游拿到的就是能直接印的那个串',
+  );
+  check(
+    '空白的 verdict 在工具边界就退回：报告那几节印的都是它',
+    ['', '   '].every(
+      (v) => !CLOSE.safeParse({ stepId: 'st_x', status: 'confirmed' as const, verdict: v, confidence: 0.9, evidence: [] }).success,
+    ) &&
+      CLOSE.safeParse({ stepId: 'st_x', status: 'confirmed' as const, verdict: ' 成立 ', confidence: 0.9, evidence: [] })
+        .success,
+    '根因栏、影响面、遗留问题印的都是 verdict——空着的话那几节是视觉上的一片白，而纸上看不出是"没查出来"还是"忘了写"',
+  );
+  check(
+    '指标超过上限时在工具边界退回，不截断',
+    (() => {
+      const many = (n: number) =>
+        Array.from({ length: n }, (_, i) => ({ label: `m${i}`, value: '1', bound: 'exact' as const, basis: 'x' }));
+      const arg = (n: number) => ({
+        stepId: 'st_x',
+        status: 'confirmed' as const,
+        verdict: 'v',
+        confidence: 0.9,
+        evidence: [],
+        metrics: many(n),
+      });
+      return CLOSE.safeParse(arg(METRICS_MAX)).success && !CLOSE.safeParse(arg(METRICS_MAX + 1)).success;
+    })(),
+    `上限=${METRICS_MAX}（与名单相反：这张表是 agent 亲手写的、条数完全由它定，超了说明把明细当成了指标——没有"保住一部分"的意义。不拦的话 5 万条指标走的是正常路径，不需要修库）`,
+  );
+  check(
+    '指标的 label / value / basis 同样挡得住',
+    (['label', 'value', 'basis'] as const).every(
+      (k) =>
+        !CLOSE.safeParse({
+          stepId: 'st_x',
+          status: 'confirmed' as const,
+          verdict: 'v',
+          confidence: 0.9,
+          evidence: [],
+          metrics: [{ label: '受害者数', value: '2', bound: 'lower' as const, basis: '近 30 天', [k]: '  ' }],
+        }).success,
+    ),
+    '一个没有口径的数与一句「近 30 天内至少 N」是两个不同的事实，而读者只会拿前者去汇报',
+  );
+
+  // ── 读的这一头：语法合法但形状不对的那一列 ────────────────────────────
+  //
+  // 手工修库、半截写入、**或者将来改了字段之后重放老事件**都会造出这种值。
+  // 它解析得出来、`items` 也非空，于是一路放行到 `reportPlan` 对 undefined 调 `.trim()`
+  const cBad = makeRunner('case_badshape', '形状不对的产出物');
+  const sBad = (cBad as unknown as Probe).beginSession();
+  const badStep = await sBad.store.openStep({ direction: '随便查一下' });
+  sBad.recordToolStart({ callId: 'call_bad', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sBad.recordToolEnd({ callId: 'call_bad', output: '命中 1 条\nx\n(end)' });
+  await sBad.store.closeStep({
+    stepId: badStep.stepId,
+    status: 'confirmed',
+    verdict: '成立',
+    confidence: 0.9,
+    roster: { label: '关联账号', idKind: 'userId', complete: false, basis: '按设备指纹', items: [{ id: 'u_a' }] },
+    evidence: [{ callRef: '#1', anchor: '1', claim: 'x', actor: 'app' }],
+  });
+  const badImpact = await sBad.store.openStep({ direction: '量化影响面', kind: 'impact' });
+  await sBad.store.closeStep({
+    stepId: badImpact.stepId,
+    status: 'confirmed',
+    verdict: '波及 37 个租户',
+    confidence: 0.8,
+    metrics: [{ label: '受影响租户', value: '37', bound: 'exact', basis: '全量扫过' }],
+    evidence: [],
+  });
+  // 缺 label 的名单 / 元素形状不对的指标：两者都是**合法 JSON**
+  db.prepare(`UPDATE steps SET roster='{"items":[{"id":"u1"}]}' WHERE id=?`).run(badStep.stepId);
+  db.prepare(`UPDATE steps SET metrics='[{}]' WHERE id=?`).run(badImpact.stepId);
+  const badSnap = (() => {
+    try {
+      return { snap: cBad.snapshot(), threw: null as string | null };
+    } catch (e) {
+      return { snap: null, threw: (e as Error).message };
+    }
+  })();
+  check(
+    '形状不对的那一列按没有处理，快照照常出得来',
+    badSnap.snap?.report.roster === null && badSnap.snap?.report.metrics.length === 0,
+    `抛=${badSnap.threw} · roster=${JSON.stringify(badSnap.snap?.report.roster)} · metrics=${JSON.stringify(badSnap.snap?.report.metrics)}（语法合法不等于形状合法：只 catch SyntaxError 的话这一行一路放行到报告层）`,
+  );
+  check(
+    '报告与 Markdown 在这种库上都出得来，不是白屏',
+    (() => {
+      try {
+        const input = reportInput(cBad.snapshot());
+        return !!input && reportMarkdown(input, { generatedAt: 0 }).includes('# ');
+      } catch {
+        return false;
+      }
+    })(),
+    '报告屏、Markdown 与长图共用 reportPlan，那儿一抛就是三个出口一起死——而库里那一行看着好好的',
+  );
+  cBad.close();
+
+  // 读侧的上限：**写入侧不是唯一入口**——`seed-cases` 与任何直接发 `step.closed` 的
+  // 路径都不经过 `normalizeRoster`，只在那儿拦的话，库里一份无界的名单照旧一路进快照、
+  // 进报告、把长图导出撑断（`paginate` 让超预算的单块自成一页）
+  const cHuge = makeRunner('case_huge', '库里塞了一份无界名单');
+  const sHuge = (cHuge as unknown as Probe).beginSession();
+  const hugeStep = await sHuge.store.openStep({ direction: '随便查一下' });
+  sHuge.recordToolStart({ callId: 'call_huge', toolName: 'mcp__datasource__query_logs', input: { q: 'x' } });
+  sHuge.recordToolEnd({ callId: 'call_huge', output: '命中 1 条\nx\n(end)' });
+  await sHuge.store.closeStep({
+    stepId: hugeStep.stepId,
+    status: 'confirmed',
+    verdict: '成立',
+    confidence: 0.9,
+    roster: { label: '受影响订单', idKind: 'orderId', complete: false, basis: '按 cart_key', items: [{ id: 'o_0' }] },
+    evidence: [{ callRef: '#1', anchor: '1', claim: 'x', actor: 'app' }],
+  });
+  // 绕开写入侧的归一，直接把一份 5000 条的名单塞进库（形状完全合法）
+  db.prepare(`UPDATE steps SET roster=? WHERE id=?`).run(
+    JSON.stringify({
+      label: '受影响订单',
+      idKind: 'orderId',
+      complete: true,
+      basis: '按 cart_key',
+      items: Array.from({ length: 5000 }, (_, i) => ({ id: `o_${i}` })),
+    }),
+    hugeStep.stepId,
+  );
+  const huge = cHuge.snapshot().report.roster?.roster;
+  check(
+    '读侧按同一条规则截到上限，并强制成下界',
+    huge?.items.length === ROSTER_MAX && huge.truncated === 5000 - ROSTER_MAX && huge.complete === false,
+    `条数=${huge?.items.length} · truncated=${huge?.truncated} · complete=${huge?.complete}（只在写入侧拦的话，seed 与重放这两条路上的名单是无界的——快照、报告与长图全跟着走）`,
+  );
+  // 已经被截过一次、又超上限的那一份：`truncated` 要**累加**。
+  // 这个状态只有手工修库造得出来（写入侧截完就只剩 ROSTER_MAX 条了），而读侧这一整套
+  // 校验存在的理由正是那类数据——不造一个的话，累加那半个分支没有任何检查走得到
+  db.prepare(`UPDATE steps SET roster=? WHERE id=?`).run(
+    JSON.stringify({
+      label: '受影响订单',
+      idKind: 'orderId',
+      complete: false,
+      basis: '按 cart_key',
+      truncated: 100,
+      items: Array.from({ length: 700 }, (_, i) => ({ id: `o_${i}` })),
+    }),
+    hugeStep.stepId,
+  );
+  const twice = cHuge.snapshot().report.roster?.roster;
+  check(
+    '截第二次时把先前截掉的条数累加上，不是从头算',
+    twice?.truncated === 100 + (700 - ROSTER_MAX),
+    `truncated=${twice?.truncated}（期望 ${100 + (700 - ROSTER_MAX)}）——覆盖掉的话，纸上那句「已截掉 N 条」会比真实少报一截，而它正是读者判断该不该回头重来的依据`,
+  );
+
+  // 截过的名单不可能是全集——**这条不变量要在每条路径上都成立**，不只是"这次真截了"那条
+  db.prepare(`UPDATE steps SET roster=? WHERE id=?`).run(
+    JSON.stringify({
+      label: '受影响订单',
+      idKind: 'orderId',
+      complete: true,
+      basis: '按 cart_key',
+      truncated: 10,
+      items: Array.from({ length: 300 }, (_, i) => ({ id: `o_${i}` })),
+    }),
+    hugeStep.stepId,
+  );
+  const claimsAll = cHuge.snapshot().report.roster?.roster;
+  check(
+    '库里一份没超上限、却自称全集又带着 truncated 的名单，读出来是下界',
+    claimsAll?.complete === false && claimsAll.truncated === 10 && claimsAll.items.length === 300,
+    `complete=${claimsAll?.complete} · truncated=${claimsAll?.truncated} · 条数=${claimsAll?.items.length}（原样放行的话，纸上同时印着「全集」与「已截掉 10 条」——给动手处置的人两个互相矛盾的完整性口径，而两句都出自这一份数据）`,
+  );
+  check(
+    'truncated 为 0 时不留这个键，纸上不会多出一句「已截掉 0 条」',
+    (() => {
+      db.prepare(`UPDATE steps SET roster=? WHERE id=?`).run(
+        JSON.stringify({
+          label: '受影响订单',
+          idKind: 'orderId',
+          complete: true,
+          basis: '按 cart_key',
+          truncated: 0,
+          items: [{ id: 'o_1' }],
+        }),
+        hugeStep.stepId,
+      );
+      const r = cHuge.snapshot().report.roster?.roster;
+      return !!r && r.truncated === undefined && r.complete === true;
+    })(),
+    '0 是"没截过"，不该顺带把 complete 也翻成 false——那样一份真的全集会被说成下界',
+  );
+  check(
+    '负数或小数的 truncated 是结构上不可能的值，整列按坏的降级',
+    (() => {
+      const bad = (t: number) => {
+        db.prepare(`UPDATE steps SET roster=? WHERE id=?`).run(
+          JSON.stringify({ label: 'x', idKind: 'y', complete: false, basis: 'z', truncated: t, items: [{ id: 'o_1' }] }),
+          hugeStep.stepId,
+        );
+        return cHuge.snapshot().report.roster;
+      };
+      return bad(-1) === null && bad(1.5) === null;
+    })(),
+    '这两种值没有任何写入路径造得出来，出现就说明这一行不可信——而"截掉了 -1 条"印在纸上比少一节糟得多',
+  );
+
+  // 读侧的指标上限：同样绕开工具边界直接塞库
+  const hugeImpact = await sHuge.store.openStep({ direction: '量化影响面', kind: 'impact' });
+  await sHuge.store.closeStep({
+    stepId: hugeImpact.stepId,
+    status: 'confirmed',
+    verdict: '波及很多',
+    confidence: 0.8,
+    metrics: [{ label: '受影响租户', value: '37', bound: 'exact', basis: '全量扫过' }],
+    evidence: [],
+  });
+  db.prepare(`UPDATE steps SET metrics=? WHERE id=?`).run(
+    JSON.stringify(
+      Array.from({ length: METRICS_MAX + 1 }, (_, i) => ({
+        label: `m${i}`,
+        value: '1',
+        bound: 'exact',
+        basis: 'x',
+      })),
+    ),
+    hugeImpact.stepId,
+  );
+  check(
+    '库里那份超上限的指标整列不要，不是照单全收',
+    cHuge.snapshot().report.metrics.length === 0,
+    `条数=${cHuge.snapshot().report.metrics.length}（读侧不拦的话，工具边界那道 .max() 只挡得住 agent，挡不住 seed 与重放——而报告那一节照样是不可拆分的一整块）`,
+  );
+  cHuge.close();
+
+  db.prepare(`UPDATE steps SET roster='{' WHERE id=?`).run(redoRoster.stepId);
+  // 🔴 **必须自己接住异常。** 让它往上抛的话整个脚本当场死掉，打出的是 0 PASS / 0 FAIL——
+  // 与"ABI 没切、脚本在 import 阶段就崩了"是同一个签名，而那两件事的下一步动作完全不同
+  const afterBad = await sDeliv.store
+    .closeStep({
+      stepId: redoRoster.stepId,
+      status: 'confirmed',
+      verdict: '第三台设备带出第 4 个账号（补一句）',
+      confidence: 0.85,
+      evidence: [],
+    })
+    .catch((e: Error) => ({ warnings: null, threw: e.message }));
+  check(
+    '库里那一列坏掉时 close_step 照常走完，不抛异常',
+    Array.isArray(afterBad.warnings),
+    `结果=${JSON.stringify(afterBad)}（写入侧压根不读这一列——一度为一个从没被读过的 final.roster 解析它一次，于是 agent 在同一步上补一次证据就撞 SyntaxError，拿不到 warning、也补不进结论）`,
+  );
+
+  // 重放：这两列都是投影，`events` 才是真相。
+  // **逐字比对重放前后，不写死期望值**：写死的话，这一段前面每加一步都要回来改它一次，
+  // 而改的人多半会顺手把期望值抄成新的现状——那时它就不再验"重放一致"，只是在复述结果
+  const before = JSON.stringify(cDeliv.snapshot().report);
+  rebuildProjections(db, { blobDir: blobs });
+  const rebuilt = cDeliv.snapshot().report;
+  check(
+    '重放后名单与指标一字不差地重建出来',
+    JSON.stringify(rebuilt) === before && !!rebuilt.roster && rebuilt.metrics.length > 0,
+    `名单 ${rebuilt.roster?.roster.items.length} 条（截掉 ${rebuilt.roster?.roster.truncated ?? 0}）· 指标 ${rebuilt.metrics.length} 条 · 与重放前一致=${JSON.stringify(rebuilt) === before}（对不上就说明有算法跑在投影侧，而它哪天一改，老调查的报告就跟着变）`,
+  );
+  cDeliv.close();
 
   // 没有已证实的根因就是未决型。这不是猜：没查出来就是没查出来，报告本就不该有根因栏
   const cOpen = makeRunner('case_shape_open', '什么都没查出来');

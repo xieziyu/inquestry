@@ -30,7 +30,16 @@ import {
 // 夹具与 spike:markdown 共用一份（`fixtures/report-case.ts`）：章节的取舍与它的渲染是
 // 同一条链路的前后两段，各自造一份的话，一边补了字段另一边没补，那边的检查就变成空的
 import { reportMarkdown } from '../src/shared/markdown.js';
-import { base, FIX_TEXT, incident, report, step, steps } from './fixtures/report-case.js';
+import { base, FIX_TEXT, incident, METRICS, report, ROSTER, step, steps } from './fixtures/report-case.js';
+
+/** 形态 → 它排最前的那一块。与 `report.ts` 的 `MAIN_BLOCKS` 说的是同一件事，验的正是它。 */
+const MAIN = {
+  sequence: 'timeline',
+  state: 'contrast',
+  chain: 'chain',
+  distribution: 'split',
+  open: 'matrix',
+} as const;
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -64,14 +73,14 @@ check(
 
 check(
   '形态挑的那一块紧跟根因栏排最前',
-  (() => {
-    const want = { sequence: 'timeline', state: 'contrast', chain: 'chain', distribution: 'split', open: 'matrix' } as const;
-    return VERDICT_SHAPES.every((s) => {
-      const l = ids({ shape: s });
-      // 未决型没有根因栏，主体就是第一块；其余四种排在它后面
-      return l[s === 'open' ? 0 : 1] === want[s];
-    });
-  })(),
+  VERDICT_SHAPES.every((s) => {
+    // **按没有名单的那一份验**：绝大多数调查是这种，而名单在场时它按设计插在这两者中间
+    // （见上面那条）。拿带名单的夹具验的话，这一条问的就成了"名单排哪儿"，
+    // 而形态与主体之间那个真正的不变量反倒没人验了
+    const l = ids({ shape: s, report: { ...report, roster: null } });
+    // 未决型没有根因栏，主体就是第一块；其余四种排在它后面
+    return l[s === 'open' ? 0 : 1] === MAIN[s];
+  }),
   '形态现在只决定顺序（D25）：排错了序，读者得先读完两块不相干的才看到这次故障的解释',
 );
 
@@ -93,13 +102,70 @@ check(
   '它的门槛数据里没有——证据的 actor 分布反映的是 agent 查了哪儿，不是问题压在哪儿。夹具切得出两组，所以"按有就装"这个错法在这儿真会算错',
 );
 
+// ── 产出物：与形态正交的那两节（overview.md 的「产出物」）────────────────
+
+check(
+  '名单排在根因之后、形态那一块之前，五种形态都一样',
+  VERDICT_SHAPES.every((shape) => {
+    const l = ids({ shape });
+    // 未决型没有根因栏，名单就是第一块；其余四种紧跟在根因后面，再往后才是形态的主体
+    const at = shape === 'open' ? 0 : 1;
+    return l[at] === 'roster' && l[at + 1] === MAIN[shape];
+  }),
+  '名单不是形态体系的一员：形态回答"怎么推理的"，名单回答"答案是什么"。排到形态主体后面的话，问「是哪些」的那类调查要先读完两块解释才看到答案',
+);
+
+check(
+  '没有名单时这一节整个不出现，也不留一句"这次没有名单"',
+  !ids({ report: { ...report, roster: null } }).includes('roster'),
+  '绝大多数调查压根没有名单——缺席写出来的规矩只对主体块成立（那是形态承诺过的），对它是纯噪声',
+);
+
+check(
+  '名单带着它出自哪一步，且那一步不是根因',
+  (() => {
+    const b = bodyOf({}, 'roster');
+    return b?.kind === 'roster' && b.stepId === 'st1' && report.rootCause?.stepId === 'st4';
+  })(),
+  '🔴 选择器是 `queries.effectiveRoster`，与根因无关。把它当成"根因那一步的附属"去取的话，出处那一格会印成另一步的编号，而报告本身看着一切正常',
+);
+
+check(
+  '指标住在影响面那一节里，不单开一节',
+  (() => {
+    const l = ids({});
+    const b = bodyOf({}, 'impact');
+    return !l.includes('metrics') && b?.kind === 'impact' && b.metrics.length === METRICS.length;
+  })(),
+  '几个数与解释它们的那段话必须同屏：拆成两节的话，读者会先看到几个数、再看到一段可能是上一次量的话',
+);
+
+check(
+  '影响面那段话空着时，指标照旧印出来',
+  (() => {
+    const b = bodyOf({ report: { ...report, impact: null } }, 'impact');
+    return b?.kind === 'impact' && b.metrics.length === METRICS.length;
+  })(),
+  '两者同出一步但各自可缺——按"有话才印数"写的话，一次只填了 metrics 的影响面会整节空着',
+);
+
+check(
+  '空白的影响面归一成 null，不把 "" 交给渲染器',
+  (() => {
+    const b = bodyOf({ report: { ...report, impact: '   ' } }, 'impact');
+    return b?.kind === 'impact' && b.text === null;
+  })(),
+  '`close_step` 不要求 verdict 非空，所以 "" 是到得了这儿的；两个渲染目标各判一次"空不空"的话，同一份数据会在纸上写着「无。」而 Markdown 里没有这句',
+);
+
 // ── 门槛：主体块缺席要写出来，非主体块缺席就隐藏 ──────────────────────────
 
 check(
   '主体块装不出来时留一句说明，且仍在最前',
   (() => {
     // 声明了状态型，而根因那一步没给应然/实然——这一对补不回来，因为那一步已经收口了
-    const over = { shape: 'state' as const, report: { ...report, expected: null, actual: null } };
+    // 同上，按没有名单的那一份验位置
+    const over = { shape: 'state' as const, report: { ...report, expected: null, actual: null, roster: null } };
     const l = ids(over);
     const b = bodyOf(over, 'contrast');
     return l[1] === 'contrast' && b?.kind === 'absent' && b.why.length > 0;
@@ -287,8 +353,9 @@ check(
 check(
   '空的一栏照旧装，只是写"无"',
   (() => {
-    const b = bodyOf({ report: { ...report, impact: null } }, 'impact');
-    return b?.kind === 'prose' && b.text === null;
+    // 影响面那一节现在装的是「一段话 + 几个数」，两者都空才是真的空
+    const b = bodyOf({ report: { ...report, impact: null, metrics: [] } }, 'impact');
+    return b?.kind === 'impact' && b.text === null && b.metrics.length === 0;
   })(),
   '整节消失读起来像"没这回事"；写「无」才是"查过，没有"',
 );

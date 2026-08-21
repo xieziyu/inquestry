@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS steps (
   shape              TEXT CHECK (shape IN ('sequence','state','chain','distribution','open')),
   verdict_text       TEXT,
   verdict_confidence REAL CHECK (verdict_confidence BETWEEN 0 AND 1),
+  -- 产出物（overview.md 的「产出物」）：一次调查交出来的东西，与形态正交。两列都是 JSON：
+  --   roster  = 一组同类实体 + 口径（\`shared/ipc.ts\` 的 \`Roster\`）
+  --   metrics = 一组带口径的数（同上的 \`Metric[]\`）
+  --
+  -- **落 JSON 列而不是各开一张表**：它们不被单独检索、也没有独立生命周期——
+  -- 整块跟着声明它的那一步生死，重新 close 时与 expected/actual/shape 一样走 COALESCE
+  -- 的"缺省=不动"。拆成行的话，那套 patch 语义就得在这一带另写一遍（先删后插还是合并？
+  -- 少填一条算删掉还是没提？），而这两块从来只整块读、整块换
+  roster             TEXT,
+  metrics            TEXT,
   -- 报告里唯一由 agent 生成的那一块：未决型的「下一步怎么查」（overview §6.1）。**挂 step 不挂 case**：
   -- 建议是基于这一步的判断给的，判断被推翻时它得跟着失效，否则报告里会留下一条
   -- 没有出处的建议。只有 leftover 步上的进报告，见 queries.ts 的 remediation 选择器

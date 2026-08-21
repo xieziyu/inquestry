@@ -24,7 +24,7 @@
 import { VERDICT_SHAPES, type IncidentEntry } from '../src/shared/ipc.js';
 import { reportMarkdown } from '../src/shared/markdown.js';
 import { reportPlan, type ReportInput } from '../src/shared/report.js';
-import { FIX_TEXT, ROOT_TEXT, base, ev, incident, report, step, steps } from './fixtures/report-case.js';
+import { FIX_TEXT, ROOT_TEXT, ROSTER, base, ev, incident, report, step, steps } from './fixtures/report-case.js';
 
 const checks: [string, boolean, string][] = [];
 const check = (name: string, ok: boolean, detail: string) => checks.push([name, ok, detail]);
@@ -61,9 +61,17 @@ const detailsOf = (text: string) => /<details>[\s\S]*?<\/details>/.exec(text)?.[
  */
 const sectionOf = (text: string, title: string) =>
   text.split(`## ${title}`)[1]?.split(/\n## |\n---/)[0] ?? '';
-/** 时间线数据行（表头与分隔行都不算）。**按位置取，不按格式取**——第一列的写法变过一次。 */
+/**
+ * 时间线数据行（表头与分隔行都不算）。**按位置取，不按格式取**——第一列的写法变过一次。
+ *
+ * 🔴 **先切到系统时间线那一节再找**。一度按全文找第一行表格数据，而报告里现在有好几张表
+ * （名单排在时间线之前），于是这一族检查全都在验名单那张表的转义——**它们照旧全绿**，
+ * 只是验的不再是自己那一条。这一带的空检查大多长这样：路径悄悄换了，而断言还成立。
+ */
 const dataRow = (out: string) =>
-  out.split('\n').find((l) => l.startsWith('| ') && !l.includes('时间 |') && !l.startsWith('| ---')) ?? '';
+  sectionOf(out, '系统时间线')
+    .split('\n')
+    .find((l) => l.startsWith('| ') && !l.includes('时间 |') && !l.startsWith('| ---')) ?? '';
 
 /** 时间线那一格的原始文本（第一列）。 */
 const whenCell = (out: string) => dataRow(out).split(' | ')[0]!.slice(2);
@@ -125,6 +133,124 @@ check(
       !md().includes('还没收尾');
   })(),
   '预览与正式产物长得一样、贴出去却还会变，是这份文档最容易骗人的地方',
+);
+
+check(
+  '名单进第一屏，但只报是什么、多少条、全不全',
+  (() => {
+    const quote = md().split('\n').filter((l) => l.startsWith('>')).join('\n');
+    return (
+      quote.includes(ROSTER.label) &&
+      quote.includes(`${ROSTER.items.length} 个 ${ROSTER.idKind}`) &&
+      quote.includes('下界，不是全集') &&
+      // 表格本身不在引用块里：一份长名单铺在这儿会把下面那两条限定挤出第一屏
+      !quote.includes(ROSTER.items[0]!.id)
+    );
+  })(),
+  '问「是哪些」的调查，答案就是这份名单——第一屏不提它等于把结论藏进正文（§7.1 那条对根因的要求对它同样成立）',
+);
+
+check(
+  '名单是全集时不印"下界"这句',
+  !md({ report: { ...report, roster: { stepId: 'st1', roster: { ...ROSTER, complete: true } } } })
+    .includes('下界，不是全集'),
+  '一律印的话这句就不再有区分度，而它正是决定人敢不敢照这份直接动手的那一句',
+);
+
+check(
+  '名单里的 id 一字不差：连续空白不折，竖线照旧转义',
+  (() => {
+    const body = sectionOf(md(), '名单');
+    // 夹具那条 id 是 `u_a  1|x`：两个空格必须原样留着（`cell()` 会折成一个），
+    // 竖线必须转义（不转就凭空多切一列，整张表往左错一格）
+    return body.includes('| u_a  1\\|x |') && bareBars(body.split('\n').find((l) => l.includes('u_a')) ?? '') === 3;
+  })(),
+  '🔴 它是读者要整列复制去封号 / 去订正数据的值，一个字符都不能改（同时间戳那一格的理由）。折了空白之后拿去查库就是查不到，而报告本身看着一切正常',
+);
+
+check(
+  '以 `-` 或 `1.` 开头的 id 不会被加上行首记号',
+  (() => {
+    const ids = [{ id: '-u_x' }, { id: '1.2.3' }];
+    const body = sectionOf(
+      md({ report: { ...report, roster: { stepId: 'st1', roster: { ...ROSTER, items: ids } } } }),
+      '名单',
+    );
+    return body.includes('| -u_x |') && body.includes('| 1.2.3 |');
+  })(),
+  '行首那几个记号只在行首才有意义，而 id 在单元格里。套 `blockGuard` 的话导出的名单里会多出一个反斜杠，复制走的就不是原来那个 id 了',
+);
+
+check(
+  '名单的备注列只在真有备注时才开',
+  (() => {
+    const withNote = sectionOf(md(), '名单');
+    const bare = sectionOf(
+      md({ report: { ...report, roster: { stepId: 'st1', roster: { ...ROSTER, items: [{ id: 'u_x' }] } } } }),
+      '名单',
+    );
+    return withNote.includes('| 备注 |') && !bare.includes('| 备注 |');
+  })(),
+  '整列空着的表格会让人以为是没填，而不是没有这回事',
+);
+
+check(
+  '指标印在影响面那一节里，界的记号跟着值走',
+  (() => {
+    const body = sectionOf(md(), '影响面');
+    return (
+      body.includes('≥ 37') && body.includes('≤ 3 / 1') &&
+      // 准数不加记号：一律加的话记号就不再有区分度
+      /\|\s4 小时\s\|/.test(body) &&
+      // 口径不许省：一个没有口径的"37"与"近 30 天内至少 37"是两个不同的事实
+      body.includes('更早的日志已过期')
+    );
+  })(),
+  '一个下界被当成准数拿去汇报，是这一节最贵的一种读错',
+);
+
+check(
+  '影响面只有指标、没有那段话时，不再多出一句「无。」',
+  (() => {
+    const only = md({ report: { ...report, impact: '  ' } });
+    const body = sectionOf(only, '影响面');
+    return !body.includes('无。') && body.includes('受影响租户');
+  })(),
+  '先写一句「无。」再列出几个数是自相矛盾的。这一条与 `ReportPaper` 那半必须逐字同规则——报告是这个工具唯一交出去的东西，两种导出对不上是最贵的一种错',
+);
+
+check(
+  '影响面两半都空时那句「无。」照旧要有',
+  sectionOf(md({ report: { ...report, impact: null, metrics: [] } }), '影响面').includes('无。'),
+  '整节消失读起来像"没这回事"；写「无」才是"查过，没有"',
+);
+
+check(
+  '口径空着的那条明写「口径没填」，不是破折号也不是留白',
+  (() => {
+    const body = sectionOf(md(), '影响面');
+    return body.includes('口径没填') && !body.includes('| —— |');
+  })(),
+  '留白与破折号读起来都像"这个数没有口径限制"，而实际是 agent 没写——两者的差别正是这个数能不能拿去汇报',
+);
+
+check(
+  '名单的口径空着时同样明写，不留一段白',
+  (() => {
+    const bare = { stepId: 'st1', roster: { ...ROSTER, basis: '  ' } };
+    return sectionOf(md({ report: { ...report, roster: bare } }), '名单').includes('口径没填');
+  })(),
+  '`z.string()` 拦不住一串空格：报告上会是一份写着「下界，不是全集」却没有一个字解释为什么不全的名单，恰好绕过这个字段存在的理由',
+);
+
+check(
+  '被工具截过的名单在纸上标出来，且与"agent 只捞到这么多"分得开',
+  (() => {
+    const cut = { stepId: 'st1', roster: { ...ROSTER, complete: false, truncated: 40 } };
+    const body = sectionOf(md({ report: { ...report, roster: cut } }), '名单');
+    return body.includes('已截掉 40 条') && body.includes('下界，不是全集');
+  })(),
+  '两者都落在下界那一档，而前者意味着这份报告漏掉了它本来查到的东西——只标下界的话，纸上分不出该不该回头重来',
 );
 
 check(

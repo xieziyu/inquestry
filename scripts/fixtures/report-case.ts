@@ -15,7 +15,7 @@
  * - 「下一步怎么查」**非空且带 markdown 元字符**（它恒为「无」时，那一节的检查全是空的）
  */
 
-import type { CallNode, IncidentEntry, Snapshot, StepNode } from '../../src/shared/ipc.js';
+import type { CallNode, IncidentEntry, Metric, Roster, Snapshot, StepNode } from '../../src/shared/ipc.js';
 import type { ReportInput } from '../../src/shared/report.js';
 
 let seq = 0;
@@ -102,6 +102,42 @@ export const ROOT_TEXT = '连接池在扩容时被复用了旧配置';
  */
 export const FIX_TEXT = '把 pool_size 从 *继承* 改成按实例算，并给 [扩容流程] 补一条校验';
 
+/**
+ * 名单（overview.md 的「产出物」）。每一项都是为了让某个错法算错：
+ *
+ * - **挂在 `st1` 上，而根因是 `st4`**：报告若把名单当成"根因那一步的附属"去取，
+ *   出处那一格会印成 `#4`，而正确答案是 `#1`（选择器是 `effectiveRoster`，与根因无关）
+ * - `complete: false`：全集那一档的文案在别处单独覆盖。**默认取"下界"这一档**，
+ *   因为漏掉这句限定才是有代价的那个方向
+ * - 只有第二条带 `note`：备注那一列是"有才开"的，两条都带或都不带都验不到这个分支
+ * - id 里带**连续空白与竖线**：它们走的是 `valueCell`（值）而不是 `cell`（散文）。
+ *   两者都转义 markdown 元字符，真正的差别是**折不折空白、加不加行首记号**——
+ *   用错的表现是导出的名单里 id 被悄悄改了字符，拿去查库查不到，而报告本身看着一切正常
+ */
+export const ROSTER: Roster = {
+  label: '关联账号',
+  idKind: 'userId',
+  complete: false,
+  basis: '按设备指纹做两跳聚合，换过手机的抓不到',
+  items: [
+    { id: 'u_a  1|x' },
+    { id: 'u_b2', note: '被举报本号' },
+  ],
+};
+
+/**
+ * 影响面里的指标。三条各盯一处：
+ *
+ * - `lower` 那条验界的记号真的印出来了（漏掉它，一个下界会被当成准数拿去汇报）
+ * - `exact` 那条验准数**不加**记号（一律加的话记号就不再有区分度）
+ * - 口径为空那条验空口径退回破折号，而不是留一格白
+ */
+export const METRICS: Metric[] = [
+  { label: '受影响租户', value: '37', bound: 'lower', basis: '近 30 天，更早的日志已过期' },
+  { label: '持续时间', value: '4 小时', bound: 'exact', basis: '从扩容到回滚' },
+  { label: '重试放大倍数', value: '3 / 1', bound: 'upper', basis: '' },
+];
+
 export const report: Snapshot['report'] = {
   rootCause: { stepId: 'st4', text: ROOT_TEXT, confidence: 0.4 },
   impact: '受影响的是 37 个租户',
@@ -110,6 +146,8 @@ export const report: Snapshot['report'] = {
   actual: '扩容后仍共用扩容前那一个',
   leftovers: [{ stepId: 'st6', direction: '重试为什么没兜住', text: '没查清', supersededBy: null }],
   refuted: [{ stepId: 'st2', direction: '是不是上游超时', text: '上游全程正常', supersededBy: 'st4' }],
+  roster: { stepId: 'st1', roster: ROSTER },
+  metrics: METRICS,
 };
 
 export const base = (over: Partial<ReportInput> = {}): ReportInput => ({

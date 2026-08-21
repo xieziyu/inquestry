@@ -13,7 +13,9 @@ import type {
   CaseMeta,
   ClosingStepKind,
   IncidentEntry,
+  Metric,
   ReportStepRef,
+  Roster,
   Snapshot,
   StepNode,
   VerdictShape,
@@ -72,6 +74,16 @@ export type SplitGroup = {
 
 export type ReportBody =
   | { kind: 'verdict'; text: string; confidence: number | null }
+  /**
+   * 名单（overview.md 的「产出物」）。**带上它出自哪一步**：这一节没有逐条脚注（名单是跨步聚合出来的
+   * 结论，不是某一次调用的引文），溯源因此只到步这一级，与别的节引用编号的方式一致。
+   */
+  | { kind: 'roster'; roster: Roster; stepId: string }
+  /**
+   * 影响面：一段话 + 几个带口径的数。**两者同属一节、同出一步**——
+   * 拆成两节的话，读者会先看到几个数，再看到一段可能是上一次量的话。
+   */
+  | { kind: 'impact'; text: string | null; metrics: Metric[] }
   | { kind: 'contrast'; expected: string | null; actual: string | null }
   | { kind: 'timeline'; rows: IncidentEntry[] }
   | { kind: 'chain'; links: ChainLink[]; weakestId: string | null }
@@ -146,6 +158,7 @@ const TITLES: Record<string, string> = {
   matrix: '排除矩阵',
   impact: '影响面',
   path: '排查路径',
+  roster: '名单',
   leftover: '遗留问题',
   fix: '下一步怎么查',
 };
@@ -204,12 +217,42 @@ export function reportPlan(input: ReportInput): ReportPlan {
     );
   }
 
+  // 名单排在根因之后、形态那一块之前（overview.md 的「产出物」）。
+  //
+  // **它不是形态体系的一员**，所以不进 `MAIN_BLOCKS`：形态回答"这次排查怎么推理的"，
+  // 名单回答"问的那个问题，答案是什么"。有一整类调查（捞一批小号 / 找哪次变更引入的）
+  // 的答案就是这份名单，根因只是它的解释——排在根因之后是因为一份没有解释的名单
+  // 没法判断可信度，而排在形态主体之前是因为读者要的就是它。
+  //
+  // 门槛与"有则展示、无则隐藏"的那几节一样：投影给了就装。缺席不写理由——
+  // 绝大多数调查压根没有名单，每份报告都顶一句"这次没有名单"是纯噪声
+  if (report.roster) {
+    sections.push(
+      sec('roster', {
+        kind: 'roster',
+        // 三个展示字段在这儿归一一次。写入侧（`normalizeRoster`）已经 trim 过，
+        // **但它不是唯一入口**：重放读的是库里那份 JSON，而 `seed-cases` 与任何直接发
+        // `step.closed` 的路径压根不经过它。留一串空格进来的表现是纸上一段空白，
+        // 而"空着"与"没填"在屏幕上长得一样——两个渲染目标各判一次的话迟早分家
+        roster: trimRoster(report.roster.roster),
+        stepId: report.roster.stepId,
+      }),
+    );
+  }
+
   const body = mainBody(input);
   sections.push(...body);
   // 通用三块在所有形态里都出现（overview.md §6.1.1）。未决型把遗留问题提成了主体，
   // 于是它在这儿会撞上——**同一节不装两遍**，位置以先出现的那次为准
   sections.push(
-    sec('impact', { kind: 'prose', text: report.impact }),
+    // 空白的影响面归一成 null，**别让 `""` 走到渲染器**：两个渲染目标对"这一栏空不空"
+    // 各判一次，`""` 与 `null` 在它们眼里本该一样，而差别恰好出在这儿——同一份数据
+    // 会在纸上写着「无。」、在 Markdown 里没有这句。
+    //
+    // `close_step` 现在要求 verdict 非空，但**这一手不能因此撤掉**：`events` 里躺着的
+    // 是按老契约写下的事件，而重放它们用的是新代码（`rebuildProjections`）；
+    // seed 与任何直接发 `step.closed` 的路径同样不经过那道 schema
+    sec('impact', { kind: 'impact', text: report.impact?.trim() || null, metrics: report.metrics }),
     sec('path', { kind: 'path', rows: input.steps }),
     sec('leftover', { kind: 'notes', rows: report.leftovers }),
   );
@@ -233,6 +276,11 @@ export function reportPlan(input: ReportInput): ReportPlan {
     abortedAt: input.case.status === 'aborted' ? input.steps.length : null,
     sections: dedupe(sections),
   };
+}
+
+/** 名单上那几个展示字段的归一，理由见调用处。条目本身不动——id 一个字符都不能改。 */
+function trimRoster(r: Roster): Roster {
+  return { ...r, label: r.label.trim(), idKind: r.idKind.trim(), basis: r.basis.trim() };
 }
 
 /**

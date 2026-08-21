@@ -3,7 +3,10 @@
  * 报告的每一栏都对应下面某一条 SQL——agent 只写未决型的「下一步怎么查」，其余是投影（D17）。
  */
 
+import { z } from 'zod';
+
 import type { Db } from './database.js';
+import { capRoster, METRIC_BOUNDS, METRICS_MAX, type Metric, type Roster } from '../../shared/ipc.js';
 
 export type InvestigationRow = {
   ordinal: number;
@@ -180,6 +183,10 @@ export type ReportSections = {
       }
     | undefined;
   impact: { verdict_text: string } | undefined;
+  /** 影响面那一节里的指标，已解析。影响面步没填、或它还开着时是空数组。 */
+  metrics: Metric[];
+  /** 名单那一节，见 `effectiveRoster`。 */
+  roster: { step_id: string; roster: Roster } | undefined;
   /** 「下一步怎么查」那一栏，见 `effectiveRemediation`。 */
   remediation: { step_id: string; text: string } | undefined;
   leftovers: { step_id: string; direction: string | null; verdict_text: string }[];
@@ -195,21 +202,36 @@ const STEP_BASE = `FROM steps s JOIN sessions se ON se.id = s.session_id WHERE s
 const CHRONO = `se.started_at, se.rowid, s.ordinal`;
 const CHRONO_DESC = `se.started_at DESC, se.rowid DESC, s.ordinal DESC`;
 
-export type EffectiveStep = { step_id: string; status: string; verdict_text: string | null };
+export type EffectiveStep = {
+  step_id: string;
+  status: string;
+  verdict_text: string | null;
+  /** 影响面那一节的指标，JSON 串（`shared/ipc.ts` 的 `Metric[]`）。别的 kind 上恒为 null。 */
+  metrics: string | null;
+};
 
 /**
- * 某一 kind **当前生效**的那一步：排除已被推翻的，取时间上最新的一条。
+ * 某一 kind **当前生效**的那一步：失去出处的一律排掉，取时间上最新的一条。
  *
  * 定稿校验与报告章节必须共用这一条规则，否则两边各算各的：
  * 「历史上出现过一个收好的影响面」会放行定稿，而报告取的是最新那条——
  * 那可能是 agent 正在重做、还没 close 的空壳，于是影响面栏是空的。
- * 同一族的错还有一种：最新那条已被推翻，报告照样把它印出来。
+ *
+ * 🔴 **`refuted` 与 `superseded` 一起排掉**，与 `effectiveRemediation` 同一条：
+ * 前者的假设自己被否掉了，后者被后来的 step 顶掉了，两种情况下那一步都不再是
+ * 「当前生效的影响面 / 遗留问题」。一度只排 `superseded`，于是一个被否掉的影响面步
+ * 既放行定稿、又把结论连同 `metrics` 一起印进报告——**而 `metrics` 走 COALESCE，
+ * 重新 close 成 `refuted` 时它照旧留在库里**，于是报告上会是「一段被推翻的话 +
+ * 一组仍按旧口径算的数」，两者各自看都自洽。
+ *
+ * 代价是影响面步被 close 成 `refuted` 时定稿闸会重新报缺，agent 未必知道为什么——
+ * 所以写入侧当场说一句（`closingStepWarnings`）。
  */
 export function effectiveStep(db: Db, caseId: string, kind: string): EffectiveStep | undefined {
   return db
     .prepare(
-      `SELECT s.id AS step_id, s.status, s.verdict_text ${STEP_BASE}
-         AND s.kind=? AND s.status<>'superseded'
+      `SELECT s.id AS step_id, s.status, s.verdict_text, s.metrics ${STEP_BASE}
+         AND s.kind=? AND s.status NOT IN ('superseded','refuted')
        ORDER BY ${CHRONO_DESC} LIMIT 1`,
     )
     .get(caseId, kind) as EffectiveStep | undefined;
@@ -243,6 +265,113 @@ export function timestampedEvidenceCount(db: Db, caseId: string): number {
  * 排除 `superseded` 与 `refuted`：前者的判断被后来的 step 顶掉了，后者的假设自己被否掉了，
  * 两种情况下那条建议都失去了出处。留着它报告里会躺一条基于作废判断的建议，且毫无报错。
  */
+/**
+ * 名单那一节（overview.md 的「产出物」）：**最新那条仍然成立的声明**。
+ *
+ * 只认 `confirmed`——名单是这次调查的答案，而被推翻、没查清、还开着的那些结论交不出答案。
+ * 这一条同时把 `superseded` 与 `refuted` 排掉了，理由与 `effectiveRemediation` 相同：
+ * 那条声明失去了出处，留着报告里会躺一份基于作废判断的名单，且毫无报错。
+ *
+ * **不认 kind。** 与「下一步怎么查」不同，名单没有一个会顶掉它的同类字段：
+ * 「受影响的订单」落在影响面那一步上、「关联的小号」落在普通排查步上，都同样正当。
+ *
+ * 坏 JSON 当作没有：库里这一列由写入侧 `JSON.stringify` 落，读不出来说明有人手改过库，
+ * 那时静静少一节远好过让整个快照抛错（报告屏、导出、定稿闸全走这一条）。
+ */
+export function effectiveRoster(
+  db: Db,
+  caseId: string,
+): { step_id: string; roster: Roster } | undefined {
+  const row = db
+    .prepare(
+      `SELECT s.id AS step_id, s.roster AS json ${STEP_BASE}
+         AND s.roster IS NOT NULL AND s.status='confirmed'
+       ORDER BY ${CHRONO_DESC} LIMIT 1`,
+    )
+    .get(caseId) as { step_id: string; json: string } | undefined;
+  if (!row) return undefined;
+  const roster = readColumn(row.json, STORED_ROSTER, `${row.step_id}.roster`);
+  // 🔴 **读侧也要拦上限，且用的是写入侧那一份规则**（`capRoster`）：
+  // `seed-cases` 与任何直接发 `step.closed` 的路径压根不经过 `normalizeRoster`，
+  // 只在写入侧拦的话，库里那份无界的名单照旧一路进快照、进报告、把长图导出撑断
+  return roster ? { step_id: row.step_id, roster: capRoster(roster) } : undefined;
+}
+
+/**
+ * 产出物那两列**在库里的**形状。与 `tools/schemas.ts` 那两份**不是同一个契约**，
+ * 别合并：那边是 agent 的入参（带 `.describe`、带 trim、没有 `truncated`），
+ * 这边是投影的形状（`truncated` 由 harness 加，条目已经归一过）。
+ *
+ * 🔴 **语法合法不等于形状合法。** 上游一度只 `JSON.parse` 加一个 `as Roster`：
+ * 一份 `{"items":[{"id":"u1"}]}`（手工修库、半截写入、或**将来改了字段之后重放老事件**）
+ * 解析得出来、`items` 也非空，于是一路放行到 `reportPlan` 对 `undefined` 调 `.trim()`——
+ * **报告屏、Markdown 与长图三个出口一起抛**，而库里那一行看着好好的。
+ * 这与 `checkEventShapes` 是同一条纪律，只是换到了读的这一头。
+ */
+const STORED_ROSTER = z.object({
+  label: z.string(),
+  idKind: z.string(),
+  complete: z.boolean(),
+  basis: z.string(),
+  // 空名单按没有算，与写入侧那一条一致
+  items: z.array(z.object({ id: z.string(), note: z.string().optional() })).min(1),
+  // 负数与小数是结构上就不可能的值，按坏列降级；`0` 放行，`capRoster` 会把它当没截过收掉。
+  // 「截过就不可能是全集」那条不在这儿拦——拦了的话，一份 300 条的好名单会因为
+  // 一个写错的 complete 整份消失，而 `capRoster` 把它改对的代价是零
+  truncated: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * 指标**超上限就整列不要**，不像名单那样截断——理由见 `shared/ipc.ts` 的 `METRICS_MAX`：
+ * 它是 agent 亲手写的一张表，条数完全由它定，超了说明写法就不对，没有"保住一部分"的意义。
+ * 库里出现这种值只可能来自手工修库或不走归一的写入，那时按读不出来处理最省事，
+ * 而 `readColumn` 会把哪一步的哪一列喊出来。
+ */
+const STORED_METRICS = z
+  .array(
+    z.object({
+      label: z.string(),
+      value: z.string(),
+      bound: z.enum(METRIC_BOUNDS),
+      basis: z.string(),
+    }),
+  )
+  .max(METRICS_MAX);
+
+/**
+ * 已经喊过的那几列，**按 step 与列名记**。
+ *
+ * `reportSections` 是每次快照都跑的（60ms 合流一次），不记的话一行坏数据会把终端刷满，
+ * 而真正要人看见的是"哪一步的哪一列坏了"这一句——刷屏之后它反而没人看得见。
+ */
+const complained = new Set<string>();
+
+/**
+ * 读一列存着 JSON 的产出物：**语法或形状不对就当作没有**，并且喊一声（每列只喊一次）。
+ *
+ * 不抛：整个快照、定稿闸与两种导出都挂在这几条查询上，为一行坏数据让 app 打不开，
+ * 比少一节严重得多。但也不能静静吞掉——`where` 里带上 step 与列名，好让人回库里去看那一行。
+ */
+function readColumn<T>(json: string | null, schema: z.ZodType<T>, where: string): T | null {
+  if (!json) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return complain(where, '不是合法 JSON');
+  }
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : complain(where, parsed.error.issues[0]?.message ?? '形状不对');
+}
+
+function complain(where: string, why: string): null {
+  if (!complained.has(where)) {
+    complained.add(where);
+    console.warn(`[db] ${where} 读不出来（${why}），这一节按没有处理`);
+  }
+  return null;
+}
+
 export function effectiveRemediation(db: Db, caseId: string): { step_id: string; text: string } | undefined {
   const row = db
     .prepare(
@@ -273,6 +402,13 @@ export function reportSections(db: Db, caseId: string): ReportSections {
       caseId,
     )[0],
     impact: impact && impact.status !== 'open' ? { verdict_text: impact.verdict_text ?? '' } : undefined,
+    // 指标与它上面那段散文**同出一步**：各取各的选择器就会出现「数是新那次量的、
+    // 话还是上一次写的」，而两边看着都自洽。还开着的那一步同样不取，理由见 `impact`
+    metrics:
+      impact && impact.status !== 'open'
+        ? (readColumn(impact.metrics, STORED_METRICS, `${impact.step_id}.metrics`) ?? [])
+        : [],
+    roster: effectiveRoster(db, caseId),
     remediation: effectiveRemediation(db, caseId),
     leftovers: q(
       `SELECT s.id AS step_id, s.direction, s.verdict_text ${base}

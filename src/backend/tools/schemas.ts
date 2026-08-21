@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { DECLARABLE_SHAPES } from '../../shared/ipc.js';
+import { DECLARABLE_SHAPES, METRIC_BOUNDS, METRICS_MAX, ROSTER_MAX } from '../../shared/ipc.js';
 
 /** 证据引用。`callRef` 用 step 内的调用序号而非 toolUseId —— 让 agent 抄 uuid 不可靠。 */
 export const evidenceItemShape = {
@@ -48,12 +48,106 @@ export const openStepShape = {
   parentStepId: z.string().optional().describe('若这一步是在某个已有 step 之下细分，填其 id。'),
 };
 
+/**
+ * 名单：一组同类实体 + 口径（overview.md 的「产出物」）。
+ *
+ * 🔴 **`complete` 与 `basis` 是这个类型存在的理由，不是修饰。** 一列 id 塞进 verdict 散文里
+ * 也能读，先丢的永远是「这是不是全集」——而那句话决定读者敢不敢直接拿它去封号 / 去订正数据。
+ * 所以两者都必填：留成可选的话，agent 不写没有任何东西会提醒它，事后也没人看得出来少了什么。
+ *
+ * 🔴 **展示字段一律 `.trim().min(1)`，不是 `.min(1)`。** 后者对 `"   "` 是放行的（长度是 3），
+ * 于是一个"必填"的约束在最常见的绕过方式上恰好不生效——**看着有、其实没有的检查比没有更糟**。
+ *
+ * 这几条是这个文件里少见的**硬退回**（其余多半只 warning）。分界在于：形态声明在哪一步、
+ * remediation 填在哪个 kind，这些是 harness 判不了意图的**语义**问题，只能提醒；
+ * 而一个必填串是不是空的没有判断余地，与 `confidence` 的 0..1 同类。
+ * 退回的代价也只是一次重发——证据按 step 内调用序号引用（`callRef`），原样再发一次照旧落得进去。
+ */
+export const rosterShape = {
+  label: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('这批东西是什么，读者看的那句话：「关联账号」「受影响订单」「引入问题的提交」。'),
+  idKind: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('id 的种类：userId / orderId / commit / apiKey。印在表头上，读者靠它知道这一列能拿去做什么。'),
+  complete: z
+    .boolean()
+    .describe(
+      '这份名单是不是**全集**。拿不准就填 false —— 报告会明写「这是下界，不是全集」。' +
+        '**一条也算名单**（「是哪次变更引入的」答案就是一个 commit），不必凑条数。',
+    ),
+  basis: z
+    .string()
+    .trim()
+    .min(1)
+    .describe(
+      '口径：这批是**怎么圈出来的**、边界在哪。`complete=false` 时它就是「为什么不全」。' +
+        '写「按 userdevices 里 users 数组做两跳设备聚合，换过手机的马甲抓不到」，' +
+        '别写「经过分析得出」这种说明不了边界的话。' +
+        '**留空或只写空格会被当场退回**——这一条不填，整次 close_step 不算数。',
+    ),
+  items: z
+    .array(
+      z.object({
+        id: z.string().describe('实体的 id，原样照抄，不要加引号或前缀。'),
+        note: z.string().optional().describe('这一条的补充，如「被举报本号」「桥接号」。没有就不填。'),
+      }),
+    )
+    .describe(
+      '名单本身。重复的会被去掉并回你一条提醒——手抄一长串 id 最容易在这里出错。' +
+        `**超过 ${ROSTER_MAX} 条会被截断**（多出的丢掉、按下界处理，报告上印出截了多少）：` +
+        '名单长到那个量级说明它该是一次数据导出，不是一份读给人看的报告——' +
+        '换个更窄的口径，或者把范围写进 basis 里只列代表性的那些。',
+    ),
+};
+
+/**
+ * 指标：一个带口径的数（overview.md 的「产出物」）。
+ *
+ * 🔴 **`bound` 是枚举而不是让你在 `value` 里写 `≥`**，理由同 `rosterShape` 的 `complete`：
+ * 「这个数只是下界」是影响面里最重要也最先被磨掉的一句话。
+ */
+export const metricShape = {
+  label: z.string().trim().min(1).describe('这个数是什么：「受害者数」「团伙时间跨度」「存量未封账号」。'),
+  value: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('值**连单位一起**：`13 / 16`、`375 天`、`2`。不要在这里写 ≥ 或「约」，那是 bound 的事。'),
+  bound: z
+    .enum(METRIC_BOUNDS)
+    .describe(
+      'exact = 准数；lower = 这只是下界（真实值只会更大）；upper = 上界。' +
+        '日志有保留期、样本只覆盖一段时间、查询做了截断——这几种一律是 lower，别填 exact。',
+    ),
+  basis: z
+    .string()
+    .trim()
+    .min(1)
+    .describe(
+      '口径：这个数**覆盖什么范围、怎么算出来的**。`bound` 非 exact 时它就是「为什么只是个界」。' +
+        '写「近 30 天，k8s-log 保留期只有这么长，更早的查不到」。' +
+        '**留空或只写空格会被当场退回**——这一条不填，整次 close_step 不算数。',
+    ),
+};
+
 export const closeStepShape = {
   stepId: z.string(),
   status: z
     .enum(['confirmed', 'refuted', 'inconclusive'])
     .describe('假设被证实 / 被推翻 / 没查清。被推翻同样是有价值的结果，不要为了好看写成 confirmed。'),
-  verdict: z.string().describe('结论，一到两句。'),
+  verdict: z
+    .string()
+    .trim()
+    .min(1)
+    .describe(
+      '结论，一到两句。**不能留空**——报告的根因栏、影响面、遗留问题印的都是它，' +
+        '空着的话那几节会是视觉上的一片白，而纸上看不出是"没查出来"还是"忘了写"。',
+    ),
   confidence: z.number().min(0).max(1),
   supersedes: z
     .array(z.string())
@@ -86,6 +180,29 @@ export const closeStepShape = {
         '**查出了根因就不要填**：修复方案由动手修的人评估，排查报告只交事实，别的步上填了也不进报告。' +
         '写得可执行：先加哪条观测 / 找谁拿什么权限，别写「建议加强监控」这种落不了地的话。',
     ),
+  roster: z
+    .object(rosterShape)
+    .optional()
+    .describe(
+      '**这次调查要交的那份名单**——问题的答案本身是一组实体时填它（「排查出关联的小号」' +
+        '「哪些订单受影响」「是哪次变更引入的」）。报告会把它排在根因之后印成干净的一列，' +
+        '直接复制得走。填在**得出这份名单的那一步**上——只要求那一步 status 是 confirmed，' +
+        '**kind 不限**：「受影响的订单」落在量化影响面（kind="impact"）那一步上同样正当，' +
+        '不必为它另开一个 normal 步。一次调查只有一份生效：多处声明时取最新那条还成立的。' +
+        '**别再把 id 抄进 verdict 里**——那一段是散文，读者复制不走。',
+    ),
+  metrics: z
+    .array(z.object(metricShape))
+    // 🔴 **超了就退回，不截断**——与名单相反，理由见 `shared/ipc.ts` 的 `METRICS_MAX`：
+    // 这张表是你亲手写的，条数完全由你定，超过这个数说明把明细当成了指标
+    .max(METRICS_MAX)
+    .optional()
+    .describe(
+      '影响面的那几个数，**只填在量化影响面的那一步上**（kind="impact"），别处填了不进报告。' +
+        '把「影响了多少用户、多长时间窗口」拆成一条条带口径的数，而不是揉进 verdict 那段话里：' +
+        `揉进去之后，「这两个数都是下界」这种限定最先被读丢。**最多 ${METRICS_MAX} 条**——` +
+        '超过说明你把明细当成了指标，那种东西该进名单（roster）或者干脆不进报告。',
+    ),
   evidence: z
     .array(z.object(evidenceItemShape))
     .describe('结论所依据的证据。status 非 inconclusive 时必须至少一条，否则这个结论无法被复核。'),
@@ -105,6 +222,8 @@ export const askOperatorShape = {
 };
 
 export type EvidenceItem = z.infer<z.ZodObject<typeof evidenceItemShape>>;
+export type RosterArg = z.infer<z.ZodObject<typeof rosterShape>>;
+export type MetricArg = z.infer<z.ZodObject<typeof metricShape>>;
 export type OpenStepArgs = z.infer<z.ZodObject<typeof openStepShape>>;
 export type CloseStepArgs = z.infer<z.ZodObject<typeof closeStepShape>>;
 export type AskOperatorArgs = z.infer<z.ZodObject<typeof askOperatorShape>>;

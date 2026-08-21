@@ -11,7 +11,7 @@
  * 所以壳留给各自的调用方，这里只吐块。
  */
 
-import type { CaseMeta, IncidentEntry, StepNode } from '../shared/ipc.js';
+import { BOUND_MARK, type CaseMeta, type IncidentEntry, type Metric, type Roster, type StepNode } from '../shared/ipc.js';
 import { HEAD_BLOCK } from '../shared/paging.js';
 import {
   SHAPE_COPY,
@@ -210,6 +210,20 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
         <p className="none">没有排除掉任何方向。</p>
       );
 
+    case 'roster':
+      return <RosterBlock roster={b.roster} from={label(b.stepId)} />;
+
+    case 'impact':
+      // 🔴 **「无。」只在两半都空时才出**，与 Markdown 那边逐字同一条规则：
+      // 只看 `text` 的话，一份只填了 metrics 的影响面会先写一句「无。」、紧接着列出几个数，
+      // 而 Markdown 那份没有这句——同一次调查的两种导出于是互相矛盾
+      return (
+        <>
+          {b.text ? <p>{b.text}</p> : b.metrics.length ? null : <p className="none">无。</p>}
+          {b.metrics.length > 0 && <Metrics rows={b.metrics} />}
+        </>
+      );
+
     case 'path':
       return <Path rows={b.rows} label={label} />;
 
@@ -233,6 +247,94 @@ function Body({ section, label }: { section: ReportSection; label: (id: string) 
     case 'absent':
       return <p className="none">{b.why}</p>;
   }
+}
+
+/**
+ * 名单：**一列裸 id**，外加一行说清这份名单的口径（overview.md 的「产出物」）。
+ *
+ * 🔴 **id 那一列不许掺别的东西。** 这一节存在的全部理由是"读者要把它整列复制走"——
+ * 在 id 旁边并排印备注、序号、状态，看着更丰富，实际是把复制出来的东西变成了需要再清洗一遍
+ * 的文本。所以备注单开一列（复制时是另一列），口径与条数摆在列表**外面**的一行里。
+ *
+ * 条数印出来而不是让人自己数：它是读者真会拿去汇报的那个数，而"到底几条"正是
+ * 这一节相对于一段散文最先兑现的价值。
+ */
+function RosterBlock({ roster, from }: { roster: Roster; from: string }) {
+  const noted = roster.items.some((i) => i.note);
+  return (
+    <div className="roster">
+      <p className="rmeta">
+        <b>{roster.label}</b>
+        <span className="n">
+          {roster.items.length} 个 {roster.idKind}
+        </span>
+        {/* 「不是全集」要显眼：它决定读者敢不敢直接照这份去处置。全集那一档也印出来，
+            不印的话读者无从知道这份到底被判成了什么——缺省沉默会被读成"应该是全的" */}
+        <span className={roster.complete ? 'tag' : 'tag partial'}>
+          {roster.complete ? '全集' : '下界，不是全集'}
+        </span>
+        {/* 被工具截过要单独标出来：它与"agent 自己就只捞到这么多"都落在下界那一档，
+            而前者意味着这份报告漏掉了它本来查到的东西——那是要回头重来的信号 */}
+        {roster.truncated ? <span className="tag partial">已截掉 {roster.truncated} 条</span> : null}
+        <span className="from">出自 {from}</span>
+      </p>
+      {/* 口径空着照实说，不留白：留白读起来像"这批没有边界"，而实际是没填 */}
+      {roster.basis ? (
+        <p className="basis">{roster.basis}</p>
+      ) : (
+        <p className="basis none">口径没填。这份名单是怎么圈出来的、边界在哪，报告里没有。</p>
+      )}
+      <table className="rlist">
+        <thead>
+          <tr>
+            <th>{roster.idKind}</th>
+            {noted && <th>备注</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {roster.items.map((it) => (
+            <tr key={it.id}>
+              <td className="id">{it.id}</td>
+              {noted && <td>{it.note ?? ''}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * 影响面里的那几个数。**界的记号印在值前面**（`≥` / `≤`），口径单独一列。
+ *
+ * 口径那一列不许省：一个没有口径的"受影响 2 人"与一句"近 30 天内至少 2 人，更早的查不到"
+ * 是两个不同的事实，而读者只会拿前者去汇报。
+ */
+function Metrics({ rows }: { rows: Metric[] }) {
+  return (
+    <table className="metrics">
+      <thead>
+        <tr>
+          <th>指标</th>
+          <th>值</th>
+          <th>口径</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((m, i) => (
+          <tr key={i}>
+            <td>{m.label}</td>
+            <td className={m.bound === 'exact' ? 'v' : 'v bounded'}>
+              {BOUND_MARK[m.bound]}
+              {m.value}
+            </td>
+            {/* 同名单那条：破折号读起来像"这个数没有口径限制"，而实际是没填 */}
+            <td className={m.basis ? 'basis' : 'basis none'}>{m.basis || '口径没填'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 /**
