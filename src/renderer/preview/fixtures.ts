@@ -68,8 +68,10 @@ const STORY: Record<string, { direction?: string; verdict: string }> = {
   // 支线兜底步：没有命题，方向由主线收敛回来时给
   st_lane: { verdict: '翻了近三个月的同类工单，四张里有三张的根因写的就是「重试 + 无幂等」。' },
 };
+/** `occurredAtRaw` 是 agent 原样写下的串。**第一条故意是带时区的完整 ISO**：
+ *  版面按短时刻排的话，长的那种会从时间列里溢出去压在证据正文上，而夹具里全是短的就看不见。 */
 const EV_STORY: Record<string, { claim: string; occurredAtRaw: string | null }> = {
-  e1: { claim: 't_order 落下第一条 u1001:cart7 订单', occurredAtRaw: '12:03:02' },
+  e1: { claim: 't_order 落下第一条 u1001:cart7 订单', occurredAtRaw: '2026-03-11T12:03:02+08:00' },
   e2: { claim: '同一 cart_key 的第二条写入落库，没有被索引拦下', occurredAtRaw: '12:04:51' },
   e3: { claim: '从库 seconds_behind_master=0.34，幂等检查读到的是旧数据', occurredAtRaw: null },
   e4: { claim: 'TK-20250311 / TK-20250702 / TK-20260204 三张工单的结论都是「网关重试 + 服务端无幂等」', occurredAtRaw: null },

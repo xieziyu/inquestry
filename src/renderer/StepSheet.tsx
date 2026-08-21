@@ -323,7 +323,7 @@ function StepBody({
             {step.evidence.map((e) => (
               <li key={e.id} onClick={() => onExcerpt(e.callId, e.anchor, e.claim)}>
                 <span className="when">{e.occurredAtRaw ?? '—'}</span>
-                <span>
+                <span className="what">
                   {e.actor && <span className="who">{e.actor}</span>}
                   {e.claim}
                   {e.anchor && <span className="anc">L{e.anchor}</span>}
