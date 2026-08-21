@@ -17,6 +17,8 @@
  *      但那同样是一次确认——落不下来的话提醒永远关不掉
  *   6. **推断日期的三道闸。** 未来的日期一定是推错的，而它落进去之后所有证据都排到未来，
  *      报告看着完全正常
+ *   7. **界面上的短写法不许改写证据。** 时区换算按基准时区而不是本机；补不出来的东西
+ *      （时分秒串的日期）宁可不写——这一档写错了，读的人看到的是一个从没出现过的时刻
  *
  * 不起真会话：要验的都是 harness 侧的记账与投影，与模型无关。
  *
@@ -29,7 +31,7 @@ import path from 'node:path';
 
 import { blobDir, openDatabase, type Db } from '../src/backend/db/database.js';
 import { rebuildProjections } from '../src/backend/db/projector.js';
-import { isTimeOnly, parseOccurredAt } from '../src/backend/db/timebase.js';
+import { formatOccurredAt, isTimeOnly, parseOccurredAt } from '../src/shared/timebase.js';
 import {
   createInvestigationSession,
   readTimeBase,
@@ -313,6 +315,58 @@ async function main() {
       timebaseFrom({ title: null, incidentDate: null }, INTAKE_DAY) === INTAKE_DAY &&
       timebaseFrom({ title: null, incidentDate: REAL_DAY }, INTAKE_DAY) === REAL_DAY,
     '拒答 / 超时 / spawn 失败 / 漏答也落的话，界面上那条「未确认」就被一个没人签过的确认关掉了',
+  );
+
+  // ⑦ 界面写法（`formatOccurredAt`）：详情浮层的时间列按它排版
+  const BASE = { incidentDate: REAL_DAY, tzOffset: '+08:00' };
+  check(
+    '界面写法：带日期的串换算成基准时区的短形，不带时区',
+    formatOccurredAt('2026-08-19T00:00:00Z', BASE) === '08-19 08:00:00' &&
+      formatOccurredAt('2026-08-19T00:00:00+08:00', BASE) === '08-19 00:00:00' &&
+      // 没写时区的那种按基准时区读，于是原样重排一遍
+      formatOccurredAt('2026-08-19 00:00:00', BASE) === '08-19 00:00:00',
+    '每条证据都重复一遍时区只会把时间列撑到正文那边去，而基准时区写在信息卡上',
+  );
+  check(
+    '界面写法：换算落在基准时区，与本机时区无关',
+    withTz('America/New_York', () => formatOccurredAt('2026-08-19T00:00:00Z', BASE)) === '08-19 08:00:00',
+    '按本机换算的话，同一份列表里时分秒那档（按定义在基准时区）与带日期那档静默地处在两个时区',
+  );
+  check(
+    '界面写法：只有时分秒的串原样出，不给它补日期',
+    formatOccurredAt('12:03:02', BASE) === '12:03:02' && formatOccurredAt('12:03:02.240', BASE) === '12:03:02.240',
+    '补日期等于把可能还是猜的基准日期当成事实写进证据',
+  );
+  check(
+    '界面写法：认不出来的串原样出',
+    formatOccurredAt('上周三下午', BASE) === '上周三下午' &&
+      // Date.parse 认得它，但走的是实现相关的兜底分支，读出来的东西没法预期
+      formatOccurredAt('Aug 19 2026 12:00:00', BASE) === 'Aug 19 2026 12:00:00' &&
+      formatOccurredAt('2026-08-19T00:00:00+08:00', { ...BASE, tzOffset: '八点区' }) === '2026-08-19T00:00:00+08:00',
+    'agent 写的是什么就是什么，猜不动的时候改写它就是伪造证据',
+  );
+  check(
+    '界面写法：不存在的日子原样出，不跟着 Date.parse 挪到下个月',
+    formatOccurredAt('2026-02-30T12:00:00+08:00', BASE) === '2026-02-30T12:00:00+08:00' &&
+      // 闰年那天是真的，别一起拦掉
+      formatOccurredAt('2024-02-29T12:00:00+08:00', BASE) === '2024-02-29 12:00:00',
+    'Date.parse 只拦得住 13 月与 25 点，2 月 30 日会被静默挪到 3 月 2 日——详情页于是显示一个证据里从没出现过的时刻',
+  );
+  check(
+    '界面写法：不同年的时间戳带上年份，同年的省掉',
+    formatOccurredAt('2025-12-31T23:00:00+08:00', BASE) === '2025-12-31 23:00:00' &&
+      formatOccurredAt('2026-12-31T23:00:00+08:00', BASE) === '12-31 23:00:00' &&
+      // 换算过后的年份才是显示出来的那个：这一条在 UTC 是去年，落到 +08:00 就成了基准那年
+      formatOccurredAt('2025-12-31T23:00:00Z', BASE) === '01-01 07:00:00',
+    '一次调查照样会引用去年的日志，两个 12-31 显示成同一个是读不出来的歧义',
+  );
+  check(
+    '界面写法：毫秒看原始串写没写，不看算出来的值',
+    formatOccurredAt('2026-08-19T00:00:00.240+08:00', BASE) === '08-19 00:00:00.240' &&
+      formatOccurredAt('2026-08-19T00:00:00.000+08:00', BASE) === '08-19 00:00:00.000' &&
+      formatOccurredAt('2026-08-19T00:00:00+08:00', BASE) === '08-19 00:00:00' &&
+      formatOccurredAt(null, BASE) === null,
+    '按值判的话 `.000` 会被静默降格成「日志没写毫秒」，而那是两种精度；没有时间戳则由界面自己写「—」',
   );
 
   console.log('\n===== Spike Timebase 结果 =====');
