@@ -17,7 +17,9 @@
  * 跑：npm run rebuild:node && npm run spike:close
  */
 
-import { mkdtempSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
@@ -26,6 +28,7 @@ import { blobDir, openDatabase, type Db } from '../src/backend/db/database.js';
 import { rebuildProjections } from '../src/backend/db/projector.js';
 import {
   createInvestigationSession,
+  emptyBlobTrash,
   missingClosingSteps,
   readCaseStatus,
   readIntake,
@@ -1371,7 +1374,127 @@ async function main() {
       `events ${beforeHalf.events} → ${eventCount()} · 步 ${beforeHalf.step} → ${JSON.stringify(stepRowOf(half.stepId))}` +
       `（一条一条各提交各的话，第一条已经落库、closed_seq 还停在上一批——那条孤儿的 seq 比它大，往后再也删不掉）`,
   );
+
+  // 🔴 **落一次工具输出也是两条事件（`recordToolEnd`：`blob.stored` → `toolcall.completed`）。**
+  // 第二条失败而第一条已提交的话，blob 与 payload_fts 在库里、调用却还是 pending：下次启动
+  // `sweepZombies` 把它改判 abandoned 并换成"已放弃"那个 blob，真实输出成了没人引用的 blob
+  // 加一条搜得到却指不回去的 FTS 行。
+  //
+  // 制造失败的手法同上——让会话自己递进来的值撞库里的约束：`tool_calls.status` 有 CHECK，
+  // 一个不在集合里的 status 会在第二条事件的投影 UPDATE 上炸掉，事件行已经 INSERT 了、
+  // 第一条事件连同它的 blob / FTS 行都已在同一个外层事务里。生产路径上一个开关都不用加。
+  //
+  // 文件是在事务外写的：回滚只收回库里的行，所以还要看那个文件有没有跟着走——留着的话
+  // 库里没有任何一行指得到它，删调查与启动清扫都找不着，每失败一次就多漏一份
+  collide = false;
+  atomic.recordToolStart({ callId: 'call_atomic2', toolName: 'mcp__datasource__query_logs', input: { q: 'y' } });
+  const orphanText = '命中 1 条\n12:41:09 这份输出的第二条事件会炸\n(end)';
+  const tableDump = (sql: string) => JSON.stringify(db.prepare(sql).all());
+  const endState = () => ({
+    blobs: tableDump(`SELECT sha256, size, line_count FROM blobs ORDER BY sha256`),
+    fts: tableDump(`SELECT sha256, case_id FROM payload_fts WHERE case_id='case_atomic' ORDER BY sha256`),
+    calls: tableDump(`SELECT id, status, output_sha256, ended_at FROM tool_calls WHERE session_id='sess_atomic' ORDER BY id`),
+    events: eventCount(),
+  });
+  const beforeEnd = endState();
+  let endBlewUp: string | null = null;
+  try {
+    atomic.recordToolEnd({
+      callId: 'call_atomic2',
+      output: orphanText,
+      status: 'not_a_status' as unknown as 'done',
+    });
+  } catch (e) {
+    endBlewUp = (e as Error).message;
+  }
+  const afterEnd = endState();
+  const orphanFile = path.join(blobs, createHash('sha256').update(orphanText).digest('hex'));
+  const trashLeft = (db.prepare(`SELECT COUNT(*) c FROM blob_trash`).get() as { c: number }).c;
+  check(
+    '工具输出落到一半失败：整次回滚，blobs、payload_fts、tool_calls 与 events 与出事前逐字相同，文件也不残留',
+    endBlewUp !== null &&
+      afterEnd.blobs === beforeEnd.blobs &&
+      afterEnd.fts === beforeEnd.fts &&
+      afterEnd.calls === beforeEnd.calls &&
+      afterEnd.events === beforeEnd.events &&
+      !existsSync(orphanFile) &&
+      trashLeft === 0,
+    `抛出=${endBlewUp ?? '(竟然没抛)'} · ` +
+      (['blobs', 'fts', 'calls'] as const)
+        .map((k) => {
+          const rows = (v: string) => (JSON.parse(v) as unknown[]).length;
+          return `${k} ${beforeEnd[k] === afterEnd[k] ? '同' : `${rows(beforeEnd[k])} 行 → ${rows(afterEnd[k])} 行`}`;
+        })
+        .join(' · ') +
+      ` · events ${beforeEnd.events} → ${afterEnd.events} · 文件${existsSync(orphanFile) ? '还在' : '已清'} · blob_trash 欠 ${trashLeft}` +
+      `（各提交各的话 blob 与 FTS 行已在、调用仍是 pending，下次启动 sweepZombies 就把它判成 abandoned）`,
+  );
   atomic.endSession();
+
+  // 🔴 **文件写完、事务提交前进程被掐（SIGKILL / 断电）。**catch 跑不到，库里回滚得干干净净，
+  // 文件却留下了——只有"写文件之前就把欠账记进库"才接得住，启动时的 `emptyBlobTrash`
+  // 按引用复核一遍再删。这一段真杀进程：子进程里会话自己的 `now()` 看见 blob 文件出现在
+  // 磁盘上就 SIGKILL 自己——那一刻正好在文件落盘之后、任何事件提交之前
+  const killDir = mkdtempSync(path.join(tmpdir(), 'inquestry-kill-'));
+  const killDb = path.join(killDir, 'inquestry.db');
+  const killText = '命中 1 条\n12:41:10 写完文件就被掐\n(end)';
+  const killFile = path.join(blobDir(killDb), createHash('sha256').update(killText).digest('hex'));
+  const childSrc = path.join(killDir, 'child.ts');
+  writeFileSync(
+    childSrc,
+    `
+import { existsSync } from 'node:fs';
+import { blobDir, openDatabase } from ${JSON.stringify(path.resolve('src/backend/db/database.ts'))};
+import { createInvestigationSession } from ${JSON.stringify(path.resolve('src/backend/store/sqlite-store.ts'))};
+const db = openDatabase(${JSON.stringify(killDb)});
+let armed = false;
+let ids = 0;
+const s = createInvestigationSession(
+  db,
+  {
+    caseId: 'case_kill', sessionId: 'sess_kill', backend: 'claude', blobDir: blobDir(${JSON.stringify(killDb)}),
+    isTimestampedSource: () => true,
+    now: () => { if (armed && existsSync(${JSON.stringify(killFile)})) process.kill(process.pid, 'SIGKILL'); return Date.now(); },
+    newId: (p) => p + '_kill_' + (++ids),
+    runOperator: async () => ({ answer: '' }),
+  },
+  { title: 'kill', question: 'kill', projectRoot: null, incidentDate: '2026-08-09', tzOffset: '+08:00', clues: null },
+);
+s.recordToolStart({ callId: 'call_kill', toolName: 'mcp__datasource__query_logs', input: { q: 'z' } });
+armed = true;
+s.recordToolEnd({ callId: 'call_kill', output: ${JSON.stringify(killText)} });
+console.log('NOT KILLED');
+`,
+  );
+  const child = spawnSync(path.resolve('node_modules/.bin/tsx'), [childSrc], { encoding: 'utf8' });
+  // tsx 的 bin 外面还套着一层 node：里面那层被 SIGKILL 时，外层以 128+9 退出而不是带 signal
+  const childKilled = (child.signal === 'SIGKILL' || child.status === 137) && !child.stdout.includes('NOT KILLED');
+  const kdb = openDatabase(killDb);
+  const killRows = () => ({
+    blob: (kdb.prepare(`SELECT COUNT(*) c FROM blobs WHERE sha256=?`).get(path.basename(killFile)) as { c: number }).c,
+    call: (kdb.prepare(`SELECT status FROM tool_calls WHERE id='call_kill'`).get() as { status: string } | undefined)?.status,
+    owed: (kdb.prepare(`SELECT COUNT(*) c FROM blob_trash WHERE sha256=?`).get(path.basename(killFile)) as { c: number }).c,
+    file: existsSync(killFile),
+  });
+  const killed = killRows();
+  const killSweep = emptyBlobTrash(kdb, { blobDir: blobDir(killDb) });
+  const afterSweep = killRows();
+  check(
+    '文件写完、事务提交前被 SIGKILL：库里干净、欠账在，启动清扫把那份文件删掉',
+    childKilled &&
+      killed.file &&
+      killed.blob === 0 &&
+      killed.call === 'pending' &&
+      killed.owed === 1 &&
+      killSweep.removed === 1 &&
+      !afterSweep.file &&
+      afterSweep.owed === 0,
+    `子进程 ${childKilled ? '被杀' : `没被杀（status=${child.status} signal=${child.signal} ${child.stdout.trim() || child.stderr.trim().slice(0, 120)}）`} · ` +
+      `被掐那一刻 文件${killed.file ? '在' : '不在'} blobs=${killed.blob} call=${killed.call} 欠账=${killed.owed} · ` +
+      `清扫 removed=${killSweep.removed} 之后 文件${afterSweep.file ? '还在' : '已清'} 欠账=${afterSweep.owed}` +
+      `（先写文件再记欠账的话，欠账=0 而文件在：谁也不知道该去删它）`,
+  );
+  kdb.close();
 
   // 声明跟着它那一步一起失效：形态说的是"结论属于哪一类"，结论作废了这句话也就不成立
   const cDead = makeRunner('case_shape_dead', '声明被推翻');

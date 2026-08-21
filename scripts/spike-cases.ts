@@ -1374,8 +1374,8 @@ async function main() {
   //      索引只是一直长
   //   3. 跟着 case 一起删 blob —— 它是内容寻址、跨调查共享的：另一次调查引用同一份原文时，
   //      那次调查的证据当场读不出来了，而它自己一点没被动过
-  //   4. 只按 `tool_calls` 认 blob 的归属 —— 落一次工具输出是两条事件两个事务
-  //      （`recordToolEnd`），卡在中间时 blob 已经落了、`tool_calls.output_sha256` 还是空的。
+  //   4. 只按 `tool_calls` 认 blob 的归属 —— `sweepZombies` 补记输出仍是两条事件两个事务，
+  //      卡在中间时 blob 已经落了、`tool_calls.output_sha256` 还是空的。
   //      两个方向都错：自己那份漏删，别人那份误删
   //   5. 文件删不掉就此不管 —— 库里已经没有任何一行指得到它，谁也不知道该去删哪个文件。
   //      欠账记进 `blob_trash`，启动时接着删；而重删之前必须再问一次"现在还有没有人用它"，
@@ -1425,7 +1425,7 @@ async function main() {
      *
      * 直接抹掉引用而不是真去杀进程：**要验的是删除读的是哪一份归属**，而那一刻的库状态
      * 就是这个样子——`blobs` 行、`payload_fts` 行、磁盘文件都在，`output_sha256` 是空的。
-     * 两条事件各占一个事务（`emitTo`），所以这个窗口是真实存在的、不是想出来的。
+     * `sweepZombies` 补记时两条事件仍各占一个事务（`emitTo`），所以这个窗口是真实存在的、不是想出来的。
      */
     db.prepare(`UPDATE tool_calls SET output_sha256=NULL WHERE id IN ('call_d3','call_k2')`).run();
     check(
@@ -1624,15 +1624,16 @@ async function main() {
      * "又被用上了、该划掉"的账时，那句 `settle.run` **不在按文件兜的那个 try 里**，
      * 于是整个函数抛出来——正是这条要防的形状。
      */
-    db.exec(
-      `CREATE TRIGGER trash_boom BEFORE DELETE ON blob_trash BEGIN SELECT RAISE(ABORT,'boom'); END`,
-    );
     // 让表里压着一笔"已经又被人用上"的账：走到它就会去划账，而划账这一下会被触发器打回
     db.prepare(`INSERT OR REPLACE INTO blob_trash (sha256,at) VALUES (?,0)`).run(stuck);
     // 这一次调查的原文与留下那次逐字相同，所以它自己一笔新账都不欠
     const doomed3 = makeRunner('case_doom3', '清理会抛的那次');
     await work(doomed3, '与留下那次共享原文', 'call_b1', '10:00:00');
     doomed3.close();
+    // 触发器要等工具调用落完再挂：`recordToolEnd` 提交时也会划自己那笔账（先记欠账再写文件）
+    db.exec(
+      `CREATE TRIGGER trash_boom BEFORE DELETE ON blob_trash BEGIN SELECT RAISE(ABORT,'boom'); END`,
+    );
     let threw = false;
     let boomOut: DeleteOutcome = { ok: false, pendingBlobs: -1 };
     try {
