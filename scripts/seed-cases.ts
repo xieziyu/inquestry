@@ -23,7 +23,7 @@ import { storeBlob } from '../src/backend/db/blobs.js';
 import { blobDir, openDatabase } from '../src/backend/db/database.js';
 import type { DomainEvent } from '../src/backend/db/events.js';
 import { applyEvent } from '../src/backend/db/projector.js';
-import { parseOccurredAt } from '../src/backend/db/timebase.js';
+import { parseOccurredAt } from '../src/shared/timebase.js';
 
 /** 仓库根。**从脚本自己的位置算，不用 `process.cwd()`**——从别的目录调用它时后者是错的。 */
 const REPO = path.resolve(fileURLToPath(import.meta.url), '../..');

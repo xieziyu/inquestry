@@ -8,7 +8,7 @@
 import type { Db } from './database.js';
 import type { DomainEvent, DomainEvents, EventName } from './events.js';
 import { readBlobText } from './blobs.js';
-import { parseOccurredAt, type TimeBase } from './timebase.js';
+import { parseOccurredAt, type TimeBase } from '../../shared/timebase.js';
 
 export type ProjectorDeps = {
   /** FTS 需要 blob 正文，而正文不在库里（只存 sha256）——从 blob 目录读回来。 */

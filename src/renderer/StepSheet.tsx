@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CallNode, CaseMeta, ChatLine } from '../shared/ipc.js';
 import type { StageBox } from './track.js';
 import { directionText } from './track.js';
+import { formatOccurredAt } from '../shared/timebase.js';
 import { kindLabel, sayLabel, statusLabel } from './labels.js';
 import { Icon } from './Icon.js';
 
@@ -92,7 +93,14 @@ export function StepSheet({
         ) : box.kind === 'case' ? (
           <CaseBody meta={meta} stray={stray} onExcerpt={onExcerpt} />
         ) : box.kind === 'step' ? (
-          <StepBody box={box} onExcerpt={onExcerpt} onGo={onGo} liveLanes={liveLanes} onStopLane={onStopLane} />
+          <StepBody
+            box={box}
+            meta={meta}
+            onExcerpt={onExcerpt}
+            onGo={onGo}
+            liveLanes={liveLanes}
+            onStopLane={onStopLane}
+          />
         ) : null}
       </div>
 
@@ -255,12 +263,15 @@ function CallList({
 
 function StepBody({
   box,
+  meta,
   liveLanes,
   onExcerpt,
   onGo,
   onStopLane,
 }: {
   box: Extract<StageBox, { kind: 'step' }>;
+  /** 只为证据那几个时间戳：怎么读它们由 case 的基准（日期 + 时区）定。 */
+  meta: CaseMeta;
   liveLanes: string[];
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
   onGo: (id: string) => void;
@@ -322,7 +333,9 @@ function StepBody({
           <ul className="sh-evi">
             {step.evidence.map((e) => (
               <li key={e.id} onClick={() => onExcerpt(e.callId, e.anchor, e.claim)}>
-                <span className="when">{e.occurredAtRaw ?? '—'}</span>
+                <span className="when" title={e.occurredAtRaw ?? undefined}>
+                  {formatOccurredAt(e.occurredAtRaw, meta) ?? '—'}
+                </span>
                 <span className="what">
                   {e.actor && <span className="who">{e.actor}</span>}
                   {e.claim}

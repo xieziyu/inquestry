@@ -12,7 +12,7 @@ import type { DomainEvent } from '../db/events.js';
 import { applyEvent, type ProjectorDeps } from '../db/projector.js';
 import { effectiveRoster, effectiveStep, reportSections, timestampedEvidenceCount } from '../db/queries.js';
 import { blobSha, locateEvidence, readBlobText, storeBlob } from '../db/blobs.js';
-import { isTimeOnly, parseOccurredAt, type TimeBase, type TimeBaseSource } from '../db/timebase.js';
+import { isTimeOnly, parseOccurredAt, type TimeBase, type TimeBaseSource } from '../../shared/timebase.js';
 import type { InvestigationStore } from '../tools/definitions.js';
 import {
   parseCallRef,
