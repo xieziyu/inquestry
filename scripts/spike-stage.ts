@@ -12,14 +12,17 @@
  *      两条互不相干的推理，而"顺着一列往下读"正是这个轴唯一的读法
  *   4. **卡片高度与裁行数对不上。** 高度是按估出来的行数算的，渲染那侧用同一个数去裁；
  *      两处不一致的表现是安静地裁掉半行字，而那半行多半正是那一步的假设句
- *   5. **旁白推进主干的游标。** agent 每说一句话就把接下来的每一步整体下移一截，
- *      而那句话与那一步无关
+ *   5. **旁白与它所属的那一步对不上。** 旁白缩进排在所属主干卡下面，归属全靠"就在它下面"——
+ *      挂错一张卡（比如认领到支线上）时画面看着一样正常，读的人却把第 2 步说的话当成第 5 步说的
+ *   6. **组头行随内容变高、或没有旁白的那一步也留出组的位置。** 前者是 D23 那一类位移，
+ *      后者让主干凭空多出一截空白
  *
  * 纯函数，不碰库、不起会话。跑：npm run spike:stage
  */
 
 import {
   CASE_BOX_ID,
+  GROUP_BOX_PREFIX,
   STAGE,
   TAIL_BOX_ID,
   TAIL_VERDICT_LINES,
@@ -86,15 +89,22 @@ const CHAT: ChatLine[] = [
   { id: 'c1', role: 'assistant', at: 1500, text: '先看这两条是不是同一个请求写进去的。' },
   // **正文以问题开头的一句真话**：一度按前缀过滤，它会连人带话一起从舞台上消失
   { id: 'c2', role: 'user', at: 3500, text: `${QUESTION}——另外刚发现同一个 cart_key 昨天也重过一次。` },
+  // 🔴 **同一步名下必须不止一句**：一组只有一句的话，"组头行随句数变位置 / 变高"这种改法
+  // 在逐帧那条检查下一次都触发不到——它要的正是"这一组又长了一句"的那一帧
+  { id: 'c3', role: 'assistant', at: 3600, text: '那再往前翻一天的重试记录，看是不是同一条链路。' },
 ];
 
-const build = (steps: StepNode[], chat: ChatLine[], tail = false) => {
+const build = (steps: StepNode[], chat: ChatLine[], tail = false, expanded?: ReadonlySet<string>) => {
   const track = trackLayout(steps);
-  const layout = stageLayout(weaveChat(track.rows, chat), track.lanes, CASE_CARD, tail);
+  const layout = stageLayout(weaveChat(track.rows, chat), track.lanes, CASE_CARD, tail, expanded);
   return { track, layout };
 };
 
+/** 默认全折叠，所以"每一组都展开着"是人一下一下点出来的那个极端态，得单独排一份。 */
+const ALL_OPEN: ReadonlySet<string> = new Set([CASE_BOX_ID, ...STEPS.map((s) => s.id)]);
+
 const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
+const { layout: OPENED } = build(STEPS, CHAT, false, ALL_OPEN);
 
 // ── ① 追加不动已落笔的任何一张 ───────────────────────────────────────────────
 {
@@ -161,16 +171,25 @@ const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
 }
 
 // ── ③ 卡片不重叠 ────────────────────────────────────────────────────────────
+/** 展开态也要验：组内的间距（`groupGap` / `sayV`）算窄一档的表现就是两句叠在一起。 */
 {
-  const hit: string[] = [];
-  for (let i = 0; i < FULL.boxes.length; i++) {
-    for (let j = i + 1; j < FULL.boxes.length; j++) {
-      const a = FULL.boxes[i]!;
-      const b = FULL.boxes[j]!;
-      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) hit.push(`${a.id}/${b.id}`);
+  const overlaps = (boxes: typeof FULL.boxes) => {
+    const hit: string[] = [];
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]!;
+        const b = boxes[j]!;
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) hit.push(`${a.id}/${b.id}`);
+      }
     }
-  }
-  check('两张卡不叠在一起', hit.length === 0, hit.join(' ') || `${FULL.boxes.length} 张卡两两不相交`);
+    return hit;
+  };
+  const hit = [...overlaps(FULL.boxes), ...overlaps(OPENED.boxes)];
+  check(
+    '两张卡不叠在一起（折叠态与全展开态各排一遍）',
+    hit.length === 0,
+    hit.join(' ') || `折叠 ${FULL.boxes.length} 个盒子、全展开 ${OPENED.boxes.length} 个，两两不相交`,
+  );
 }
 
 // ── ④ 高度与裁行数对得上 ────────────────────────────────────────────────────
@@ -205,8 +224,14 @@ const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
    * 🔴 **这一条才是那对"改一处必须改另一处"的守卫**：高度按行数算、渲染按同一个行数裁。
    * 两处对不上时一个字的报错都没有，只是安静地把末行裁掉半截。
    */
-  const bad = FULL.boxes.filter((b) => heightOf(b) !== b.h).map((b) => `${b.id}(${b.h}≠${heightOf(b)})`);
-  check('每张卡的高度与它自己报的裁行数严格对得上', bad.length === 0, bad.join(' ') || `${FULL.boxes.length} 张卡都对得上`);
+  const bad = [...FULL.boxes, ...OPENED.boxes]
+    .filter((b) => heightOf(b) !== b.h)
+    .map((b) => `${b.id}(${b.h}≠${heightOf(b)})`);
+  check(
+    '每个盒子的高度与它自己报的裁行数严格对得上（旁白与组头行一起验）',
+    bad.length === 0,
+    bad.join(' ') || `折叠 ${FULL.boxes.length} 个、全展开 ${OPENED.boxes.length} 个都对得上`,
+  );
 
   // 两句兜底说的是两件事（ui.md §3.2）：估行数与渲染都走 `directionText`，所以只要这两句
   // 不同，估出来的行数就一定是渲染那句的行数
@@ -225,23 +250,167 @@ const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
   );
 }
 
-// ── ⑤ 旁白不推进主干 ────────────────────────────────────────────────────────
+// ── ⑤ 旁白挂在所属的那一步下面 ──────────────────────────────────────────────
+/**
+ * 归属是**算出来的**（`weaveChat` 按"说出口时最后一张主干卡"定），库里没有这个字段。
+ * 算错时画面照样排得整整齐齐，只是第 2 步说的话排到了第 5 步旁边——所以这几条钉的是位置本身。
+ */
 {
-  const { layout: noTalk } = build(STEPS, [CHAT[0]!]);
-  const moved = FULL.boxes
-    .filter((b) => b.kind !== 'say')
-    .filter((b) => noTalk.byId.get(b.id)?.y !== b.y)
-    .map((b) => b.id);
+  // 组头行与每一句都缩进在主干列内。`colX(0)` 就是 padX（主干恒占 0 列）
+  const asideX = STAGE.padX + STAGE.sayIndent;
+  const stray = OPENED.boxes
+    .filter((b) => b.kind === 'say' || b.kind === 'group')
+    .filter((b) => b.x !== asideX || b.w !== STAGE.cardW - STAGE.sayIndent)
+    .map((b) => `${b.id}@${b.x}w${b.w}`);
   check(
-    '插进旁白不把任何一步下移',
-    moved.length === 0,
-    moved.join(',') || 'agent 每说一句就把后面的步整体下推的话，正读着的那一步会跑',
+    '旁白与组头行一律缩进在主干列内，一个都不落在别的列上',
+    stray.length === 0,
+    stray.join(' ') ||
+      `${OPENED.boxes.filter((b) => b.kind === 'say' || b.kind === 'group').length} 个盒子都在 x=${asideX}、宽 ${
+        STAGE.cardW - STAGE.sayIndent
+      } —— 认领到支线上的话它会落到 1 列去`,
   );
-  const say = FULL.boxes.find((b) => b.kind === 'say')!;
+
+  /**
+   * 🔴 **支线卡不认领旁白**：`c2` 说在支线第一步 `a1` 落笔之后，
+   * 按"最后一张卡"算归属的话它会挂到 `a1` 上——而旁白全部来自主线。
+   */
+  const c2 = OPENED.boxes.find((b) => b.id === 'c2');
   check(
-    '旁白落在主干左侧，不占主干的行宽',
-    say.x + say.w < FULL.byId.get(CASE_BOX_ID)!.x,
-    `旁白右沿 ${say.x + say.w}，主干左沿 ${FULL.byId.get(CASE_BOX_ID)!.x}`,
+    '说在支线卡之后的那一句仍旧归主干上那一步',
+    c2?.kind === 'say' && c2.ownerId === 's2',
+    `c2 归 ${c2?.kind === 'say' ? c2.ownerId : '(没排出来)'} —— 归 a1 的话，那一句就挂到了另一条 agent 的推理下面`,
+  );
+
+  /**
+   * **D23 的正身：按真实到达序逐条追加，除尾卡外每个盒子的 x/y/h 逐字不变。**
+   *
+   * 一度写成"有旁白 vs 完全没旁白"两份快照对比——那条在这一版下必然失败，而且**失败得不对**：
+   * 一步的第一句到达时组头行凭空出现，本来就该多占一行。D23 防的是增量到达，所以按帧比。
+   * 折叠态下连尾卡都不该动（组头行是定额高，计数从 3 涨到 4 不改变任何几何）；
+   * 全展开态下也只有尾卡跟着往下走。
+   */
+  for (const [label, expanded] of [
+    ['折叠态', new Set<string>()],
+    ['全展开态', ALL_OPEN],
+  ] as const) {
+    const arrivals = [
+      ...STEPS.map((s) => ({ at: s.startedAt, step: s as StepNode | null, chat: null as ChatLine | null })),
+      ...CHAT.filter((c) => !c.opening).map((c) => ({ at: c.at, step: null, chat: c as ChatLine | null })),
+    ].sort((a, b) => a.at - b.at);
+    const steps: StepNode[] = [];
+    const chat: ChatLine[] = [CHAT[0]!];
+    let prev = build(steps, chat, true, expanded).layout;
+    let drift = '';
+    let onlyTail = true;
+    for (const a of arrivals) {
+      if (a.step) steps.push(a.step);
+      if (a.chat) chat.push(a.chat);
+      const cur = build(steps, chat, true, expanded).layout;
+      for (const b of prev.boxes) {
+        if (b.id === TAIL_BOX_ID) continue;
+        const now = cur.byId.get(b.id);
+        if (!now) {
+          onlyTail = false;
+          drift ||= `${label}：${b.id} 到了下一帧就没了`;
+        } else if (now.x !== b.x || now.y !== b.y || now.h !== b.h) {
+          onlyTail = false;
+          drift ||= `${label}：来了 ${a.step?.id ?? a.chat?.id} 之后 ${b.id} 从 (${b.x},${b.y},h${b.h}) 挪到 (${now.x},${now.y},h${now.h})`;
+        }
+      }
+      prev = cur;
+    }
+    check(
+      `按到达序逐条追加，除尾卡外一个盒子都不动（${label}）`,
+      onlyTail,
+      drift || '每一帧与上一帧逐字一致 —— 后来到达的旁白只推得动尾卡，而尾卡下面没有东西可推',
+    );
+  }
+
+  /**
+   * 组头行是**定额高**：计数几位数、预览句多长都不许改变它，也不许改变它下面那张卡的位置。
+   * （不写这条的话，"组头行照内容排"这种改法在别的检查下全都能过。）
+   */
+  const talky = (n: number, long: boolean): ChatLine[] => [
+    { id: 'x0', opening: true, role: 'user', at: 500, text: QUESTION },
+    ...Array.from({ length: n }, (_, i) => ({
+      id: `x${i + 1}`,
+      role: 'assistant' as const,
+      at: 1100 + i,
+      text: i === 0 && long ? '幂等键这条路要一次说清楚：'.repeat(12) : `第 ${i + 1} 句`,
+    })),
+  ];
+  const few = build(STEPS, talky(3, false)).layout;
+  const many = build(STEPS, talky(12, true)).layout;
+  // 查不到就是归属算歪了（那一组挂到别人名下去了）——报 FAIL，不许在这儿抛异常：
+  // 检查脚本一崩，整份结果一条都印不出来，看着像"没跑"而不是"错了"
+  const g1 = few.byId.get(`${GROUP_BOX_PREFIX}s1`);
+  const g2 = many.byId.get(`${GROUP_BOX_PREFIX}s1`);
+  check(
+    '组头行恒占一行：3 轮与 12 轮、短预览与长预览排出来逐字一样高',
+    !!g1 &&
+      !!g2 &&
+      g1.h === STAGE.groupH &&
+      g2.h === STAGE.groupH &&
+      heightOf(g1) === STAGE.groupH &&
+      heightOf(g2) === STAGE.groupH &&
+      g1.y === g2.y &&
+      few.byId.get('s2')!.y === many.byId.get('s2')!.y,
+    `3 轮 h=${g1?.h}@y${g1?.y}、12 轮 h=${g2?.h}@y${g2?.y}，其下那张卡 y=${few.byId.get('s2')!.y}/${
+      many.byId.get('s2')!.y
+    } —— 一随内容变高，它下面每一张已经落笔的卡就跟着位移`,
+  );
+
+  /**
+   * 人点开一组：**组头行自己与它上方的一切逐字不动**，位移只发生在他点的那一行之下。
+   * 这一条钉的是"视线焦点不跳"——组头行要是跟着长高或上移，点开的那一下画面就会甩一截。
+   */
+  {
+    const base = build(STEPS, CHAT, true).layout;
+    const open = build(STEPS, CHAT, true, new Set(['s2'])).layout;
+    const g = base.byId.get(`${GROUP_BOX_PREFIX}s2`);
+    const gBottom = g ? g.y + g.h : 0;
+    const trunkX = [STAGE.padX, STAGE.padX + STAGE.sayIndent];
+    const deltas = new Set<number>();
+    let stillAbove = true;
+    let detail = '';
+    for (const b of base.boxes) {
+      const now = open.byId.get(b.id);
+      if (!now) continue;
+      const d = now.y - b.y;
+      if (now.x !== b.x || now.h !== b.h || d < 0) {
+        stillAbove = false;
+        detail ||= `${b.id} 变了形或往上跑了（Δy=${d}）`;
+      } else if (!g || b.id === g.id || b.y + b.h <= g.y) {
+        // 组头行自己与它上方的一切：一个像素都不许动，人点的那一行原地不动
+        if (d !== 0) {
+          stillAbove = false;
+          detail ||= `${b.id} 在组头行上方却跟着挪了 ${d}px —— 展开只该往组头行下面长`;
+        }
+      } else if (b.y >= gBottom && trunkX.includes(b.x)) deltas.add(d);
+      // 支线/分叉那几列不在这条里：分叉卡是贴着它父亲排的，父亲让位它自然跟着走
+    }
+    const tailD = open.byId.get(TAIL_BOX_ID)!.y - base.byId.get(TAIL_BOX_ID)!.y;
+    check(
+      '点开一组：组头行自己与上方一切不动，下方主干整体让位同样多',
+      !!g && stillAbove && deltas.size === 1 && [...deltas][0]! > 0 && tailD === [...deltas][0],
+      (!g ? 's2 名下压根没排出组头行 —— 归属算歪了' : detail) ||
+        `组头行 y=${g?.y} 未动，下方让位 ${[...deltas].join('/')}px，尾卡跟着走了 ${tailD}px`,
+    );
+  }
+
+  /**
+   * **没说过话的那一步一个像素都不多占。** 组头行恒占位这种实现方式不会被别的检查发现，
+   * 表现是主干上凭空多出一截空白。`s2` 说过一句（`c2`）、`s3` 一句都没有，两段间距因此不同。
+   */
+  const gapTo = (from: string, to: string) => FULL.byId.get(to)!.y - (FULL.byId.get(from)!.y + FULL.byId.get(from)!.h);
+  check(
+    '说过话的那一步下面多一行组头，没说过的一个像素都不多占',
+    gapTo('s2', 's3') === STAGE.groupTop + STAGE.groupH + STAGE.vGap &&
+      // s4 是第二次会话的头一步，断点条自己那一段照旧加在它头上
+      gapTo('s3', 's4') === STAGE.vGap + STAGE.sessionGap,
+    `s2→s3 ${gapTo('s2', 's3')}（该是 ${STAGE.groupTop + STAGE.groupH + STAGE.vGap}）、` +
+      `s3→s4 ${gapTo('s3', 's4')}（该是 ${STAGE.vGap + STAGE.sessionGap}）`,
   );
 }
 
@@ -391,11 +560,12 @@ const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
   );
 
   /**
-   * **收尾时人和 agent 还在你一句我一句**：这是尾卡最容易失效的一处——旁白有自己一条游标，
-   * 只按主干算 y 的话，这几句会重新落到尾卡下面去，而画布最低点又变回一句话。
+   * **收尾时人和 agent 还在你一句我一句**：这是尾卡最容易失效的一处。
+   * 收尾那几句归最后一步，只有"排卡 → 排组 → 推游标"这个顺序才把它们算进主干游标里；
+   * 谁把它写回"排卡 → 推游标"，这几句就落到尾卡下面去，而画布最低点又变回一句话。
    *
-   * ⚠️ 这里**必须堆够几句**：只补两句的话，旁白那一栏还没长过尾卡自己的高度，
-   * 于是"只按主干算"照样能过——那是一条恒真的检查，退回旧写法都发现不了。
+   * ⚠️ **必须按展开态排**：折叠着的话那一组只有一行组头，比尾卡自己还矮，
+   * 于是漏算也照样能过——那是一条恒真的检查。也**必须堆够几句**，理由同上。
    */
   const late: ChatLine[] = [
     ...CHAT,
@@ -405,14 +575,14 @@ const { track: TRACK, layout: FULL } = build(STEPS, CHAT);
     { id: 'c11', role: 'user', at: 10_500, text: '摘了，成功率回到 99.4%。' },
     { id: 'c12', role: 'assistant', at: 11_000, text: '那就对上了。我把这一条补进影响面那一步的证据里，剩下的等你定稿。' },
   ];
-  const { layout: LATE } = build(STEPS, late, true);
+  const { layout: LATE } = build(STEPS, late, true, ALL_OPEN);
   const lateTail = LATE.byId.get(TAIL_BOX_ID)!;
+  const lateSays = LATE.boxes.filter((b) => b.kind === 'say');
   check(
     '收尾之后还在一来一回地说，最低的仍旧是尾卡而不是那几句',
-    LATE.boxes.every((b) => b.id === TAIL_BOX_ID || bottom(b) <= bottom(lateTail)),
-    `尾卡下沿 ${bottom(lateTail)}，旁白最低 ${Math.max(
-      ...LATE.boxes.filter((b) => b.kind === 'say').map(bottom),
-    )} —— 只按主干游标算 y 的话，这一条就是失败的`,
+    lateSays.length >= 5 && LATE.boxes.every((b) => b.id === TAIL_BOX_ID || bottom(b) <= bottom(lateTail)),
+    `尾卡下沿 ${bottom(lateTail)}，${lateSays.length} 句旁白最低 ${Math.max(...lateSays.map(bottom))} —— ` +
+      '旁白没算进主干游标的话，这一条就是失败的',
   );
 
   check(

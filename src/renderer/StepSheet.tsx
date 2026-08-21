@@ -1,7 +1,8 @@
-import type { CallNode, CaseMeta } from '../shared/ipc.js';
+import { useEffect, useState } from 'react';
+import type { CallNode, CaseMeta, ChatLine } from '../shared/ipc.js';
 import type { StageBox } from './track.js';
 import { directionText } from './track.js';
-import { kindLabel, statusLabel } from './Stage.js';
+import { kindLabel, sayLabel, statusLabel } from './Stage.js';
 import { Icon } from './Icon.js';
 
 /**
@@ -18,6 +19,7 @@ export function StepSheet({
   box,
   meta,
   liveLanes,
+  aside,
   onClose,
   onExcerpt,
   onStopLane,
@@ -28,6 +30,11 @@ export function StepSheet({
   box: StageBox;
   meta: CaseMeta;
   liveLanes: string[];
+  /**
+   * 点开的是一句旁白时，它所在的那一组。**由舞台那侧按 `ownerId` 取好送进来**——
+   * 归属只在 `weaveChat` 算一次，这儿再算一遍的话两处迟早对不上，而对不上时不报错。
+   */
+  aside: { at: string; lines: ChatLine[]; currentId: string; onPick: (id: string) => void } | null;
   onClose: () => void;
   onExcerpt: (callId: string, anchor: string | null, title: string) => void;
   onStopLane: (lane: string) => void;
@@ -36,31 +43,51 @@ export function StepSheet({
   step: (dir: 1 | -1) => void;
   canStep: (dir: 1 | -1) => boolean;
 }) {
-  // 旁白不是节点；尾卡的"全文"是报告屏那一整页，所以它也不开浮层（点它直接过去）
-  if (box.kind === 'say' || box.kind === 'tail') return null;
+  /**
+   * 尾卡的"全文"是报告屏那一整页，所以它不开浮层（点它直接过去）。
+   *
+   * **旁白开**：浮层不是"节点的特权"，是"逐字读的那一档"——画布上那一份恒裁到三行，
+   * 这儿是全 app 唯一读得到一句长旁白全文的地方。它只是没有证据与调用，
+   * 所以进来时不带序号、也不带上一步/下一步。
+   */
+  if (box.kind === 'tail' || box.kind === 'group') return null;
+  const say = box.kind === 'say' ? aside : null;
+  if (box.kind === 'say' && !say) return null;
 
   return (
     <aside className="stepsheet">
       <div className="sh-head">
-        {box.kind === 'case' ? (
+        {say ? (
+          <>
+            <span className="ord">旁白</span>
+            <span className="kind">{say.at}</span>
+            <span className="dim">共 {say.lines.length} 轮</span>
+          </>
+        ) : box.kind === 'case' ? (
           <>
             <span className="ord">信息卡</span>
             <span className="kind">这次调查的由来</span>
           </>
-        ) : (
+        ) : box.kind === 'step' ? (
           <>
             <span className="ord">{box.row.label}</span>
             <span className="kind">{kindLabel(box.row.step.kind)}</span>
             <span className={`state ${box.row.step.status}`}>{statusLabel(box.row.step.status)}</span>
           </>
-        )}
+        ) : null}
         <button className="x" title="关闭（Esc）" onClick={onClose}>
           ×
         </button>
       </div>
 
       <div className="sh-body">
-        {box.kind === 'case' ? <CaseBody meta={meta} /> : <StepBody box={box} onExcerpt={onExcerpt} onGo={onGo} liveLanes={liveLanes} onStopLane={onStopLane} />}
+        {say ? (
+          <SayGroupBody group={say} />
+        ) : box.kind === 'case' ? (
+          <CaseBody meta={meta} />
+        ) : box.kind === 'step' ? (
+          <StepBody box={box} onExcerpt={onExcerpt} onGo={onGo} liveLanes={liveLanes} onStopLane={onStopLane} />
+        ) : null}
       </div>
 
       {/* 「上一步 / 下一步」走的是**到达顺序**，不是这一列自己的顺序：
@@ -78,6 +105,64 @@ export function StepSheet({
         </div>
       )}
     </aside>
+  );
+}
+
+/**
+ * 一组旁白：被点那句全文在上，同组其余在下、点一条换一条。
+ *
+ * **不给序号**（序号是节点的），也**不做「上一句 / 下一句」**——组内点选已经覆盖了它要解决的事。
+ * 也不必再标"哪几句在画布上被折叠掉了"：能点进来就说明这一组是展开着的，
+ * 每一句都在画布上，只是各自裁到了三行。
+ */
+function SayGroupBody({
+  group,
+}: {
+  group: { at: string; lines: ChatLine[]; currentId: string; onPick: (id: string) => void };
+}) {
+  const cur = group.lines.find((l) => l.id === group.currentId) ?? group.lines[0];
+  const [copied, setCopied] = useState<'ok' | 'fail' | null>(null);
+  // 复制成功那一下退回原样，失败的留着——那句话人得看见（同回填卡上那枚）
+  useEffect(() => {
+    if (copied !== 'ok') return;
+    const t = setTimeout(() => setCopied(null), 1600);
+    return () => clearTimeout(t);
+  }, [copied]);
+  useEffect(() => setCopied(null), [group.currentId]);
+  if (!cur) return null;
+  return (
+    <>
+      <section className="sh-sec">
+        <h4>它说了什么</h4>
+        <p className="sh-quote">{cur.text}</p>
+        <div className="sh-act">
+          <button
+            onClick={() =>
+              void navigator.clipboard.writeText(cur.text).then(
+                () => setCopied('ok'),
+                () => setCopied('fail'),
+              )
+            }
+          >
+            {copied === 'ok' ? '已复制' : copied === 'fail' ? '复制失败' : '复制这句'}
+          </button>
+        </div>
+      </section>
+
+      {group.lines.length > 1 && (
+        <section className="sh-sec">
+          <h4>这一组 {group.lines.length} 轮 · 点一条换一条</h4>
+          <ul className="sh-aside">
+            {group.lines.map((l) => (
+              <li key={l.id} className={l.id === cur.id ? 'cur' : ''} onClick={() => group.onPick(l.id)}>
+                <span className="who">{sayLabel(l.role)}</span>
+                <span className="t">{l.text}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }
 
