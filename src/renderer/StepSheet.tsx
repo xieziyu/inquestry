@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CallNode, CaseMeta, ChatLine } from '../shared/ipc.js';
 import type { StageBox } from './track.js';
 import { directionText } from './track.js';
-import { kindLabel, sayLabel, statusLabel } from './Stage.js';
+import { kindLabel, sayLabel, statusLabel } from './labels.js';
 import { Icon } from './Icon.js';
 
 /**
