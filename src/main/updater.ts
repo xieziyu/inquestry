@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { app } from 'electron';
 import electronUpdater from 'electron-updater';
 import type { UpdateStatus } from '../shared/update.js';
+import { isReleaseChannel } from './channel.js';
 
 // electron-updater 是 CJS，具名 import 在 ESM 产物下会拿到 undefined，只能默认导入后解构
 const { autoUpdater } = electronUpdater;
@@ -30,13 +29,10 @@ export interface Updater {
  * GitHub Releases，所以这里不碰 setFeedURL。
  *
  * 默认后台下载 + 退出时安装：用户什么都不做也能升级，设置屏那行只是让他能提前重启。
- * 渠道文件（app-update.yml）只有走完整 target 的包才有：dev 与本地 `npm run package`
- * （--dir）都没有，那两种都停在 unsupported —— 只看 isPackaged 的话，本地包会在
- * 设置屏常驻一行 ENOENT 红字（实测）。
+ * 非正式渠道（`isReleaseChannel`）停在 unsupported，它们没有 app-update.yml。
  */
 export function createUpdater({ onStatus, cleanup }: UpdaterDeps): Updater {
-  const supported =
-    app.isPackaged && existsSync(path.join(process.resourcesPath, 'app-update.yml'));
+  const supported = isReleaseChannel();
   let status: UpdateStatus = { phase: supported ? 'idle' : 'unsupported' };
 
   function set(next: UpdateStatus): void {

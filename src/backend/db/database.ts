@@ -34,6 +34,18 @@ export type Db = Database.Database;
 export type MigrationStep = {
   to: number;
   /**
+   * 这一级之后，**老版本还读不读得动这份库**。必填——加一级却没想过这件事的代价，
+   * 是旧版拿着一份不兼容的库当能读的用：它不报错，只是画错。
+   *
+   * - `'additive'`：只加东西（新表 / 可空列 / 带 DEFAULT 的列 / 新索引 / 新事件类型）。
+   *   老版本按名字读写自己那些列，新列它留 NULL——与"老事件重放后新列是 NULL"同一件事。
+   *   min_reader 不动，于是**已经发出去的那些版本照旧打得开**。
+   * - `'breaking'`：改 CHECK、改字段语义，**或给已有列加一档新枚举值**。最后这条最容易
+   *   放过：老版本的分支里压根没有那一档，它不会报错，只会把那些行画成别的东西。
+   *   min_reader 抬到这一级，老版本从此停在启动失败屏上等更新。
+   */
+  compat: 'additive' | 'breaking';
+  /**
    * 这一级新增的列，**声明式的**：DDL 由它生成（`applyStep`），自检也靠它把库降回上一级
    * （`spike:cases` 那段「造一份真的是上一版的库」）。
    *
@@ -62,9 +74,10 @@ export function applyStep(db: Db, step: MigrationStep): void {
  * 于是它们重放后照旧是 NULL。**这正是 additive 的定义**：老数据不掉、新列由新事件填。
  */
 export const MIGRATIONS: MigrationStep[] = [
-  { to: 6, adds: [{ table: 'steps', column: 'remediation', ddl: 'TEXT' }] },
+  { to: 6, compat: 'additive', adds: [{ table: 'steps', column: 'remediation', ddl: 'TEXT' }] },
   {
     to: 7,
+    compat: 'additive',
     // 带 DEFAULT 的 NOT NULL 列：老行当场就有了正确的值，不必等重放。
     // 与 SCHEMA_SQL 那份声明必须逐字一致——两处写出不同的可空性，只有在很久以后
     // 某次插入上才会炸，而那时看不出是这里埋的
@@ -78,6 +91,7 @@ export const MIGRATIONS: MigrationStep[] = [
   },
   {
     to: 8,
+    compat: 'additive',
     adds: [
       { table: 'steps', column: 'roster', ddl: 'TEXT' },
       { table: 'steps', column: 'metrics', ddl: 'TEXT' },
@@ -85,6 +99,7 @@ export const MIGRATIONS: MigrationStep[] = [
   },
   {
     to: 9,
+    compat: 'additive',
     adds: [
       { table: 'evidence_refs', column: 'seq', ddl: 'INTEGER' },
       { table: 'steps', column: 'closed_seq', ddl: 'INTEGER' },
@@ -92,19 +107,91 @@ export const MIGRATIONS: MigrationStep[] = [
   },
 ];
 
+/**
+ * 这套"`user_version` 记的是最低读者"的规矩是 v9 那版才立的。更早的版本认的是
+ * "`user_version` 就是版本号"，**把 min_reader 写到 9 以下，它们会当成一次真的降级**
+ * 去跑迁移阶梯，撞上一堆已经存在的列——app 直接起不来。所以这是下限，不是起点。
+ */
+const SCHEME_SINCE = 9;
+
+/**
+ * 这份库最低要第几版才读得动。**写进 `user_version`**，因为那是老版本唯一会看的数。
+ *
+ * 由阶梯自己算出来：additive 的一级不抬它，breaking 的抬到那一级。于是
+ * "0.3.0 能不能打开将来的库"这件事，答案不在将来某段代码里，而在每一级的 `compat` 上。
+ */
+export function minReaderOf(steps: MigrationStep[]): number {
+  return steps.reduce((m, s) => (s.compat === 'breaking' ? Math.max(m, s.to) : m), SCHEME_SINCE);
+}
+
+export const MIN_READER_VERSION = minReaderOf(MIGRATIONS);
+
+const VERSION_KEY = 'schema_version';
+
+/**
+ * 库的真实版本。**没有 `meta` 表 / 没有那一行时退回 `user_version`**：v9 之前两者
+ * 本来就是同一个数，那些库的 `user_version` 说的就是它的版本。
+ */
+function readVersion(db: Db): number {
+  const meta = db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta' LIMIT 1`)
+    .get();
+  const row = meta
+    ? (db.prepare(`SELECT value FROM meta WHERE key=?`).get(VERSION_KEY) as { value: string } | undefined)
+    : undefined;
+  return row ? Number(row.value) : Number(db.pragma('user_version', { simple: true }));
+}
+
+/** 两个戳一起落：真实版本进 `meta`，最低读者进 `user_version`。 */
+function stamp(db: Db): void {
+  db.prepare(`INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(
+    VERSION_KEY,
+    String(SCHEMA_VERSION),
+  );
+  db.pragma(`user_version = ${MIN_READER_VERSION}`);
+}
+
 type Upgrade =
   | { kind: 'fresh' }
+  /** 比本版新，但作者声明了本版还读得动：照常打开，**两个戳都不动** */
+  | { kind: 'compatible-newer'; from: number }
+  | { kind: 'too-new'; from: number }
   | { kind: 'archive'; from: number }
   | { kind: 'replay'; from: number; steps: MigrationStep[] };
+
+/**
+ * 库新到本版读不动，停下来等更新。**这一档不挪库**：库本身是好的，旧的只是读它的人。
+ *
+ * 挪走的代价看着轻、其实最重：旧版建的空库版本号是对的，随后自动更新装上的新版
+ * 会拿着它当一切正常，再也不会去找那份 .bak——用户看到的是「升级完数据没了」，
+ * 而工具这一路上一句话都没说。不动库的话，更新装完重启，版本自己就对上了。
+ *
+ * 只有 breaking 的那一级才会走到这里（`MIN_READER_VERSION`）：additive 的新库
+ * 老版本照旧打得开，压根不经过这一档。
+ */
+export class DatabaseTooNewError extends Error {
+  constructor(readonly from: number) {
+    super(
+      `这份库由更新版本的 Inquestry 写过（schema v${from}），而那一版声明了本版（v${SCHEMA_VERSION}）读不动它。` +
+        `库没有被改动，更新到新版后即可打开。`,
+    );
+    this.name = 'DatabaseTooNewError';
+  }
+}
 
 /**
  * `:memory:` 走内存库（spike 用）。文件库时 blob 目录与库同级：
  * 两者合起来才是真相，缺一半都无法重放。
  *
- * **版本对不上时分两条路**（data-model.md §2）：
+ * **版本对不上时分四条路**：
  *
  * - 阶梯上每一级都有步骤 → **重放迁移**：补 DDL、按 events 重建投影，调查留在原地
- * - 缺任何一级（或降级、或没打过版本号的老库）→ **挪开重建**，旧库改名留着
+ * - 比本版新、但 `user_version` 说本版读得动 → **照常打开，两个戳都不动**（降级）
+ * - 比本版新、且本版读不动 → **抛 `DatabaseTooNewError`，一个字节都不动**，等自动更新
+ * - 缺任何一级、或没打过版本号的老库 → **挪开重建**，旧库改名留着
+ *
+ * 只有最后一条动土，而它对应的是唯一真的"往前走不了"的情况：老库无从判断。
+ * 比本版新只是暂时读不了或干脆能读，把它挪掉纯属损失。
  *
  * 顺序是**先体检再动土**：`checkEventShapes` 抛错时这个库一个字节都没被改过，
  * 报错停下远好过一个半迁移的库——后者与一次成功的迁移长得一模一样。
@@ -113,6 +200,8 @@ type Upgrade =
  */
 export function openDatabase(file: string, opts: { steps?: MigrationStep[] } = {}): Db {
   const plan = file === ':memory:' ? ({ kind: 'fresh' } as Upgrade) : planUpgrade(file, opts.steps ?? MIGRATIONS);
+  // 抢在 mkdir 与任何一次打开之前：这一档的全部价值就是「库没被碰过」
+  if (plan.kind === 'too-new') throw new DatabaseTooNewError(plan.from);
   if (file !== ':memory:') {
     mkdirSync(path.dirname(file), { recursive: true });
     if (plan.kind === 'archive') archive(file, plan.from);
@@ -143,13 +232,20 @@ export function openDatabase(file: string, opts: { steps?: MigrationStep[] } = {
       for (const s of plan.steps) applyStep(db, s);
       db.exec(SCHEMA_SQL);
       rebuildProjections(db, { blobDir: blobDir(file) });
-      db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      stamp(db);
     })();
     console.warn(`[db] schema v${plan.from} → v${SCHEMA_VERSION}：按 events 重放迁移，调查留在原地`);
     return db;
   }
+  if (plan.kind === 'compatible-newer') {
+    // **建表都不跑**：additive 保证了新库该有的都有，本版认得的表与索引一个不缺。
+    // 更要紧的是别往一份自己看不全的库上写东西——两个戳尤其不能动，
+    // 把 `meta` 改回本版的话，那边真实版本就丢了，下次用新版打开会当成没迁过
+    console.warn(`[db] 库是 v${plan.from}，比本版 v${SCHEMA_VERSION} 新，但声明了本版读得动：照常打开`);
+    return db;
+  }
   db.exec(SCHEMA_SQL);
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  stamp(db);
   return db;
 }
 
@@ -167,15 +263,22 @@ function openFresh(file: string): Db {
   const db = new Database(file);
   db.exec(PRAGMA_SQL);
   db.exec(SCHEMA_SQL);
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  stamp(db);
   return db;
 }
 
-/** 这一次启动该走哪条路。**只读，不动库**——决定与执行分开，好让自检能单独验它。 */
+/**
+ * 这一次启动该走哪条路。**只读，不动库**——决定与执行分开，好让自检能单独验它。
+ *
+ * 读两个数：`meta` 里的真实版本（老库没有那张表，退回 `user_version`），
+ * 与 `user_version` 里的最低读者。**先看后者**：能不能读得动是第一个问题，
+ * 库有多新是第二个。additive 的库两个数会分叉，而分叉正是降级能成立的地方。
+ */
 export function planUpgrade(file: string, steps: MigrationStep[] = MIGRATIONS): Upgrade {
   if (!existsSync(file)) return { kind: 'fresh' };
   const probe = new Database(file, { readonly: true });
-  const version = Number(probe.pragma('user_version', { simple: true }));
+  const minReader = Number(probe.pragma('user_version', { simple: true }));
+  const version = readVersion(probe);
   // `user_version` 的默认值就是 0，所以 0 既可能是一个空文件，也可能是一个没打过版本号的老库。
   // 靠有没有应用表来分：**有表的 0 号库必须按不兼容处理**——`CREATE TABLE IF NOT EXISTS`
   // 不会给已存在的表补列，放过它只会把老结构标成当前版本，等第一次查新列才炸。
@@ -184,9 +287,14 @@ export function planUpgrade(file: string, steps: MigrationStep[] = MIGRATIONS): 
       .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('events','cases') LIMIT 1`)
       .get();
   probe.close();
+  // **能不能读得动是第一个问题**，与库有多新无关：这个数是写库的那一版明说的，
+  // 它说不行就一定不行——哪怕真实版本看着与本版一样（那种库是坏的，更不该动它）
+  if (minReader > SCHEMA_VERSION) return { kind: 'too-new', from: version };
   if (version === SCHEMA_VERSION || (version === 0 && !populated)) return { kind: 'fresh' };
-  // 0 号老库无从判断，降级（版本比代码新）更没法处理：两种都只能挪开
-  if (version === 0 || version > SCHEMA_VERSION) return { kind: 'archive', from: version };
+  // 比本版新、又读得动：降级就落在这里。这一档什么都不写
+  if (version > SCHEMA_VERSION) return { kind: 'compatible-newer', from: version };
+  // 0 号老库无从判断，只能挪开
+  if (version === 0) return { kind: 'archive', from: version };
 
   const path: MigrationStep[] = [];
   for (let v = version + 1; v <= SCHEMA_VERSION; v++) {
