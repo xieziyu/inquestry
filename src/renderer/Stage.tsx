@@ -126,7 +126,11 @@ export function Stage({
 }) {
   const track = useMemo(() => trackLayout(steps), [steps]);
   const items = useMemo(() => weaveChat(track.rows, chat), [track.rows, chat]);
-  /** 展开着的那几组。**模块里那份是真相**，这个 state 只为了让它一改就重渲染。 */
+  /**
+   * 展开着的那几组。**模块里那份是真相**，这个 state 只为了让它一改就重渲染——
+   * 所以开关一组要从 `OPEN_ASIDES` 读起再造新集合，拿这个 state 造会在同一轮里
+   * 从同一份旧值出发，连点两组时后一次把前一次的展开吞掉。
+   */
   const [openAsides, setOpenAsides] = useState<ReadonlySet<string>>(
     () => OPEN_ASIDES.get(meta.id) ?? new Set<string>(),
   );
@@ -335,7 +339,7 @@ export function Stage({
   };
 
   const toggleAside = (ownerId: string) => {
-    const next = new Set(openAsides);
+    const next = new Set(OPEN_ASIDES.get(meta.id) ?? []);
     if (!next.delete(ownerId)) next.add(ownerId);
     else {
       // 收起后那句的盒子不再排进布局，抽屉随之消失；picked 不清的话 freeSize 仍按抽屉开着扣宽
