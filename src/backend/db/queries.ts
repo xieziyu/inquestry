@@ -82,8 +82,16 @@ export type CaseRow = {
   started: number;
 };
 
-// 表别名固定为 c：三个调用点都要能把它拼进带 JOIN / 子查询的语句里而不歧义
-const CASE_ORDER = `ORDER BY (c.status='open') DESC, c.updated_at DESC`;
+/**
+ * 调查列表的唯一排序：**只按最近活动倒序**。表别名固定为 c——三个调用点都要能把它
+ * 拼进带 JOIN / 子查询的语句里而不歧义。
+ *
+ * 🔴 曾经先按 `(status='open') DESC` 分一档、进行中的整体提前，已推翻：首页那条轨道
+ * 是一根时间轴（`Home.tsx`），把一档状态提到前面就是让轴上的先后说假话——刚定稿的那次
+ * 排在四天前就停下的几条后面，而它是刚刚发生的。进行中的看得见不靠这条排序：
+ * 靠 `pinned`（下面那条）、「等你 N」徽标与 rail 那颗点。
+ */
+const CASE_ORDER = `ORDER BY c.updated_at DESC`;
 /**
  * 一行调查的公共列。**三处查询共用这一串**（最近列表 / 钉住的补查 / 检索命中）：
  * 各写各的话，加一列只加进其中两处，第三处那一列会安静地是 `undefined`——
@@ -91,11 +99,11 @@ const CASE_ORDER = `ORDER BY (c.status='open') DESC, c.updated_at DESC`;
  */
 const CASE_COLS = `c.id, c.title, c.status, c.updated_at,
   EXISTS(SELECT 1 FROM sessions se WHERE se.case_id = c.id) AS started`;
-const byCaseOrder = (a: CaseRow, b: CaseRow) =>
-  Number(b.status === 'open') - Number(a.status === 'open') || b.updated_at - a.updated_at;
+/** `CASE_ORDER` 的 JS 版：补查回来的行要按同一条规则并回去。 */
+const byCaseOrder = (a: CaseRow, b: CaseRow) => b.updated_at - a.updated_at;
 
 /**
- * 首页最近列表的库侧一半（D28）：进行中的排在前面，同档按最近活动倒序。
+ * 首页最近列表的库侧一半（D28）：按最近活动倒序，见 `CASE_ORDER`。
  * 「运行中 / 等你 N」是运行时状态，库里没有，由 main 合上去。
  *
  * `pinned` 里的调查**一定在结果里**，哪怕排在 limit 之外。它装的是 main 还持有运行时的那些，
@@ -499,7 +507,7 @@ function snippetAround(text: string, term: string): string {
 /**
  * 历史调查页上的检索（ui.md §8.3）：把 `narrative_fts` 的命中按 case 归并。
  *
- * **排序与 `caseList` 同一条规则**（进行中的在前、同档按最近活动倒序），不按命中条数排：
+ * **排序与 `caseList` 同一条规则**（按最近活动倒序），不按命中条数排：
  * 两处各排各的话，同一次调查在"最近 20 个"里排第一、搜出来却排第七，人会以为搜到的是另一个。
  * 命中条数只作为附带信息给出来，不参与排序。
  *

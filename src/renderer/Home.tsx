@@ -21,7 +21,7 @@ export function Home({
   onCreated,
   onAll,
 }: {
-  /** 快照里那份最近列表（`caseList` 已按 open 优先 + 最近活动倒序排过）。 */
+  /** 快照里那份最近列表（`caseList` 已按最近活动倒序排过）。 */
   cases: CaseBrief[];
   onOpen: (caseId: string) => void;
   onCreated: () => void;

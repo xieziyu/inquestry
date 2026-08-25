@@ -30,7 +30,7 @@ export function applyEvent(db: Db, ev: DomainEvent, deps: ProjectorDeps): void {
 }
 
 /**
- * 调查列表靠 `updated_at` 把「进行中的」排在前面（ui.md §8.3），
+ * 调查列表整个按 `updated_at` 倒序排（`queries.ts` 的 `CASE_ORDER`），
  * 而新建调查那一刻之后没有别的地方会动它——不在这里前移，排序就永远是新建调查先后。
  *
  * 时间取事件自己的 `at` 而不是时钟：投影器读时钟的那一刻，重放就不再一致。
