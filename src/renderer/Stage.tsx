@@ -300,6 +300,16 @@ export function Stage({
     if (!el) return;
     // React 的 onWheel 是被动监听，`preventDefault` 在里面不生效（整页会跟着滚）
     const onWheel = (e: WheelEvent) => {
+      /**
+       * 🔴 **钉在视口上的那两层自己滚，画布一步都不许动。** 它们不在画布里
+       * （见 `.todolayer` / `.stepsheet` 那两段），可它们是这个监听器的后代，
+       * 底下那句 `preventDefault` 会把它们的原生滚动一并吃掉——表现是详情抽屉里
+       * 的长文翻不动，滚轮反倒把后面的图推走了。
+       *
+       * **排除的是这两层，不含 `.s-card`**（与 `onPointerDown` 那份名单不同）：
+       * 卡片就长在画布上，滚轮划过它本来就该拖动画布。
+       */
+      if ((e.target as HTMLElement).closest('.stepsheet,.todolayer')) return;
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         const r = el.getBoundingClientRect();

@@ -9,7 +9,7 @@
  *   3. canUseTool 的 `deny + message` **不中断 turn**，agent 就地换方向重调（D6，全设计最贵的一条）
  *   4. createSdkMcpServer 的进程内工具能被调到（ask_operator 的载体，§5）
  *   5. hook 事件能拿到 PreToolUse 及其 agent_id（tool call 自动归属 step 的兜底，§4.4）
- *   6. 起标题那一趟（`case-namer`）手上一个工具都没有，且只有一个链接的描述也答得上来
+ *   6. 起标题那一趟（`case-namer`）手上一个工具都没有、不进扩展思考，且只有一个链接的描述也答得上来
  *
  * 跑：npm run spike:claude
  *
@@ -78,6 +78,7 @@ const observed = {
   isError: false,
   namerFacts: null as CaseFacts | null,
   namerTools: null as string[] | null,
+  namerThinking: 0,
 };
 
 /**
@@ -95,6 +96,21 @@ const observed = {
  * 有时又蒙对——所以它只断言编号在不在，不断言措辞，也别把它当成唯一的那道网。
  */
 const NAMER_LINK_ONLY = '请分析下 Sentry 报的 issue: https://sentry.example.com/organizations/sentry/issues/1679';
+
+/**
+ * 检查 6c 的输入：**一段真的现象描述**，多行、带日志片段与 traceId。
+ *
+ * 这条检查也有来历：默认的 adaptive 思考开着时，模型会为这一句标题想上三四十秒，
+ * 一趟实测 41s，越过 `case-namer` 的 `TIMEOUT_MS` 被收成"问不出来"——标题于是静默停在
+ * 建单兜底那句，**失败形状与漏关 ToolSearch 那次一模一样**。关掉之后同一段 4.8s。
+ *
+ * 数的是 `system/thinking_tokens` 的条数而不是耗时：耗时随网络与排队浮动，
+ * 拿它当阈值的话，网快的那天一趟开着思考的 spawn 照样能 PASS。
+ */
+const NAMER_THINK_BAIT =
+  '今天是 2026-08-25。读下面这段排查请求：\n\n' +
+  '今天下午 3 点左右，用户反馈说播客详情页打不开，一直转圈。我看了下网关日志，有大量 504。\n' +
+  'traceId: 7f3a9c1b2e4d5f6a\n麻烦帮我看看是哪个下游服务挂了。';
 
 const probe = tool(
   'echo_probe',
@@ -196,12 +212,16 @@ async function run() {
   }
 
   // 与上面那一趟无关，另起两次 spawn（起标题本来就是独立的一跳）。
-  // 这一趟同样要有超时与必定收尾：卡住的话 6a/6b 连 FAIL 都报不出来，只剩一个不吭声的进程
-  const namer = query({ prompt: '回复 OK 两个字。', options: namerOptions('haiku') });
+  // 这一趟同样要有超时与必定收尾：卡住的话 6a/6b/6c 连 FAIL 都报不出来，只剩一个不吭声的进程。
+  //
+  // **喂的是一段真的现象描述，不是「回复 OK」**：6c 数的是这趟进没进扩展思考，
+  // 而一句无可想的指令谁都不会想——夹具没有能触发那件事的输入时，检查是空的。
+  const namer = query({ prompt: NAMER_THINK_BAIT, options: namerOptions('haiku') });
   const namerTimer = setTimeout(() => void namer.interrupt?.(), TIMEOUT_MS);
   try {
     for await (const msg of namer) {
       if (msg.type === 'system' && msg.subtype === 'init') observed.namerTools = msg.tools;
+      if (msg.type === 'system' && msg.subtype === 'thinking_tokens') observed.namerThinking += 1;
     }
   } finally {
     clearTimeout(namerTimer);
@@ -249,6 +269,11 @@ function report(hadApiKey: boolean) {
       '6b. 只有一个链接的描述也起得出标题（含链接里的编号）',
       Boolean(observed.namerFacts?.title?.includes('1679')),
       `proposeCaseFacts 回: ${JSON.stringify(observed.namerFacts)}`,
+    ],
+    [
+      '6c. 起标题那一趟不进扩展思考（开着必超时，而超时长得跟没起过一样）',
+      observed.namerThinking === 0,
+      `system/thinking_tokens 收到 ${observed.namerThinking} 条`,
     ],
   ];
 

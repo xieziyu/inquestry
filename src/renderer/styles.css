@@ -680,6 +680,23 @@ button.primary:has(> .ic) { gap: 6px; }
 .tailcard { border-left-color: var(--dim-2) !important; padding-bottom: 12px; }
 .tailcard::after { content: none; }
 .tailcard.tail-closed { border-left-color: var(--ok) !important; }
+/* 还没定稿的那两档（未定稿 / 可定稿）：**这张卡是主干迟早要落到的地方，不是已经落到的地方。**
+   实心卡与已定稿那张一模一样，尾端于是读成"这次调查已经走完了"——而它恰恰是在说还没走完。
+
+   借形不借色（ui.md §5）：虚线边框在这套里已经是「这张卡还没定下来」（`.s-card.unclassified`），
+   退掉大半底色让点阵透上来，把它压成一处**留给结论的位置**。两样都不动尺寸——
+   高度是 `tailHeight()` 算好的，见上面那段红字。
+   🔴 **判据是 `status`，不是那三个记号**：记号全齐只说明闸通了（「可定稿」），
+   按它实心化的话，人还没按下定稿，屏幕上就先替他签了字。 */
+.tailcard.tail-open {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--panel) 45%, transparent);
+}
+/* 🔴 **远档整套退回去**：三成缩放下虚线那几个 1px 空档整段消失、`--panel` 与画布底色本就只差
+   三个色阶，两样加起来让这张卡连"有个盒子"都读不出来——而远档正是"这幅图长什么样"那一眼，
+   缺一块比早到终点糟得多。这一档本来就只剩色标与状态词（下面那三条 `display:none`），
+   「还没定稿」由那枚记号说，不必也不该由笔触说。 */
+.world[data-lod="far"] .tailcard.tail-open { border-style: solid; background: var(--panel); }
 /* 🔴 **已归档不给 `--bad`，留上面那档中性色。** 那个色说的是「被推翻」，半程放弃不是推翻
    （同一条见 `caseline.tsx` 的 `caseTerminal`：两个列表的 `.nd.shut` 与报告纸头的归档说明也都走中性）。 */
 .tailcard .ord { color: var(--dim); letter-spacing: .04em; }
