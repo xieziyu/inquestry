@@ -659,12 +659,16 @@ async function main() {
   db.prepare(`UPDATE cases SET status='closed' WHERE id='case_y'`).run();
   const idle = makeRunner('case_z', '登录偶发 502');
 
+  // ⚠️ 这一条曾经验的是"进行中的排在前面"，已推翻（`CASE_ORDER`）：那条规则会把刚定稿的
+  // case_y 压到几天前就停下的那几条后面，而首页那条轨道是按时间读的。
+  // 比 updated_at 单调不增而不是比一串 id：同毫秒的两条谁先谁后由 SQLite 定，
+  // 拿另一条查询的 id 顺序去对会在那种平局上假 FAIL
+  const listed = caseList(db, { limit: 9999 });
   check(
-    '切换栏排序：进行中的排在前面',
-    caseList(db).map((c) => c.id)[caseList(db).length - 1] === 'case_y',
-    caseList(db)
-      .map((c) => `${c.id}(${c.status})`)
-      .join(' '),
+    '切换栏排序：只按最近活动倒序，定稿的不因状态被压到后面',
+    listed.every((c, i) => i === 0 || listed[i - 1]!.updated_at >= c.updated_at) &&
+      listed.findIndex((c) => c.id === 'case_y') < listed.findIndex((c) => c.id === 'case_x'),
+    listed.map((c) => `${c.id}(${c.status}@${c.updated_at})`).join(' '),
   );
 
   // ── ③ 全局待办汇总：别的调查在等人，当前调查的快照里也数得出来 ──────────
@@ -1214,7 +1218,7 @@ async function main() {
   // 排序与最近列表同一条规则。按命中条数排的话，同一次调查在两份列表里的位置会对不上，
   // 而两份列表长得一模一样——人会以为搜到的是另一次调查
   check(
-    '检索结果的排序与最近列表同一条规则（进行中在前、同档按最近活动倒序）',
+    '检索结果的排序与最近列表同一条规则（按最近活动倒序）',
     (() => {
       // **拿 `caseList` 的实际顺序对，不在这儿把规则再写一遍**：
       // 重写一遍的话，这条检查验的是"我这次抄对了没有"，而不是"两处是不是同一条规则"
