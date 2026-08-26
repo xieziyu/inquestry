@@ -55,11 +55,18 @@ export function History({
   cases,
   onOpen,
   onReport,
+  onDeleted,
 }: {
   cases: CaseBrief[];
   onOpen: (caseId: string) => void;
   /** 切过去并直接翻到报告屏。列表上想看的多半是结论，不是再点一遍工作区。 */
   onReport: (caseId: string) => void;
+  /**
+   * 这一条真的删掉了。**工作区那排 tab 要靠它跟上**：库里已经没有这个 id 了，
+   * 而快照里那份列表只给最近 20 条 + 钉住的——"不在列表里"在那一侧不能当成"没了"，
+   * 所以删这件事得由删的人当场说一声。
+   */
+  onDeleted?: (caseId: string) => void;
 }) {
   const [term, setTerm] = useState('');
   const [status, setStatus] = useState<NonNullable<CaseListQuery['status']>>('all');
@@ -203,6 +210,7 @@ export function History({
         `已从库里删掉，但有 ${r.pendingBlobs} 份证据原文这次没能从磁盘上删掉（多半是被占用）。已经记下来了，下次启动会接着删。`,
       );
     }
+    onDeleted?.(id);
     setPage((prev) =>
       prev ? { total: Math.max(0, prev.total - 1), rows: prev.rows.filter((c) => c.id !== id) } : prev,
     );

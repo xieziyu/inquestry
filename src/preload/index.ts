@@ -8,6 +8,7 @@ import type {
   Snapshot,
 } from '../shared/ipc.js';
 import type { UiSettings } from '../shared/settings.js';
+import type { CaseTabs } from '../shared/tabs.js';
 import type { UpdateStatus } from '../shared/update.js';
 
 /** renderer 只能经这里够到 main —— contextIsolation 开、nodeIntegration 关。 */
@@ -48,6 +49,14 @@ const api: InquestryApi = {
     const handler = (_e: unknown, s: Snapshot) => cb(s);
     ipcRenderer.on('snapshot', handler);
     return () => ipcRenderer.off('snapshot', handler);
+  },
+  getTabs: () => ipcRenderer.invoke('tabs:get'),
+  putTabs: (tabs: CaseTabs) => ipcRenderer.invoke('tabs:put', tabs),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  onMenuCloseTab: (cb: () => void) => {
+    const handler = () => cb();
+    ipcRenderer.on('menu:closeTab', handler);
+    return () => ipcRenderer.off('menu:closeTab', handler);
   },
   updateStatus: () => ipcRenderer.invoke('update:status'),
   updateCheck: () => ipcRenderer.invoke('update:check'),

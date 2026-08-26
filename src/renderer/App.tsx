@@ -21,13 +21,25 @@ import { PendingCard } from './PendingCard.js';
 import { Rail, type Screen } from './Rail.js';
 import { Report } from './Report.js';
 import { Settings } from './Settings.js';
+import { Tabs } from './Tabs.js';
 import { useEscape } from './esc.js';
+import { closeTab, focusOrAppend, NO_TABS, tabForCloseKey, type CaseTabs } from '../shared/tabs.js';
 
 declare global {
   interface Window {
     inquestry: InquestryApi;
   }
 }
+
+/**
+ * tab 列表没落地、连退回都没退成时说的那句。
+ *
+ * **不许写成"已经退回来了"**：那时这排 tab 与正文可能压根不是同一个调查，
+ * 而人会照着屏幕上高亮的那个继续往下做——把线索发进另一次调查正是这一整套
+ * caseId 核对（`currentIf`）要防的事。说不准就说不准，并给一条自己能走的出路。
+ */
+const MISALIGNED =
+  '这一下没落到 main 那边，退回也没成：这排 tab 显示的调查可能与正文不是同一个。切一次调查或重开 app。原因在应用日志里。';
 
 export function App({
   /**
@@ -38,13 +50,57 @@ export function App({
 }: { initialScreen?: Screen } = {}) {
   const [snap, setSnap] = useState<Snapshot>(EMPTY_SNAPSHOT);
   /**
-   * 报告开着的是**哪个调查**的（D21：工作区与报告是两个屏，不是同屏两个 tab）。
+   * 打开着的调查（工作区顶上那排 tab）。计算全在 `shared/tabs.ts` 里，这一层只管落库。
    *
-   * 记调查而不是记一个 `screen` 枚举：切到别的调查时报告屏得自己让开——
-   * 留着的话，屏幕上是调查 B 的标题配调查 A 的章节，而报告正是这个工具唯一交出去的东西。
-   * 与确认条按 caseId 记是同一条理由，只是那一条的代价大得多。
+   * 🔴 **tab 只是视图**：关掉一个 tab 只是把它移出这排，main 那侧的运行时一点没动——
+   * 会话照旧跑、待办照旧等着人。这一条是整个 tab 模型的地基，别拿"关掉"去停任何东西。
+   *
+   * 列表由这一侧持有、每次变化落一次库（`putTabs`），main 只在启动时按它恢复当前调查。
+   * 反过来让 main 持有的话，"聚焦或追加""关掉之后落到谁"这些纯粹的视图规则
+   * 会被拆到两个进程里各管一段。
    */
-  const [reportOf, setReportOf] = useState<string | null>(null);
+  const [tabs, setTabs] = useState<CaseTabs>(NO_TABS);
+  /**
+   * 🔴 **算下一份 tab 列表只许从这儿起算，不许从 render 闭包里那个 `tabs` 起算。**
+   *
+   * 那几个手势里有等得很久才回来的：历史页删掉一行是 `await deleteCase(...)` 之后才回调
+   * `onDeleted`，而它捏着的是**发起删除那一帧**的 `tabs`。这中间人完全可以开一个、关一个——
+   * 那几下会被这条迟到的回调按旧列表整个盖掉，而屏幕上只是"刚才关掉的那个自己回来了"。
+   *
+   * 与 state 分开的原因是 state 要等下一次渲染：同一拍里连着两下手势时，第二下从
+   * `tabs` 起算读到的仍是第一下之前那份。渲染照旧用 `tabs`，这一份只作起算点。
+   */
+  const tabsRef = useRef<CaseTabs>(NO_TABS);
+  /** tab 列表的唯一写入口：两份一起换，别处不许单独 `setTabs`。 */
+  const takeTabs = useCallback((next: CaseTabs) => {
+    tabsRef.current = next;
+    setTabs(next);
+  }, []);
+  /**
+   * 只让最后一次意图收尾。同 `wantSeq`：两下挨得近时，早一次的落库回执回来得晚，
+   * 它那条失败复位会把更晚那一下已经生效的列表按旧的退回去。
+   */
+  const tabSeq = useRef(0);
+  /**
+   * 停在报告那一屏的是**哪几个调查**。工作区与报告是同一个 tab 的两种视图，
+   * 每个 tab 各记各的：切到别的 tab 再切回来，人回到的是他离开时那一屏。
+   *
+   * 按 caseId 记而不是一个全局的 `screen` 枚举：那样的话切一次调查就得决定
+   * "报告屏要不要让开"——留着是调查 B 的标题配调查 A 的章节，让开是把人正在读的报告收走。
+   */
+  const [reportTabs, setReportTabs] = useState<string[]>([]);
+  /**
+   * 这会儿有没有一次导出在跑，以及**是哪次调查的哪一种**。
+   *
+   * 🔴 **这一份必须住在应用级，不能留在报告屏那个组件里。** 报告屏按 caseId 重挂
+   * （`key={openCase}`，那是导出回执串到别的调查名下的唯一防线），于是组件局部的
+   * "导出中"会跟着切 tab 一起蒸发：切走再切回，同一次调查的按钮又亮了，人再按一次，
+   * 两条并着跑的导出会往**同一个文件名**上各写一遍。
+   *
+   * 提到这一层还白捡两件事：切走那阵子锁照旧攥着（`finally` 落在这一层，组件卸载不影响），
+   * 以及切回来时那句「导出中…」还在——重挂只丢回执，不丢"它还在跑"。
+   */
+  const [exporting, setExporting] = useState<{ caseId: string; kind: 'md' | 'img' } | null>(null);
   /**
    * 输入草稿**按调查分开存**。共用一个的话，在调查 A 写到一半切到调查 B ，输入框里还是那段字，
    * 一发送就把 A 写到一半的输入发进了 B 的会话——串到别的调查上，而且毫无提示。
@@ -100,8 +156,6 @@ export function App({
     () => [...snap.pending.map((p) => p.id), ...snap.gates.map((g) => g.id)],
     [snap.pending, snap.gates],
   );
-  /** 别处等着人的调查。D28 的整条理由：不汇总的话后台那条支线会静静挂死。 */
-  const elsewhere = useMemo(() => snap.cases.filter((c) => !c.current && c.todos > 0), [snap.cases]);
   /**
    * 舞台末端那张收束卡（ui.md §3.3）。出没出生、上面写什么全在 `tailSummary()` 里，
    * 这一层只把它递下去——判断散到组件里的话，"归档不印根因"这类规则就有了第二处出处。
@@ -125,6 +179,9 @@ export function App({
   useEffect(() => {
     void window.inquestry.snapshot().then(setSnap);
     void window.inquestry.envCheck().then(setEnv);
+    // main 那份已经过滤过已归档 / 已删的调查，也已经按 active 切好了当前调查，
+    // 这儿直接认它，不再自己切一次
+    void window.inquestry.getTabs().then(takeTabs);
     return window.inquestry.onSnapshot((s) => s && setSnap(s));
   }, []);
 
@@ -228,24 +285,154 @@ export function App({
    */
   const anyTodo = snap.cases.some((c) => c.todos > 0) || todos.length > 0;
 
-  /** 打开某次调查 = 切过去 + 翻到工作区。切换本身不中断任何一个（D28）。 */
+  /** 这个 tab 翻到报告 / 翻回工作区。两句都按 caseId 记，见 `reportTabs` 上那段。 */
+  const showReport = (id: string) =>
+    setReportTabs((r) => (r.includes(id) ? r : [...r, id]));
+  const hideReport = (id: string) => setReportTabs((r) => r.filter((x) => x !== id));
+
+  /**
+   * tab 列表换了一份：落库 + 让 main 跟上"现在在看哪一个"。
+   *
+   * **切换本身不中断任何一个调查**（D28）：main 持有全部运行时，这一下只是换个投影看。
+   * 一个 tab 都不剩时要走 `newCase()` 把 main 那侧的当前调查也清掉——不清的话，
+   * 从 rail 点回工作区会看到一屏没有任何 tab 的调查界面。
+   *
+   * `shared/tabs.ts` 里那几个算子在没变化时原样返回入参，所以这一句同时挡掉了
+   * "点当前这个 tab"引起的一轮多余 IPC。
+   *
+   * 🔴 **三条 IPC 的回执都要接住。** 一度全 `void` 丢掉，于是落库失败时界面照常显示新的
+   * 那几个 tab、重开 app 却回到上一次那份——一个只在下次启动才现形的谎报，
+   * 而且那次 reject 还会变成没人接的 unhandled rejection。失败就**按 main 那边的实际状态
+   * 退回来**并说出来：这一层是副本，main 那份才算数。
+   *
+   * **不把这函数变成要 await 的**：调用点是一串点击回调，async 化会一路传染下去。
+   */
+  const applyTabs = (next: CaseTabs) => {
+    if (next === tabsRef.current) return;
+    takeTabs(next);
+    const mine = ++tabSeq.current;
+    void (async () => {
+      try {
+        await window.inquestry.putTabs(next);
+        // 切当前调查与"一个都不剩"是同一件事的两档，一起接住：切不过去时这一层说的
+        // "在看哪一个"就与 main 那边不是同一个了，而屏幕上没有任何异样
+        if (next.active) await window.inquestry.switchCase(next.active);
+        else await window.inquestry.newCase();
+      } catch (err) {
+        console.error('[app] 这一下 tab 没落地', err);
+        // 后面还有更晚的一下在飞，收尾让给它——这一次的结果已经不是人要的那个状态了
+        if (mine !== tabSeq.current) return;
+        const actual = await window.inquestry.getTabs().catch(() => null);
+        if (mine !== tabSeq.current) return;
+        if (!actual) return setNotice(MISALIGNED);
+        takeTabs(actual);
+        /**
+         * 🔴 **对齐要连"在看哪一个"一起对，只把列表退回来是不够的。** 两条路都会留下
+         * 「这排 tab 说甲、正文是乙」——而那正是本该由 `currentIf` 那套护栏挡住的那种串号：
+         *
+         * - 新建调查那一下 main 已经选中了新 case，落库却失败了：列表退回旧的，
+         *   正文还是新调查
+         * - 落库成了、切当前调查失败了：`actual` 是**新**列表，退回等于什么都没退，
+         *   高亮着新 tab 而正文还是旧调查
+         *
+         * 所以按 main 那份实际列表补一发切换。它再失败就只能说实话（`MISALIGNED`）——
+         * 那时两边确实可能不是同一个调查，而一句"已经退回来了"是彻头彻尾的谎报。
+         */
+        try {
+          if (actual.active) await window.inquestry.switchCase(actual.active);
+          else await window.inquestry.newCase();
+        } catch (err2) {
+          console.error('[app] 退回之后也没能把当前调查对齐', err2);
+          if (mine !== tabSeq.current) return;
+          return setNotice(MISALIGNED);
+        }
+        if (mine !== tabSeq.current) return;
+        setNotice('这一下只落地了一半：屏幕上这排 tab 已经与 main 那边对齐了。原因在应用日志里。');
+      }
+    })();
+  };
+
+  /**
+   * 关掉一个 tab。**只是移出视图**：那次调查照旧在 main 里跑，待办照旧等着人
+   * （要收掉它走的是报告屏上的定稿 / 归档）。
+   *
+   * 关掉最后一个之后回首页：工作区这时是一屏什么都没有的空屏，而人下一步多半是新建。
+   *
+   * 叫得动这一条的只有 tab 上那枚叉、以及 tab 条在场时的 ⌘W（`tabForCloseKey`）。
+   *
+   * 🔴 **移出一个 tab 只有两条路：人自己关（这一条），以及重启时过滤掉已收尾 / 已删的
+   * （main 的 `restoreTabs`）。收尾本身不当场收走它**——一度写成"定稿即摘掉 tab"，
+   * 它有两条都会把人弹走的死路：
+   *
+   * - 定稿与归档都只对**当前**调查生效（两条 IPC 都走 `currentIf`），所以"当场摘掉"
+   *   必然发生在人正盯着他刚定出来的那份报告时，而收尾之后要做的正是导出它
+   * - 历史页点一条已收尾的调查看报告，同样会被当场摘掉再弹到别的调查上，旧报告根本看不成
+   *
+   * 一个收了尾的调查确实不属于"手上开着的几条线索"，所以它只是不再跨重启活下来。
+   */
+  const closeOne = (id: string) => {
+    const next = closeTab(tabsRef.current, id);
+    if (next === tabsRef.current) return;
+    applyTabs(next);
+    if (!next.open.length) setScreen('home');
+  };
+
+  /** 打开某次调查 = 聚焦它的 tab（没有就开一个）+ 翻到工作区。 */
   const open = (id: string) => {
-    void window.inquestry.switchCase(id);
+    applyTabs(focusOrAppend(tabsRef.current, id));
     setScreen('workspace');
   };
 
   /**
    * 从列表直奔某次调查的报告屏。
    *
-   * `reportOf` 记的是 caseId 而报告屏认的是「它等于当前调查」，所以先记后切两句缺一不可：
+   * `reportTabs` 记的是 caseId 而报告屏认的是「它等于当前调查」，所以先记后切两句缺一不可：
    * 切换要等下一次快照（最多 60ms）才在这一屏生效，这中间显示的是**上一个**调查的工作区。
    * 那一拍与 `open()` 那条是同一个，不额外补一个"正在切"的中间态——补了反而多一屏闪烁。
    */
   const openReport = (id: string) => {
-    setReportOf(id);
-    void window.inquestry.switchCase(id);
-    setScreen('workspace');
+    showReport(id);
+    open(id);
   };
+
+  // tab 关掉了，它停在报告那一屏的记忆也跟着清掉——再打开是从工作区开始，
+  // 与"从没开过"是同一个起点
+  useEffect(() => {
+    setReportTabs((r) => {
+      const next = r.filter((id) => tabs.open.includes(id));
+      return next.length === r.length ? r : next;
+    });
+  }, [tabs.open]);
+
+  /**
+   * ⌘W。**加速键归应用菜单管**，renderer 里的 keydown 拦不住它（`main/index.ts` 的
+   * `installMenu`），所以这一下是菜单发过来的一条消息。
+   *
+   * 关不关得了由 `tabForCloseKey` 判，**落点归属看这一屏是不是某个 tab 的内容**：
+   * `screen === 'workspace'` 这一档同时盖住工作区与报告——报告是同一个 tab 的另一种视图
+   * （见下面那条早返回），而首页 / 历史 / 设置与任何一个 tab 都无关。
+   *
+   * 判不了就回退到系统默认——关窗口，**这一句必须由这一侧发回去**：菜单那边不知道
+   * 人在哪一屏、手上有没有 tab，在那儿顺手关一下窗口的话，有 tab 时会连窗口一起关掉。
+   */
+  useEffect(
+    () =>
+      window.inquestry.onMenuCloseTab(() => {
+        const id = tabForCloseKey(tabsRef.current, screen === 'workspace');
+        if (id) closeOne(id);
+        else void window.inquestry.closeWindow();
+      }),
+    // `tabsRef` 免掉了 tabs 这条依赖：这个订阅只需要跟着屏切换重挂
+    [screen],
+  );
+
+  /**
+   * 打开着的那排 tab。**造一个元素，工作区与报告屏共用它**：两处各写一遍的话，
+   * "点一下切到哪个视图""叉子关掉之后落到谁"这两件事迟早只在其中一屏跟得上。
+   */
+  const tabStrip = (
+    <Tabs tabs={tabs.open} active={tabs.active} briefs={snap.cases} onPick={open} onClose={closeOne} />
+  );
 
   const shell = (content: React.ReactNode) => (
     <div className="app">
@@ -274,14 +461,23 @@ export function App({
         cases={snap.cases}
         onOpen={open}
         // 建完就翻到工作区：`createCase` 会把新调查设成当前调查，
-        // 而人下一步想做的一定是点「开始排查」
-        onCreated={() => setScreen('workspace')}
+        // 而人下一步想做的一定是点「开始排查」。新的这一次同样开一个自己的 tab
+        onCreated={open}
         onAll={() => setScreen('history')}
       />,
     );
   }
   if (screen === 'history')
-    return shell(<History cases={snap.cases} onOpen={open} onReport={openReport} />);
+    return shell(
+      <History
+        cases={snap.cases}
+        onOpen={open}
+        onReport={openReport}
+        // 删掉的那条当场关掉它的 tab：库里已经没有这个 id 了，留着的话点下去是一次空切换，
+        // 而屏幕上什么都不会发生
+        onDeleted={closeOne}
+      />,
+    );
   if (screen === 'settings') return shell(<Settings />);
 
   // rail 上工作区那一格随时点得到，但手上不一定有调查。
@@ -389,13 +585,36 @@ export function App({
   };
 
   /**
-   * 报告是**另一个屏**，整屏换掉（D21）：主角、密度、能做的事都不一样。
+   * 报告是**这个 tab 的另一种视图**，整屏换掉：主角、密度、能做的事都不一样。
    * 挂在这儿而不是塞进主区，是为了让工作区的顶栏与底部状态栏一并让开——
    * 那条状态栏说的是"这一轮在跑什么"，而报告这一屏上没有"这一轮"。
    * 收尾两档（定稿 / 归档）也在那边：先看这份能不能交出去，再决定收不收。
+   *
+   * 停在哪一屏**每个 tab 各记各的**（`reportTabs`）：切到别的 tab 再切回来，
+   * 人回到的是他离开时那一屏。tab 条不出现在这一屏上——报告是一份要通读的东西，
+   * 换调查先按「工作区」退回去。
    */
-  if (reportOf === openCase) {
-    return shell(<Report snap={snap} onBack={() => setReportOf(null)} onNotice={setNotice} />);
+  if (reportTabs.includes(openCase)) {
+    return shell(
+      /**
+       * 🔴 **`key` 按调查给，让它跟着换调查重挂。** 不给的话 React 复用同一个实例，
+       * 而那一屏的导出回执与预览时间戳是组件局部的：在调查 A 上发起导出、直接点 B 的 tab
+       * （B 也停在报告屏），A 的「导出中」会挂在 B 这一屏上，A 的回执迟到之后
+       * 印在 B 的报告底下——一份交付物的落点被记到了另一次调查名下。
+       *
+       * 报告屏画上 tab 条之后这条路才真的走得到：在那之前换调查必经工作区，那一跳
+       * 本来就把这一屏卸掉了。**"进行中"不受重挂影响**，它在上面那个应用级的 `exporting` 里。
+       */
+      <Report
+        key={openCase}
+        snap={snap}
+        tabs={tabStrip}
+        exporting={exporting}
+        onExporting={setExporting}
+        onBack={() => hideReport(openCase)}
+        onNotice={setNotice}
+      />,
+    );
   }
 
   return shell(
@@ -417,17 +636,8 @@ export function App({
           )}
         </span>
         <div className="headacts">
-          {/* 跨案汇总的三个落点之一（D28）：别处那条卡在 ask_operator 上的支线，
-              在这一屏上只剩这一枚。它是个跳转，所以长在动作那一侧 */}
-          {elsewhere.length > 0 && (
-            <button
-              className="pill todo other"
-              title={elsewhere.map((c) => `${c.title}（${c.todos}）`).join('\n')}
-              onClick={() => void window.inquestry.switchCase(elsewhere[0]!.id)}
-            >
-              别的调查 {elsewhere.reduce((n, c) => n + c.todos, 0)}
-            </button>
-          )}
+          {/* 跨案汇总（D28）在这一屏上的落点是下面那排 tab 上的暖色点：
+              别处那条卡在 ask_operator 上的支线，只要它还开着 tab 就一直标在那儿 */}
           {/* 两条时间线不是顶栏的两个 tab：调查线属于工作区，系统线属于报告（ui.md §1）。
               收尾也在那一屏里——先看这份能不能交出去，再决定收不收 */}
           {/* 「预览」是这句话的一部分，不是挂在「报告」后面的一个小字：
@@ -438,7 +648,7 @@ export function App({
             // 删它之前先看那两段
             className="toreport"
             title={frozen ? '这次调查已经收尾，报告是冻住的那一份' : '按现有数据看报告：可以就此定稿，也可以直接导出半成品'}
-            onClick={() => setReportOf(openCase)}
+            onClick={() => showReport(openCase)}
           >
             <Icon name="report" />
             {frozen ? '查看报告' : '预览报告'}
@@ -450,6 +660,11 @@ export function App({
         </div>
       </header>
       <div className="pagebody ws">
+
+      {/* 打开着的调查。**长在内容区里而不是顶栏上**：顶栏是定高的整幅一格、还兼着拖拽区，
+          46px 里已经装了工作区路径与两枚动作。报告屏上是同一个元素（那一屏是同一个 tab 的
+          另一种视图）；首页与历史本来就是"去开一个 tab"的入口，设置屏与任何调查都无关 */}
+      {tabStrip}
 
       {/* 环境不通的横幅只在工作区出：设置屏那一节把同一件事说得更细，
           两处都挂的话人会以为是两个问题。
@@ -464,7 +679,7 @@ export function App({
       {frozen && (
         <div className="banner frozen">
           <span>{frozenText(snap.case)}</span>
-          <button onClick={() => setReportOf(openCase)}>看报告</button>
+          <button onClick={() => showReport(openCase)}>看报告</button>
         </div>
       )}
 
@@ -496,7 +711,7 @@ export function App({
         onExcerpt={showExcerpt}
         onStopLane={(lane) => void window.inquestry.stopLane(openCase, lane)}
         onRename={(title) => window.inquestry.renameCase(openCase, title)}
-        onReport={() => setReportOf(openCase)}
+        onReport={() => showReport(openCase)}
         todos={
           <>
             {snap.pending.map((p) => (

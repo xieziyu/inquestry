@@ -35,8 +35,8 @@ export function Intake({
   /** 由首页取一次交下来；还没到手时按"探测不到"渲染，不要自己再取一次。 */
   opts: IntakeOptions | null;
   onSubmit: (d: IntakeDraft) => Promise<IntakeResult>;
-  /** 建成了。由首页负责翻到工作区——这个组件不知道外面有几个屏。 */
-  onCreated: () => void;
+  /** 建成了，带上新调查的 id。由首页负责翻到工作区——这个组件不知道外面有几个屏。 */
+  onCreated: (caseId: string) => void;
 }) {
   // 存原字符串而不是 null：输入阶段做 trim 会把目录名里刚敲下的空格吃掉
   const [root, setRoot] = useState('');
@@ -88,7 +88,7 @@ export function Intake({
         // 建完就清空：首页不会自己换掉，留着上一次的问题会让下一次误以为没提交成功
         setQuestion('');
         setSubmitting(false);
-        onCreated();
+        onCreated(r.caseId);
       } else {
         setRootError(r.error);
         setSubmitting(false);
