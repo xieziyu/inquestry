@@ -27,6 +27,7 @@ import { StepSheet } from './StepSheet.js';
 import { TailCard } from './TailCard.js';
 import { Icon } from './Icon.js';
 import { kindLabel, sayLabel, statusLabel } from './labels.js';
+import { useEscape } from './esc.js';
 
 /**
  * 工作区的舞台：**一整幅可缩放拖拽的画布**（ui.md §3）。
@@ -376,14 +377,9 @@ export function Stage({
     setOpenAsides(next);
   };
 
-  // Esc 关浮层。待办卡自己没有全局键，⌘↵ 由拿着焦点的那张卡收，不经过这儿
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && picked) setPicked(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [picked]);
+  // Esc 关浮层。待办卡自己没有全局键，⌘↵ 由拿着焦点的那张卡收，不经过这儿。
+  // 走 `useEscape` 而不是自己挂监听：浮层里还能再开一层原文，那一下得先归上面那层
+  useEscape(!!picked, () => setPicked(null));
 
   /** 点开一张卡时它可能正落在浮层底下：**只在真被盖住时才挪画布**，每点一张都居中会晕。 */
   const ensureVisible = (id: string) => {
