@@ -21,6 +21,7 @@ import { PendingCard } from './PendingCard.js';
 import { Rail, type Screen } from './Rail.js';
 import { Report } from './Report.js';
 import { Settings } from './Settings.js';
+import { useEscape } from './esc.js';
 
 declare global {
   interface Window {
@@ -195,6 +196,8 @@ export function App({
   const showExcerpt = async (callId: string, anchor: string | null, title: string) => {
     setExcerpt({ title, body: await window.inquestry.excerpt(callId, anchor) });
   };
+  // 原文浮层是从详情抽屉里点开的，Esc 得先关它——抽屉那一层同样听 Esc，见 `esc.ts`
+  useEscape(!!excerpt, () => setExcerpt(null));
 
   const caseId = snap.case?.id ?? null;
   const input = caseId ? (drafts[caseId] ?? '') : '';

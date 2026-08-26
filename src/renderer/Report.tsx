@@ -34,6 +34,7 @@ import { PaperFoot, ReportPaper } from './ReportPaper.js';
 import { reportInput, reportPlan, SHAPE_COPY, type ReportPlan } from '../shared/report.js';
 import { reportMarkdown } from '../shared/markdown.js';
 import { stateFillable } from './drafts.js';
+import { useEscape } from './esc.js';
 
 /** 回执里只印文件名：路径已经在前半句里了，再重复一遍整条路径会把那一行挤爆。 */
 const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1);
@@ -726,12 +727,8 @@ function ExportViewer({
   const [copied, setCopied] = useState<'ok' | 'fail' | null>(null);
   const md = reportMarkdown(input, { generatedAt: stamp });
 
-  // Esc 关掉。**清理函数不能省**：这一层随 state 卸载，留着监听会在下一次打开时叠一层
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  // Esc 关掉。走 `esc.ts` 那一摞：全应用的 Esc 只归最后打开的那一层
+  useEscape(true, onClose);
 
   return (
     <>
