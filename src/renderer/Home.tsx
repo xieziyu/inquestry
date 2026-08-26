@@ -24,7 +24,8 @@ export function Home({
   /** 快照里那份最近列表（`caseList` 已按最近活动倒序排过）。 */
   cases: CaseBrief[];
   onOpen: (caseId: string) => void;
-  onCreated: () => void;
+  /** 建成了；带上新调查的 id——它要在工作区那排 tab 上长出自己的一个。 */
+  onCreated: (caseId: string) => void;
   onAll: () => void;
 }) {
   // 可选项在这一层取一次交给新建面板；探测要 spawn 一次 CLI，不该由面板每次重挂时重取

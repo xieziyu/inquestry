@@ -21,8 +21,10 @@ import type {
   PendingGate,
   Snapshot,
 } from '../../shared/ipc.js';
+import { EMPTY_SNAPSHOT } from '../../shared/ipc.js';
 import type { UpdateStatus } from '../../shared/update.js';
 import { DEFAULT_UI_SETTINGS } from '../../shared/settings.js';
+import { focusOrAppend, type CaseTabs } from '../../shared/tabs.js';
 import { incident, report, steps as rawSteps } from '../../../scripts/fixtures/report-case.js';
 
 const now = Date.now();
@@ -290,17 +292,28 @@ steps.push(
  */
 export const PREVIEW_STEPS = steps;
 
+/**
+ * 五行**各占一档节点**（等你 / 运行中 / 待开始 / 已定稿 / 已归档）：少一档就等于那一档的配色没人看过。
+ *
+ * `current` 一律给 false，由 `view()` 按这会儿切到哪个调查现算——预览里的 `switchCase`
+ * 是真会切的（tab 条要在这儿调），写死一个的话切过去之后两处会各说各的。
+ *
+ * 当前调查**故意不是最近那条**：轨道按时间排，当前是哪一条只由 `.cur` 说。
+ * 把它放在第一行的话，"当前被提到最前"与"它本来就在最前"长得一模一样——
+ * 所以默认切在 c1 上，而排在它前面的是 c2。
+ */
 const CASES: CaseBrief[] = [
-  // 五行**各占一档节点**（运行中 / 等你 / 待开始 / 已定稿 / 已归档）：少一档就等于那一档的配色没人看过。
+  { id: 'c2', title: '推送在 12:40 之后整体延迟', status: 'open', updatedAt: now - 2 * min, current: false, todos: 1, running: false, started: true, loaded: true },
   // 这一条要的是「运行中」那颗，所以待办给 0——挂着待办的话它显示的是「等你」那颗
-  { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 2 * min, current: false, todos: 0, running: true, started: true, loaded: true },
-  // 当前调查**故意不是最近那条**：轨道按时间排，当前是哪一条只由 `.cur` 说。
-  // 把 current 放在第一行的话，"当前被提到最前"与"它本来就在最前"长得一模一样
-  { id: 'c2', title: '推送在 12:40 之后整体延迟', status: 'open', updatedAt: now - 40 * min, current: true, todos: 1, running: false, started: true, loaded: true },
+  { id: 'c1', title: '订单提交产生了两条重复记录', status: 'open', updatedAt: now - 8 * min, current: false, todos: 0, running: true, started: true, loaded: true },
   // 点开看过一眼、一轮都没跑过：列表上该是「待开始」，与它点进去底部那句一致
   { id: 'c3', title: '网关偶发 502，只有华东节点', status: 'open', updatedAt: now - 5 * 3600_000, current: false, todos: 0, running: false, started: false, loaded: true },
   { id: 'c4', title: '搜索结果里混进了已下架的节目', status: 'closed', updatedAt: now - 3 * 86400_000, current: false, todos: 0, running: false, started: true, loaded: false },
   { id: 'c5', title: '导出任务卡在 99%', status: 'aborted', updatedAt: now - 9 * 86400_000, current: false, todos: 0, running: false, started: true, loaded: false },
+  // 后两条只为把 tab 条填到四五个（`?tabs=5`）：收了尾的调查不占 tab，所以能上 tab 条的
+  // 只有 `open` 那几条。标题**故意一长一短**——一排收缩之后省略号出不出得来只有长的那种看得见
+  { id: 'c6', title: '账单导出的金额与后台对不上，只在跨月那几天', status: 'open', updatedAt: now - 2 * 3600_000, current: false, todos: 0, running: false, started: true, loaded: true },
+  { id: 'c7', title: 'CDN 回源命中率掉到 47%', status: 'open', updatedAt: now - 26 * 3600_000, current: false, todos: 0, running: false, started: true, loaded: false },
 ];
 
 /**
@@ -446,10 +459,93 @@ const FULL: Snapshot = {
   report: REPORT,
 };
 
-/** 刚建完、一步都没跑的样子：空态与"什么都有"是两种要分别看的版面。 */
+/**
+ * 别的两个 tab 各自的快照。**tab 条要调版面就得真切得动**——只有一份快照的话，
+ * 点哪个 tab 屏幕都不变，"切过去之后这一屏该整个换掉"这件事在预览里根本看不出来。
+ *
+ * 两份各挑一档：c2 挂着一条待办、没在跑（tab 上是暖色点），c3 一轮都没跑过（不点）。
+ * 与 {@link CASES} 里那两行的 `todos` / `running` **必须对得上**：对不上的话，
+ * tab 上的点与切过去看到的界面说的是两回事，而这正是这一版要防的那种谎报。
+ */
+const stub = (c: CaseBrief): Snapshot => ({
+  ...EMPTY_SNAPSHOT,
+  cases: CASES,
+  case: {
+    ...FULL.case!,
+    id: c.id,
+    title: c.title,
+    question: c.title,
+    status: c.status,
+    verdictShape: c.status === 'closed' ? 'chain' : c.status === 'aborted' ? 'open' : null,
+  },
+});
+
+const OTHERS: Record<string, Snapshot> = {
+  c2: {
+    ...FULL,
+    case: {
+      ...FULL.case!,
+      id: 'c2',
+      title: '推送在 12:40 之后整体延迟',
+      question: '12:40 之后推送整体延迟十几分钟，先看是不是队列积压。',
+      projectRoot: '/Users/ziyu/Projects/push-gateway',
+    },
+    busy: false,
+    backgroundLanes: 0,
+    liveLanes: [],
+    steps: steps.slice(0, 3),
+    chat: CHAT.slice(0, 8),
+    pending: [PENDING[0]!],
+    gates: [],
+    takeover: false,
+  },
+  c3: {
+    ...FULL,
+    case: {
+      ...FULL.case!,
+      id: 'c3',
+      title: '网关偶发 502，只有华东节点',
+      question: '华东节点偶发 502，其余机房没有。',
+      projectRoot: '/Users/ziyu/Projects/gateway',
+    },
+    sessionStatus: 'idle',
+    busy: false,
+    takeover: false,
+    context: null,
+    backgroundLanes: 0,
+    liveLanes: [],
+    steps: [],
+    incident: [],
+    pending: [],
+    gates: [],
+    chat: [],
+  },
+};
+
+/**
+ * 刚建完、一步都没跑的样子：空态与"什么都有"是两种要分别看的版面。
+ *
+ * 🔴 **`cases` 里必须有它自己那一条。** 一度写成空数组（只为看首页那句「暂无记录」），
+ * 而当前调查在真快照里一定在列表上（main 把它钉住），于是 tab 条查不到 brief、
+ * 只好把裸 caseId 印上去——一个生产里不可能出现的版面。刚建完的首页本来也不是空的：
+ * 那一行就是他刚建的这次调查。
+ */
 const EMPTY_LIKE: Snapshot = {
   ...FULL,
-  cases: [],
+  // 「待开始」那一档：建完还没跑过一轮，与它点进去底部那句一致
+  cases: [
+    {
+      id: FULL.case!.id,
+      title: FULL.case!.title,
+      status: 'open',
+      updatedAt: now,
+      current: true,
+      todos: 0,
+      running: false,
+      started: false,
+      loaded: true,
+    },
+  ],
   case: { ...FULL.case!, status: 'open' },
   sessionStatus: 'idle',
   takeover: false,
@@ -535,15 +631,91 @@ function inert(name: string) {
 
 export function installPreviewApi(): void {
   const params = new URLSearchParams(location.search);
-  const snap = params.has('empty') ? EMPTY_LIKE : FULL;
   const listeners = new Set<(s: Snapshot) => void>();
-  // 快照是活的：闸门放行 / 待办回填要真的从列表里消失，否则那几张卡的收尾动作看不出对不对
-  let current = snap;
-  const push = () => listeners.forEach((cb) => cb(current));
+  /**
+   * 每个调查一份快照，**切 tab 是真切**：只有一份的话，点哪个 tab 屏幕都不变，
+   * 而"切过去整屏换掉"正是这一版要看的东西。
+   */
+  const snaps: Record<string, Snapshot> = {
+    // 没单独造过快照的那几条也要切得过去：tab 条上点下去落到一屏空白的话，
+    // 看起来像是切换坏了，而其实只是这份夹具没给数据
+    ...Object.fromEntries(CASES.map((c) => [c.id, stub(c)])),
+    ...OTHERS,
+    c1: params.has('empty') ? EMPTY_LIKE : FULL,
+  };
+  let currentId = 'c1';
+  /** 当前是哪个调查由这一层现算，夹具里不写死——写死的话切过去之后两处各说各的。 */
+  const view = (): Snapshot => {
+    const s = snaps[currentId] ?? EMPTY_SNAPSHOT;
+    return { ...s, cases: s.cases.map((c) => ({ ...c, current: c.id === currentId })) };
+  };
+  const push = () => listeners.forEach((cb) => cb(view()));
   const patch = (p: Partial<Snapshot>) => {
-    current = { ...current, ...p };
+    snaps[currentId] = { ...(snaps[currentId] ?? EMPTY_SNAPSHOT), ...p };
     push();
   };
+  /** 这一层里读"当前那份"的地方都走它——`snaps[currentId]` 会随切换换掉。 */
+  const cur = (): Snapshot => snaps[currentId] ?? EMPTY_SNAPSHOT;
+  /**
+   * 收尾之后**那份调查概览也要跟着改**：tab 条是照概览上的 `status` 决定还留不留的，
+   * 只改当前这份快照的话，定稿完 tab 还挂在那儿，而真 app 里它当场就没了。
+   */
+  const froze = (caseId: string, status: CaseBrief['status']) => {
+    const row = CASES.find((c) => c.id === caseId);
+    if (row) row.status = status;
+    patch({ cases: [...CASES] });
+  };
+  /**
+   * 起手开着几个 tab。`?tabs=N` 换档：一个、两个、挤到要省略的那几档，
+   * 以及**多到均分不下、整排改横向滚**的那一档（`?tabs=12` 起）——tab 宽度是可收缩的，
+   * 只看两个的话省略号与横向滚那两版永远没人看过。
+   *
+   * 夹具里的真调查不够用时**现造几条填上**：那一档看的是版面，不是数据。
+   */
+  // **只取 `open` 那几条**：起手这排就是"重启恢复回来"的那一排，而恢复会过滤掉收了尾的
+  // （`backend/db/tabs.ts` 的 `restoreCaseTabs`）。收尾之后那个 tab 照旧留着，只是活不过下一次重启。
+  // `?empty` 那一档只有它自己一条调查（那份快照的 `cases` 就只有一行），
+  // 多开的 tab 在那儿查不到 brief——而"tab 上印着裸 caseId"是生产里不会有的版面
+  const openable = params.has('empty')
+    ? ['c1']
+    : ['c1', ...CASES.filter((c) => c.status === 'open' && c.id !== 'c1').map((c) => c.id)];
+  const want = Math.max(Number(params.get('tabs') ?? 2) || 2, 1);
+  // 标题**长短交替**：横向滚那一档要同时看得到省略号与短标题旁边多出来的空当
+  const FILL = ['定时任务在跨月那几天重复执行', '登录验证码偶发发不出', 'MQ 堆积'];
+  while (!params.has('empty') && openable.length < want) {
+    const id = `cfill${openable.length}`;
+    const row: CaseBrief = {
+      id,
+      title: `${FILL[openable.length % FILL.length]}（${openable.length}）`,
+      status: 'open',
+      updatedAt: now - openable.length * 3600_000,
+      current: false,
+      todos: 0,
+      running: false,
+      started: true,
+      loaded: false,
+    };
+    CASES.push(row);
+    snaps[id] = stub(row);
+    openable.push(id);
+  }
+  const tabCount = Math.min(want, openable.length);
+  let tabs: CaseTabs = { open: openable.slice(0, tabCount), active: 'c1' };
+
+  /**
+   * 落库 / 切当前调查**故意失败几次**（`?failput[=次数]` / `?failswitch[=次数]`，默认 1 次）。
+   *
+   * 这两条失败路在浏览器里没有别的办法触发，而它们正是"界面显示的与 main 那边不是同一份"
+   * 那种谎报唯一的防线：退回、补切、以及退不回来时那句不撒谎的横幅。同 `?upd=error`——
+   * 不给档的话，这几条路永远没人看过。
+   */
+  const budget = (key: string) => (params.has(key) ? Number(params.get(key)) || 1 : 0);
+  const hangExport = () =>
+    params.has('slowexport')
+      ? new Promise((r) => setTimeout(r, Number(params.get('slowexport')) || 4000))
+      : Promise.resolve();
+  let putLeft = budget('failput');
+  let switchLeft = budget('failswitch');
 
   const api: InquestryApi = {
     envCheck: async () => ({ loggedIn: true, email: 'you@example.com' }),
@@ -552,12 +724,46 @@ export function installPreviewApi(): void {
       params.has('noroots') ? { ...INTAKE_OPTIONS, recentRoots: [] } : INTAKE_OPTIONS,
     // 浏览器里没有系统目录选择器，给个像样的路径，好让「选中之后」那一版也看得到
     pickProjectRoot: async () => '/Users/ziyu/Projects/order-api',
-    createCase: async () => ({ ok: true }),
+    /**
+     * **建完就把当前调查换成新建那个**，与 main 一样（`adopt` 里那一下 `select`）。
+     * 只回一个 id 的话，"main 已经选中新 case、而 tab 落库失败"那条错配路
+     * 在预览里复现不出来——那正是它要防的。
+     */
+    createCase: async () => {
+      const id = `cnew${CASES.length}`;
+      const row: CaseBrief = {
+        id,
+        title: '新建的一次调查',
+        status: 'open',
+        updatedAt: Date.now(),
+        current: false,
+        todos: 0,
+        running: false,
+        started: false,
+        loaded: true,
+      };
+      CASES.unshift(row);
+      snaps[id] = stub(row);
+      currentId = id;
+      push();
+      return { ok: true, caseId: id };
+    },
     renameCase: async (_id, title) => {
-      patch({ case: current.case && { ...current.case, title } });
+      const meta = cur().case;
+      patch({ case: meta && { ...meta, title } });
       return true;
     },
-    switchCase: async () => {},
+    // 真切：tab 条要在这儿调版面，切不动的话点哪个 tab 屏幕都不变
+    switchCase: async (caseId) => {
+      if (switchLeft > 0) {
+        switchLeft -= 1;
+        throw new Error('(预览) 这一次切当前调查故意失败');
+      }
+      if (!snaps[caseId]) return;
+      currentId = caseId;
+      tabs = focusOrAppend(tabs, caseId);
+      push();
+    },
     newCase: async () => {},
     start: async () => {},
     restart: async () => {},
@@ -566,30 +772,39 @@ export function installPreviewApi(): void {
       return 'ok';
     },
     send: async (_id, text) => {
-      patch({ chat: [...current.chat, { id: `mem_${current.chat.length}`, role: 'user', text, at: Date.now() }] });
+      patch({ chat: [...cur().chat, { id: `mem_${cur().chat.length}`, role: 'user', text, at: Date.now() }] });
       return true;
     },
     interrupt: async () => patch({ busy: false, sessionStatus: 'ended' }),
     stopLane: async (_id, lane) => {
-      patch({ liveLanes: current.liveLanes.filter((l) => l !== lane), backgroundLanes: 0 });
+      patch({ liveLanes: cur().liveLanes.filter((l) => l !== lane), backgroundLanes: 0 });
       return true;
     },
-    requestClosing: async () => ({ missing: current.closingGaps, asked: true, suggestion: current.shapeSuggestion }),
+    requestClosing: async () => ({ missing: cur().closingGaps, asked: true, suggestion: cur().shapeSuggestion }),
     closeCase: async () => {
-      if (current.closingGaps.length) return { ok: false, missing: current.closingGaps };
+      if (cur().closingGaps.length) return { ok: false, missing: cur().closingGaps };
       // 真 main 在落库那一刻现算（`closeCase()`）；这里照它的来源取，别另挑一个
-      patch({
-        case: current.case && { ...current.case, status: 'closed', verdictShape: current.shapeSuggestion.shape },
-      });
+      const meta = cur().case;
+      patch({ case: meta && { ...meta, status: 'closed', verdictShape: cur().shapeSuggestion.shape } });
+      froze(currentId, 'closed');
       return { ok: true, status: 'closed' };
     },
     archiveCase: async () => {
-      patch({ case: current.case && { ...current.case, status: 'aborted', verdictShape: 'open' } });
+      const meta = cur().case;
+      patch({ case: meta && { ...meta, status: 'aborted', verdictShape: 'open' } });
+      froze(currentId, 'aborted');
       return true;
     },
     // 真的从夹具里摘掉，不只回 true：历史页删完一行之后还要看剩下那几行怎么排、
     // 删到空了那一屏长什么样，回个 true 的话这两件事在预览里都看不到
     deleteCase: async (caseId) => {
+      // `?slowdel[=毫秒]`：真删要走一遍事件 + 投影 + 删原文，回调因此隔了一会儿才到；
+      // 浏览器这一侧是个微任务，"await 期间人又动了 tab"那条竞态复现不出来。
+      // 给得出具体毫秒数是因为**这条竞态只能靠窗口够宽来稳定重放**——手点也好、
+      // 脚本驱动也好，几百毫秒的窗口撞不撞得上全看运气
+      if (params.has('slowdel')) {
+        await new Promise((r) => setTimeout(r, Number(params.get('slowdel')) || 900));
+      }
       const at = CASES.findIndex((c) => c.id === caseId);
       if (at < 0) return { ok: false, pendingBlobs: 0 };
       CASES.splice(at, 1);
@@ -597,15 +812,41 @@ export function installPreviewApi(): void {
       return { ok: true, pendingBlobs: 0 };
     },
     answerOperator: async (_id, reply) => {
-      patch({ pending: current.pending.filter((p) => p.id !== reply.id) });
+      patch({ pending: cur().pending.filter((p) => p.id !== reply.id) });
       return true;
     },
     decideGate: async (_id, d) => {
-      patch({ gates: current.gates.filter((g) => g.id !== d.id) });
+      patch({ gates: cur().gates.filter((g) => g.id !== d.id) });
       return true;
     },
-    exportMarkdown: async () => ({ ok: false, reason: 'failed', error: '浏览器预览里没有 main 进程，导不出文件' }),
-    exportImage: async () => ({ ok: false, reason: 'failed', error: '浏览器预览里没有 main 进程，导不出文件' }),
+    getTabs: async () => tabs,
+    putTabs: async (next) => {
+      if (putLeft > 0) {
+        putLeft -= 1;
+        throw new Error('(预览) 这一次落库故意失败');
+      }
+      tabs = next;
+      // 🔴 **这一下只存列表，不许顺手换当前调查**——main 那边的 `tabs:put` 就只存
+      // （切当前调查是 `switchCase` 独一条路）。跟着换的话，"落库成了、切当前调查失败了"
+      // 那条错配路在预览里永远复现不出来：屏幕看着一直是对的，而真 app 里两边已经岔开了
+      push();
+    },
+    // 浏览器自己吃掉 ⌘W，预览里没有应用菜单——这条只为让 App 挂得上
+    onMenuCloseTab: () => () => {},
+    closeWindow: async () => inert('closeWindow')(),
+    /**
+     * 浏览器里导不出真文件。`?slowexport[=毫秒]` 让它先挂一会儿再回失败——
+     * **「导出中」那一档只有这样才看得见**：它是全应用一把锁（`App.tsx` 的 `exporting`），
+     * 而"另一次调查在导时这一屏按不动""切走再切回锁还攥着"这两条都只在挂着的那几秒里成立。
+     */
+    exportMarkdown: async () => {
+      await hangExport();
+      return { ok: false, reason: 'failed', error: '浏览器预览里没有 main 进程，导不出文件' };
+    },
+    exportImage: async () => {
+      await hangExport();
+      return { ok: false, reason: 'failed', error: '浏览器预览里没有 main 进程，导不出文件' };
+    },
     exportPayload: async () => null,
     searchCases: async (term) =>
       !term.trim()
@@ -616,11 +857,11 @@ export function installPreviewApi(): void {
             snippet: `…命中「${term}」附近的原文…`,
             where: 'verdict' as const,
           })),
-    snapshot: async () => current,
+    snapshot: async () => view(),
     onSnapshot: (cb) => {
       listeners.add(cb);
       // 微任务里补一发：组件挂上来的时候第一帧已经过去了
-      queueMicrotask(() => cb(current));
+      queueMicrotask(() => cb(view()));
       return () => listeners.delete(cb);
     },
     excerpt: async () => '12:03:02.240 [order] idempotency check MISS key=u1001:cart7 (read from replica)\n12:03:02.245 [replica] seconds_behind_master=0.340',

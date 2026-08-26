@@ -1,9 +1,17 @@
 /**
  * 报告屏（D21 / D22）。
  *
- * **它是一个屏，不是工作区上的一个 tab**：主角从"假设与分叉"换成"结论与证据"，
- * 能做的只有导出与收尾，内容在定稿那一下冻住。色板与工作区完全相同，差别只来自密度与字号
- * （ui.md §1 那张表）——一深一浅会被读成两个应用，而这是同一个工具的两个阶段。
+ * **它是同一个调查 tab 的另一种视图，整屏换掉**：主角从"假设与分叉"换成"结论与证据"，
+ * 能做的只有导出与收尾，内容在定稿那一下冻住。所以它归属的仍是那个 tab——⌘W 在这一屏上
+ * 关掉的正是它（`App.tsx` 的 `tabForCloseKey`），而「工作区」那枚钮只是换回另一种视图。
+ * 色板与工作区完全相同，差别只来自密度与字号（ui.md §1 那张表）——一深一浅会被读成两个应用，
+ * 而这是同一个工具的两个阶段。
+ *
+ * **那排 tab 照旧画在这一屏上**（与工作区同一个 `Tabs` 元素，由 `App.tsx` 传进来）。
+ * 一度按"报告要通读、顶上不该横一排别的调查"把它去掉了，代价是行为与画面对不上：
+ * ⌘W 在这一屏上关的就是那个 tab，而屏幕上一个 tab 都看不见——一个看不见的东西被关掉了；
+ * 换个调查还得先退回工作区再点。**它在滚动容器之外**（`styles.css` 的 `.pagebody.rp`），
+ * 报告纸滚动时不跟着走。
  *
  * **顶栏与别的屏共用同一条 `.pagehead`。** 一度自己另起一条页头（返回与导出挤在一条锚点导航上），
  * 于是同一个应用里出现了两种顶栏，差别一大就读成两个界面。这一屏在顶栏上只有一枚
@@ -13,7 +21,7 @@
  * - **章节导航**在左侧竖栏（`Toc`）——每一节带一行读数，所以它跟着形态一起变
  * - **两种导出与收尾两档**在页尾的交付台（`Handoff`）——读完之后才回答"这份能不能交出去"
  *
- * **纸仍是单列长页：没有 tab、没有折叠、没有内部滚动。** 这不是审美偏好，是被长图导出倒逼的——
+ * **纸仍是单列长页：没有内部分页、没有折叠、没有内部滚动。** 这不是审美偏好，是被长图导出倒逼的——
  * 凡是要点击才能看到的内容，截图里就不存在（ui.md §7.2）。章节栏、交付台与导出预览
  * 都在纸**之外**，一个字都不进任何一份导出，所以那条约束管不到它们。
  *
@@ -36,6 +44,12 @@ import { reportMarkdown } from '../shared/markdown.js';
 import { stateFillable } from './drafts.js';
 import { useEscape } from './esc.js';
 
+/**
+ * 别的调查正在导时按钮上那句。**导出全应用只准跑一条**（见 `App.tsx` 的 `exporting`），
+ * 所以这一枚按不动的原因不在这一屏上——不说的话它看起来就是坏了。
+ */
+const OTHER_EXPORT = '另一次调查的导出还在跑，等它完了再来';
+
 /** 回执里只印文件名：路径已经在前半句里了，再重复一遍整条路径会把那一行挤爆。 */
 const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 
@@ -44,10 +58,27 @@ const HANDOFF = 'handoff';
 
 export function Report({
   snap,
+  tabs,
+  exporting,
+  onExporting,
   onBack,
   onNotice,
 }: {
   snap: Snapshot;
+  /**
+   * 打开着的那排 tab。**由 `App.tsx` 把同一个元素同时交给工作区与这一屏**——
+   * 这儿再造一个的话，两屏的行为迟早分家（点一下切到哪个视图、叉子关掉之后落到谁）。
+   */
+  tabs?: React.ReactNode;
+  /**
+   * 这会儿在跑的那次导出（**全应用只准有一个**），连是哪次调查一起带着。
+   *
+   * 住在应用级而不是这一层：这一屏按 caseId 重挂（`App.tsx` 的 `key`），
+   * 局部 state 会跟着切 tab 蒸发——切走再切回，同一次调查的按钮又亮了，
+   * 而那次导出还在跑，再按一次就是两条往同一个文件名上写。
+   */
+  exporting: { caseId: string; kind: 'md' | 'img' } | null;
+  onExporting: (next: { caseId: string; kind: 'md' | 'img' } | null) => void;
   onBack: () => void;
   /** 收尾没落地时的提示挂到应用级：那时这一屏多半已经不是刚才那个调查了。 */
   onNotice: (text: string) => void;
@@ -58,8 +89,13 @@ export function Report({
    * （都是"按了导出、什么都没发生"），而前者意味着报告压根没落地。
    */
   const [exported, setExported] = useState<{ ok: boolean; text: string } | null>(null);
-  /** 哪一种正在导。两个按钮各自置灰，不共用一个 boolean——否则导长图时另一个也说"导出中"。 */
-  const [exporting, setExporting] = useState<'md' | 'img' | null>(null);
+  /**
+   * 这一屏自己那次导出是哪一种（不是这次调查的就当没有）。两个按钮各自置灰，
+   * 不共用一个 boolean——否则导长图时另一个也说"导出中"。
+   */
+  const mine = exporting && exporting.caseId === snap.case?.id ? exporting.kind : null;
+  /** 别的调查正在导。按钮同样按不动，但话要说成另一句——这一次并没有在导。 */
+  const busyElsewhere = !!exporting && exporting.caseId !== snap.case?.id;
   /** 导出预览开在哪个目标上。`null` = 没开。 */
   const [view, setView] = useState<'md' | 'img' | null>(null);
   /**
@@ -146,10 +182,11 @@ export function Report({
   const runExport = async (kind: 'md' | 'img') => {
     const caseId = snap.case?.id;
     if (!caseId) return;
-    // 两种导出**同时只准跑一个**：`exporting` 只记得住一个，两条并着跑的话先回来的那条
-    // 会把另一条的状态清成 null——按钮提前恢复、还能再按一次，回执也可能被旧的那条盖掉
+    // **全应用同时只准跑一个**（`exporting` 在 App 那一层，跨调查也拦得住）：
+    // 两条并着跑的话先回来的那条会把另一条的状态清掉——按钮提前恢复、还能再按一次；
+    // 更糟的是同一次调查连按两次会往同一个文件名上各写一遍，而保存框默认给的正是同一个名字
     if (exporting) return;
-    setExporting(kind);
+    onExporting({ caseId, kind });
     try {
       // 形态由 main 那侧从它自己那份快照里定（`reportInput`），这里一个判断都不带过去：
       // 两处各挑一次的话，屏幕上看的与落盘的迟早各按各的装，而两边都不报错
@@ -173,7 +210,11 @@ export function Report({
       // 按钮恢复、文件没有、屏上什么都不说，与"人按了取消"长得一模一样
       setExported({ ok: false, text: `导出失败：${err instanceof Error ? err.message : String(err)}` });
     } finally {
-      setExporting(null);
+      // 落在应用级那份上，所以这一屏这时**卸载了也照样解锁**（切走了 tab 的那种情况）。
+      // ⚠️ 上面那几句 `setExported` 反过来：组件已经卸载时它们是空操作，
+      // 这次导出的回执就此丢掉——盘上那份是好的，只是屏上不再有人告诉你落在哪儿。
+      // React 19 对卸载后 setState 不再告警，也不留引用，所以只是丢一句话，不漏东西
+      onExporting(null);
     }
   };
 
@@ -263,6 +304,8 @@ export function Report({
         </div>
       </header>
 
+      <div className="pagebody rp">
+      {tabs}
       <div className="reportscreen" ref={page}>
         <div className="rcols">
           <Toc
@@ -297,7 +340,8 @@ export function Report({
               stamp={previewStamp}
               frozen={frozen}
               gaps={snap.closingGaps}
-              exporting={exporting}
+              exporting={mine}
+              busyElsewhere={busyElsewhere}
               confirm={confirm}
               currentCase={snap.case!.id}
               liveSuggestion={snap.shapeSuggestion}
@@ -314,6 +358,7 @@ export function Report({
           </div>
         </div>
       </div>
+      </div>
 
       {view && (
         <ExportViewer
@@ -322,7 +367,8 @@ export function Report({
           input={input}
           stamp={previewStamp}
           kind={view}
-          exporting={exporting}
+          exporting={mine}
+          busyElsewhere={busyElsewhere}
           onKind={setView}
           onClose={() => setView(null)}
           onExport={runExport}
@@ -475,6 +521,7 @@ function Handoff({
   frozen,
   gaps,
   exporting,
+  busyElsewhere,
   confirm,
   currentCase,
   liveSuggestion,
@@ -492,6 +539,8 @@ function Handoff({
   frozen: boolean;
   gaps: ClosingStepKind[];
   exporting: 'md' | 'img' | null;
+  /** 别的调查正在导。按钮一样按不动，但它说的不是"这一份在导"。 */
+  busyElsewhere: boolean;
   confirm: {
     caseId: string;
     kind: 'closed' | 'aborted';
@@ -526,7 +575,8 @@ function Handoff({
           hook="exportimg"
           why="给一贴进群里就要被看懂的场合"
           spec="1240 CSS px @2x"
-          busy={exporting !== null}
+          busy={exporting !== null || busyElsewhere}
+          hint={busyElsewhere ? OTHER_EXPORT : null}
           running={exporting === 'img'}
           onView={() => onView('img')}
           onExport={() => onExport('img')}
@@ -542,7 +592,8 @@ function Handoff({
           hook="exportmd"
           why="给会被继续编辑、被贴进 PR 的场合"
           spec={`${lines.length} 行`}
-          busy={exporting !== null}
+          busy={exporting !== null || busyElsewhere}
+          hint={busyElsewhere ? OTHER_EXPORT : null}
           running={exporting === 'md'}
           onView={() => onView('md')}
           onExport={() => onExport('md')}
@@ -615,6 +666,7 @@ function Target({
   why,
   spec,
   busy,
+  hint,
   running,
   children,
   onView,
@@ -631,8 +683,10 @@ function Target({
   hook: string;
   why: string;
   spec: string;
-  /** 有导出在跑（哪一种都算）。**两个入口一起置灰**：并着跑会互相清掉状态。 */
+  /** 有导出在跑（哪一种、哪次调查都算）。**两个入口一起置灰**：并着跑会互相清掉状态。 */
   busy: boolean;
+  /** 按不动的原因，只在**不是这一份在导**时给——否则按钮上已经写着「导出中…」了。 */
+  hint: string | null;
   /** 在跑的是**这一种**。只有它写「导出中」——另一枚跟着写就成了两条都在导的假象。 */
   running: boolean;
   children: React.ReactNode;
@@ -653,7 +707,7 @@ function Target({
           <Icon name="expand" />
           看完整的
         </button>
-        <button className={`go ${hook}`} onClick={onExport} disabled={busy}>
+        <button className={`go ${hook}`} title={hint ?? undefined} onClick={onExport} disabled={busy}>
           <Icon name="download" />
           {running ? '导出中…' : action}
         </button>
@@ -708,6 +762,7 @@ function ExportViewer({
   stamp,
   kind,
   exporting,
+  busyElsewhere,
   onKind,
   onClose,
   onExport,
@@ -718,6 +773,8 @@ function ExportViewer({
   stamp: number;
   kind: 'md' | 'img';
   exporting: 'md' | 'img' | null;
+  /** 别的调查正在导。按钮一样按不动，但它说的不是"这一份在导"。 */
+  busyElsewhere: boolean;
   onKind: (k: 'md' | 'img') => void;
   onClose: () => void;
   onExport: (k: 'md' | 'img') => void;
@@ -786,7 +843,10 @@ function ExportViewer({
           )}
           <button
             className="go"
-            disabled={exporting !== null}
+            // 预览层这一枚与卡上那一枚是同一个动作，锁也该是同一把：
+            // 只看 `exporting` 的话，别的调查在导时从这儿还按得下去
+            disabled={exporting !== null || busyElsewhere}
+            title={busyElsewhere ? OTHER_EXPORT : undefined}
             onClick={() => onExport(kind)}
           >
             <Icon name="download" />

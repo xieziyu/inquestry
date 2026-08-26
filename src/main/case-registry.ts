@@ -140,8 +140,19 @@ export class CaseRegistry<R extends LiveCase> {
       .map(([id]) => id);
   }
 
-  briefs(): CaseBrief[] {
-    return caseList(this.opts.db, { pinned: this.pinnedIds() }).map((c) => this.brief(c));
+  /**
+   * 首页与 tab 条那份列表。
+   *
+   * `alsoPinned` 是**打开着 tab 的那几个**：列表本身只给最近 20 条，一个开着 tab
+   * 却很久没动的调查会掉出去，于是 tab 上的标题与状态点没了来源。
+   *
+   * 🔴 **它与 `pinnedIds()` 是两件事，不许合并**：那一份钉的是"不许被限流收掉的运行时"，
+   * 而开着 tab 恰恰不该阻止降级——tab 只是视图，被降级的调查点回去时按现状恢复。
+   */
+  briefs(alsoPinned: string[] = []): CaseBrief[] {
+    return caseList(this.opts.db, { pinned: [...this.pinnedIds(), ...alsoPinned] }).map((c) =>
+      this.brief(c),
+    );
   }
 
   /**

@@ -8,6 +8,7 @@
 // 只借一个类型：报告要装哪几块由 `shared/report.ts` 定，在这儿照抄一份必然与它长歪
 import type { ReportInput } from './report.js';
 import type { UiSettings } from './settings.js';
+import type { CaseTabs } from './tabs.js';
 import type { UpdateStatus } from './update.js';
 
 /**
@@ -39,8 +40,16 @@ export type IntakeDraft = {
   takeover: boolean;
 };
 
-/** 新建调查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。 */
-export type IntakeResult = { ok: true } | { ok: false; field: 'projectRoot'; error: string };
+/**
+ * 新建调查的结果。失败要指明是哪个字段，否则面板只能给一句无处下手的错误。
+ *
+ * 成功要把 `caseId` 交回来：新建的这一次要在工作区那排 tab 上长出一个，而 tab 列表
+ * 由 renderer 持有。不回 id 的话它只能去猜"当前调查换了那个就是刚建的"，
+ * 而那一拍正好与关掉 tab 后的切换撞在一起。
+ */
+export type IntakeResult =
+  | { ok: true; caseId: string }
+  | { ok: false; field: 'projectRoot'; error: string };
 
 /**
  * ⚠️ **加字段要同时把 `backend/agent/capabilities.ts` 的 `CACHE_VERSION` +1。**
@@ -877,6 +886,25 @@ export type InquestryApi = {
   exportPayload(token: string): Promise<ExportPayload | null>;
   snapshot(): Promise<Snapshot>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;
+
+  /**
+   * 工作区那排 tab（`shared/tabs.ts`）。**tab 只是视图**：这两个口子只管
+   * "哪几次调查还看得见"，一个字都不碰运行时——关掉一个 tab 之后那次调查照旧在跑。
+   *
+   * 读回来的那份已经**过滤过已归档 / 已删的调查**，界面直接认它。
+   */
+  getTabs(): Promise<CaseTabs>;
+  /** 存一次。main 顺带拿它当列表的钉子（否则一个很久没动的 tab 会掉出最近 20 条）。 */
+  putTabs(tabs: CaseTabs): Promise<void>;
+  /**
+   * ⌘W 从**应用菜单**过来（renderer 里的 keydown 拦不住加速键）。
+   *
+   * 手上有 tab 就关掉当前那个，没有就调 `closeWindow()` 走系统默认——
+   * 菜单项不能既发这条又自己关窗口，那样有 tab 时会连窗口一起关掉。
+   */
+  onMenuCloseTab(cb: () => void): () => void;
+  /** ⌘W 的回退档：这一屏没有 tab 可关，照系统默认把窗口关掉。 */
+  closeWindow(): Promise<void>;
 
   /**
    * 历史调查页的分页列表。**与快照里那份 `cases` 是两条路**：那一份是最近 20 条 + 钉住的，

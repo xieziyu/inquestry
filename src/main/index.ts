@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import investigationPrompt from '../backend/prompt/investigation.md?raw';
 import { BACKENDS, loadModelOptions } from '../backend/agent/capabilities.js';
 import { blobDir, DatabaseTooNewError, openDatabase, type Db } from '../backend/db/database.js';
+import { restoreCaseTabs, saveCaseTabs } from '../backend/db/tabs.js';
 import {
   deleteCase,
   emptyBlobTrash,
@@ -48,6 +49,7 @@ import {
   type TakeoverResult,
 } from '../shared/ipc.js';
 import { normalizeSettings, type UiSettings } from '../shared/settings.js';
+import { NO_TABS, type CaseTabs } from '../shared/tabs.js';
 import { reportMarkdown } from '../shared/markdown.js';
 import { pageFile } from '../shared/paging.js';
 import { reportInput } from '../shared/report.js';
@@ -81,6 +83,12 @@ let blobs: string;
 let cases: CaseRegistry<CaseRunner>;
 let win: BrowserWindow | null = null;
 let pushTimer: NodeJS.Timeout | null = null;
+/**
+ * 工作区那排 tab（`shared/tabs.ts`）。**列表由 renderer 持有**，这儿留一份只为两件事：
+ * 启动时按它恢复当前调查，以及把这几个 id 钉进列表查询——一个开着 tab 却很久没动的调查
+ * 会掉出最近 20 条，那时 tab 上的标题与状态点就没了来源。
+ */
+let tabs: CaseTabs = NO_TABS;
 
 /** 事件密集时合流再推，否则一个 turn 能打出上千次 IPC（architecture.md）。 */
 function schedulePush() {
@@ -98,7 +106,7 @@ function schedulePush() {
 
 /** 当前调查的投影 + 全部调查的概览。后者哪个调查在看都得有，否则别处的待办没人看得见。 */
 function snapshot(): Snapshot {
-  const briefs = cases.briefs();
+  const briefs = cases.briefs(tabs.open);
   return cases.current?.snapshot(briefs) ?? { ...EMPTY_SNAPSHOT, cases: briefs };
 }
 
@@ -235,7 +243,7 @@ function createCase(draft: IntakeDraft): IntakeResult {
   writeCaseUi(caseId, { agent: draft.agent, takeover: draft.takeover });
   schedulePush();
   void openFirstTurn(caseId, question, incidentDate, runner);
-  return { ok: true };
+  return { ok: true, caseId };
 }
 
 /**
@@ -358,14 +366,6 @@ function checkProjectRoot(input: string | null): { path: string } | { error: str
     return { error: code === 'ENOENT' ? `找不到 ${resolved}` : `读不了 ${resolved}（${code ?? err}）` };
   }
   return { path: resolved };
-}
-
-/** 重开最近一个未定稿的 case：一次调查跨多会话，重启只是它下面又开了一个 session。 */
-function restoreLatestCase() {
-  const row = db
-    .prepare(`SELECT id FROM cases WHERE status='open' ORDER BY updated_at DESC LIMIT 1`)
-    .get() as { id: string } | undefined;
-  if (row) cases.switchTo(row.id);
 }
 
 /** 上次跑用的那套；没跑过就用新建调查时选的。中途换模型是常态，所以最近一次优先。 */
@@ -823,6 +823,50 @@ async function intakeOptions(): Promise<IntakeOptions> {
   };
 }
 
+/**
+ * 应用菜单。**建它的唯一理由是 ⌘W**：加速键归菜单管，renderer 里的 keydown 拦不住它
+ * （Electron 的默认菜单会先把这一下吃掉，直接关窗口）。
+ *
+ * 🔴 **一旦自定义菜单，默认那份就整个没了**——`editMenu` / `viewMenu` 这几条 role
+ * 必须补齐，否则复制粘贴、撤销、开发者工具连同它们的加速键一起消失，
+ * 而"输入框里 ⌘C 没反应"这种事没有任何报错。
+ *
+ * `windowMenu` 那条 role 在非 mac 上自带一个 ⌘W 的「关闭」，会与这儿这一条撞上，
+ * 所以窗口菜单也自己写一份。
+ */
+function installMenu() {
+  const mac = process.platform === 'darwin';
+  const closeTab: Electron.MenuItemConstructorOptions = {
+    // ⚠️ **加速键在 CDP 那套验证里按不出来**（menu 是原生的，注进 renderer 的按键根本到不了它）。
+    // 留个 id，好让无人值守时能 `Menu.getApplicationMenu().getMenuItemById('close-tab').click()`
+    // 走完这条链路——否则这一整条只能靠人手按一次 ⌘W
+    id: 'close-tab',
+    label: '关闭标签页',
+    accelerator: 'CmdOrCtrl+W',
+    // 菜单项**只发消息，不自己关窗口**：这一下该关 tab 还是关窗口，取决于人在哪一屏、
+    // 手上有没有 tab——两件事都只有 renderer 知道（它判完关不了会回 `window:close`）。
+    // 在这儿顺手关一下的话，在工作区按 ⌘W 会连窗口一起关掉
+    click: () => {
+      const target = BrowserWindow.getFocusedWindow() ?? win;
+      target?.webContents.send('menu:closeTab');
+    },
+  };
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      ...((mac ? [{ role: 'appMenu' }] : []) as Electron.MenuItemConstructorOptions[]),
+      { label: '文件', submenu: [closeTab, ...(mac ? [] : [{ role: 'quit' as const }])] },
+      { role: 'editMenu' },
+      { role: 'viewMenu' },
+      {
+        label: '窗口',
+        submenu: mac
+          ? [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }]
+          : [{ role: 'minimize' }, { role: 'zoom' }],
+      },
+    ]),
+  );
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1380,
@@ -893,7 +937,11 @@ app.whenReady().then(async () => {
     console.error('[main] 清上次没删掉的证据原文失败，欠账留着下次再来', err);
   }
   cases = new CaseRegistry<CaseRunner>({ db, create: loadCase });
-  restoreLatestCase();
+  // 上次开着的那排 tab（过滤与落库都在 `restoreCaseTabs` 里）。
+  // **恢复的是视图，不是会话**：这儿只切当前调查，一轮都不开——重启之后哪个 tab 该接着跑由人自己说
+  tabs = restoreCaseTabs(db);
+  if (tabs.active) cases.switchTo(tabs.active);
+  installMenu();
 
   // 不缓存：人看见横幅之后多半就去终端登录了，缓存住的话他回来还是那句「未登录」。
   // 凭据过期这一档仍旧只有真发起会话才知道，届时会话直接报 401
@@ -1054,6 +1102,16 @@ app.whenReady().then(async () => {
     if (/^https:\/\//i.test(url)) return shell.openExternal(url);
     console.error('[main] 拒绝打开非 https 链接', url);
   });
+  // 工作区那排 tab（`shared/tabs.ts`）。**这两个口子一个字都不碰运行时**：
+  // tab 只是视图，关掉一个之后那次调查照旧在 main 里跑
+  ipcMain.handle('tabs:get', (): CaseTabs => tabs);
+  ipcMain.handle('tabs:put', (_e, next: CaseTabs) => {
+    tabs = saveCaseTabs(db, next);
+    // 新开的那个要当场进列表，否则它的标题与状态点要等下一次领域事件才有来源
+    schedulePush();
+  });
+  // ⌘W 的回退档：那一屏没有 tab 可关，照系统默认把窗口关掉
+  ipcMain.handle('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close());
   ipcMain.handle('case:snapshot', () => snapshot());
   ipcMain.handle('case:excerpt', (_e, callId: string, anchor: string | null) =>
     current()?.excerpt(callId, anchor) ?? '(没有选中的调查)',
