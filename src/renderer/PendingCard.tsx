@@ -38,8 +38,9 @@ export function PendingCard({
 }) {
   const answer = draft.answer ?? '';
   /**
-   * 键不在 = 拒绝那栏还没展开。**这里不能像别处那样用「内容非空」代替展开状态**：
-   * 理由本来就允许留空，那样写会让人一按「拒绝」栏就自己收回去。
+   * 键不在 = 还在回填态，键在 = 进了拒绝态（两个模式互斥）。
+   * **这里不能像别处那样用「内容非空」代替模式位**：理由本来就允许留空，
+   * 那样写会让人一按「拒绝」就自己弹回回填态。
    */
   const note = draft.note ?? null;
   const setAnswer = (v: string) => onDraft({ answer: v });
@@ -53,8 +54,13 @@ export function PendingCard({
   const decline = () => onSubmit({ id: ask.id, action: 'decline', reason: note?.trim() || undefined });
   const openNote = () => {
     setNote(note ?? '');
-    // 展开与聚焦不在同一帧：输入框这会儿还没挂上
+    // 切模式与聚焦不在同一帧：输入框这会儿还没挂上
     setTimeout(() => message.current?.focus(), 0);
+  };
+  // 只退出拒绝态，`draft.answer` 一个字都不动：取消回来人还得看见自己粘的结果
+  const cancelNote = () => {
+    setNote(null);
+    setTimeout(() => result.current?.focus(), 0);
   };
   const copy = () =>
     void navigator.clipboard.writeText(ask.statement).then(
@@ -70,7 +76,8 @@ export function PendingCard({
   }, [copied]);
 
   /**
-   * 键盘走到这张卡时直接把光标放进结果框：切窗口跑完 SQL 回来就是要粘贴。
+   * 键盘走到这张卡时直接把光标放进这一模式下唯一的输入框：切窗口跑完 SQL 回来就是要粘贴，
+   * 已经在拒绝态的卡则是要写理由。
    *
    * 🔴 **`focused` 不等于该抢焦点**，两道闸各挡一种情形：
    *   - `grab()`：待办从无到有时 App 的顺位 effect 会把 `focused` 落到第一条，那一刻人多半
@@ -81,22 +88,21 @@ export function PendingCard({
   useEffect(() => {
     if (!focused) return;
     box.current?.scrollIntoView({ block: 'nearest' });
-    if (grab() && !box.current?.contains(document.activeElement)) result.current?.focus();
+    if (grab() && !box.current?.contains(document.activeElement)) (result.current ?? message.current)?.focus();
   }, [focused, grab]);
 
   /**
    * ⌘↵ 归这张卡自己，**不挂 window 监听**：焦点落在卡内哪个控件上都算数，落在卡外就按不到——
    * 多张待办同时挂着时，"哪一张收到这一下"因此不必再去对账。
    *
-   * 🔴 **按落点属于哪个动作分派，不能写成「不是留话栏就当回填」。** 拒绝区不止那一个
-   * textarea——「确认拒绝」钮上也印着 ⌘↵，从理由栏 Tab 过去再按，那一下会被当成回填，
-   * 把人明明要作废的结果交上去（②档同一处写错的话是反过来放行一次生产调用）。
-   * 拒绝区整块标 `data-deny`，将来往里加控件也不必回来改这儿。
+   * 🔴 **按当前模式分派，不能按焦点落在哪个控件上。** 两个模式互斥之后，落点那套错得没声音：
+   * 拒绝态下回填控件根本不在屏上，一旦判成回填，人明明要作废的结果被隐形交上去了；
+   * 反过来同理（②档同一处写错的话是放行一次生产调用）。
    */
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
     e.preventDefault();
-    if ((e.target as HTMLElement | null)?.closest?.('[data-deny]')) decline();
+    if (note !== null) decline();
     else submit();
   };
 
@@ -129,47 +135,54 @@ export function PendingCard({
         <pre>{ask.statement}</pre>
       </div>
 
-      <textarea
-        className="answer"
-        ref={result}
-        placeholder="把执行结果粘贴到这里"
-        value={answer}
-        onChange={(e) => setAnswer(e.target.value)}
-        rows={5}
-      />
-
-      {note !== null && (
-        <textarea
-          className="note"
-          data-deny
-          ref={message}
-          value={note}
-          rows={2}
-          placeholder="为什么跑不了——可以不写。写了会原样给它，好让它知道换哪个方向"
-          onChange={(e) => setNote(e.target.value)}
-        />
-      )}
-
       {/* 拒绝分两下：理由可以为空，一下就走的话一次误点就把这条查询判了死刑，
           而它与放弃不同——agent 收到的是"别再问了"，不会再自己回来试。
-          出口在左、主路在右：右下角是全 app 的主操作位，出口不该坐在那儿 */}
-      <div className="acts">
-        {note === null ? (
-          <button className="out" onClick={openNote}>
-            <Icon name="deny" size={13} />
-            拒绝
-          </button>
-        ) : (
-          <button className="out armed" data-deny onClick={decline}>
-            <Icon name="deny" size={13} />
-            确认拒绝{note.trim() ? '' : '（不留理由）'} <small>⌘↵</small>
-          </button>
-        )}
-        <button className="go" disabled={!answer.trim()} onClick={submit}>
-          <Icon name="send" size={13} />
-          回填 <small>⌘↵</small>
-        </button>
-      </div>
+          第二下的保险靠的是**独占**：拒绝态里回填的输入框与按钮整个撤走，人不会以为自己
+          还在回填的路上（也就不再需要靠"第一下是灰的"来提示还没判死刑）。
+          出口在左、主路在右：右下角是全 app 的主操作位，回填态的主路是回填、拒绝态的是
+          确认拒绝，出口（拒绝／取消）都不该坐在那儿 */}
+      {note === null ? (
+        <>
+          <textarea
+            className="answer"
+            ref={result}
+            placeholder="把执行结果粘贴到这里"
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            rows={5}
+          />
+          <div className="acts">
+            <button className="out deny" onClick={openNote}>
+              <Icon name="deny" size={13} />
+              拒绝
+            </button>
+            <button className="go" disabled={!answer.trim()} onClick={submit}>
+              <Icon name="send" size={13} />
+              回填 <small>⌘↵</small>
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <textarea
+            className="note"
+            ref={message}
+            value={note}
+            rows={2}
+            placeholder="为什么跑不了——可以不写。写了会原样给它，好让它知道换哪个方向"
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <div className="acts">
+            <button className="out" onClick={cancelNote}>
+              取消
+            </button>
+            <button className="go bad" onClick={decline}>
+              <Icon name="deny" size={13} />
+              确认拒绝{note.trim() ? '' : '（不留理由）'} <small>⌘↵</small>
+            </button>
+          </div>
+        </>
+      )}
     </section>
   );
 }

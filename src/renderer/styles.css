@@ -601,8 +601,10 @@ button.primary:has(> .ic) { gap: 6px; }
 .pending .note { border-color: #45381f; }
 .pending .answer::placeholder, .pending .note::placeholder { color: var(--dim-2); }
 
-/* 出口在左、主路在右：右下角是全 app 的主操作位，一枚拒绝钮不该坐在那儿。
-   红只在第二下（`.armed`）出现——第一下还没判死刑 */
+/* 出口在左、主路在右：右下角是全 app 的主操作位，出口（拒绝／取消）不该坐在那儿。
+   拒绝从第一下就是红的：这枚钮通向的就是危险动作，压成灰的等于骗人说它无害。
+   误点的保险不在颜色而在结构——按下去只是切进独占的拒绝模式（回填控件整个撤走），
+   判死刑的是那儿的第二下 */
 .pending .acts { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .pending .acts .out {
   margin-right: auto; display: inline-flex; align-items: center; gap: 6px;
@@ -610,13 +612,27 @@ button.primary:has(> .ic) { gap: 6px; }
   padding: 8px 14px; border-radius: 7px; cursor: pointer; font-size: 12.5px;
 }
 .pending .acts .out:hover { color: var(--text); border-color: var(--dim-2); }
-.pending .acts .out.armed { border-color: var(--bad); color: var(--bad); }
+/* 危险的档位靠填充深浅说，不靠描边：这一枚是淡红垫底的"软危险"——按下去只是换个模式，
+   还反悔得回来。描边留 1px 透明只为跟 `.out` 一样占位，免得进出这个类时按钮尺寸跳一下。
+   字比纯 `--bad` 提亮：深底上原色红发闷 */
+.pending .acts .out.deny {
+  background: color-mix(in srgb, var(--bad) 15%, transparent);
+  border-color: transparent; color: color-mix(in srgb, var(--bad) 78%, #fff);
+}
+.pending .acts .out.deny:hover {
+  background: color-mix(in srgb, var(--bad) 24%, transparent);
+  border-color: transparent; color: color-mix(in srgb, var(--bad) 55%, #fff);
+}
 .pending .acts .go {
   display: inline-flex; align-items: center; gap: 6px; background: var(--fill);
   border: 1px solid var(--fill); color: var(--on-fill); padding: 8px 16px; border-radius: 7px;
   font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
 .pending .acts .go:disabled { opacity: .38; cursor: default; }
+/* 填充档位的另一头：实心红。跟 `.go` 是同一套写法，只把语义色换掉——
+   这一格本来就是主路，而这一下按下去就判死刑了，没有比它更重的档 */
+.pending .acts .go.bad { background: var(--bad); border-color: var(--bad); color: #fff; }
+.pending .acts .go.bad:hover { filter: brightness(1.12); }
 .pending small { opacity: .55; margin-left: 4px; font-family: var(--mono); font-size: 10.5px; }
 
 /* ── ②档闸门 ──
