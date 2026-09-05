@@ -1,7 +1,7 @@
 {
   "name": "inquestry",
   "productName": "Inquestry",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Troubleshooting console for software engineers — evidence-first timeline over a live agent session",
   "private": true,
   "type": "module",

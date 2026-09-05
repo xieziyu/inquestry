@@ -4,7 +4,7 @@ Only **user-visible** changes are recorded here. Internal refactors, docs and CI
 listed — read `git log` for those. Versions follow [Semantic Versioning](https://semver.org/);
 while on `0.x`, the minor position doubles as the breaking-change position.
 
-## [0.5.0] - 2026-09-05
+## [0.5.1] - 2026-09-05
 
 Several investigations can be open at once and switched between; "deny" on the backfill card becomes a state of its own.
 
